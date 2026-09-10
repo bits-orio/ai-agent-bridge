@@ -1,0 +1,65 @@
+name: e2e
+
+# Runs the rig harness (tests/e2e) against a real headless Factorio server on
+# the CI runner. The headless build downloads without a login. Player-only
+# scenarios are skipped here (no client); run `make e2e-client` locally for
+# those. This job has not yet been exercised on GitHub; see TESTING.md.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+env:
+  FACTORIO_VERSION: "2.0.77"
+
+jobs:
+  harness:
+    name: rig harness, server only
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: service/go.mod
+          cache-dependency-path: service/go.sum
+
+      - name: Build the service natively
+        working-directory: service
+        run: CGO_ENABLED=0 go build -o aab ./cmd/aab
+
+      - name: Cache the headless server
+        id: headless
+        uses: actions/cache@v4
+        with:
+          path: ~/factorio-headless
+          key: factorio-headless-${{ env.FACTORIO_VERSION }}
+
+      - name: Download the headless server
+        if: steps.headless.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ~/factorio-headless
+          curl -sSL -o /tmp/headless.tar.xz "https://www.factorio.com/get-download/${FACTORIO_VERSION}/headless/linux64"
+          tar -xJf /tmp/headless.tar.xz -C ~/factorio-headless
+          ~/factorio-headless/factorio/bin/x64/factorio --version | head -1
+
+      - name: Run the harness
+        env:
+          SERVICE_BIN: ${{ github.workspace }}/service/aab
+          FACTORIO_HEADLESS: /home/runner/factorio-headless/factorio/bin/x64/factorio
+        run: python3 tests/e2e/run.py
+
+      - name: Keep the logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            tests/e2e/.run/**/*.log
+            tests/e2e/.run/**/factorio-current.log
+          if-no-files-found: ignore

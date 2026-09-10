@@ -171,3 +171,31 @@ Keyword rules on the newest question text, first step:
   provider error: call `boom` through the rpc and expect `provider_error`.
 - `Makefile` at repo root: `service` (Docker build), `test` (Go unit tests
   in Docker), `e2e`, `e2e-client`, `lua-check`.
+
+## Breadth addendum (after the Phase 1 and 2 review)
+
+More engine tools, all engine aggregates or engine-side counts, never entity
+scans in Lua. Each takes `force` (injected by the service) and returns
+bounded plain data. Verify every API name on lua-api.factorio.com first.
+
+| tool | arguments | returns |
+|---|---|---|
+| `research_queue` | | current research plus the queue, names and progress |
+| `tech_status` | `tech!` | researched, available (prerequisites met), level, unit count, prerequisites |
+| `logistics_summary` | `surface!` | per logistic network on that surface for the force: robot counts, available robots, the ten largest contents by count |
+| `entity_count` | `surface!`, `name!` | `surface.count_entities_filtered{force, name}` |
+| `evolution` | `surface!` | `force.get_evolution_factor(surface)` and its three components where the API exposes them |
+| `rockets` | | rockets launched and items launched for the force |
+| `game_time` | | tick, hours played, connected players |
+| `pollution` | `surface!` | total pollution on the surface |
+
+Fake-model keywords added: "queue" -> `research_queue`; "technology" or "tech "
+-> `tech_status` with the word after it; "logistic" or "bots" ->
+`logistics_summary`; "how many <name>" -> `entity_count`; "evolution" ->
+`evolution`; "rocket" -> `rockets`; "time" or "how long" -> `game_time`;
+"pollution" -> `pollution`; "since" -> `production_since` with `since_tick` 0.
+
+Harness scenarios added (server-only): one ask per new tool, asserting the
+answer carries the tool's key fields (for example `rockets_launched`,
+`evolution_factor`, `hours`), plus "iron plate production since the start"
+for `production_since`.
