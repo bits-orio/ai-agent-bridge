@@ -1,0 +1,15 @@
+# Sync the mod-portal storefront from docs/portal.md, on demand.
+# Actions tab -> Sync Portal Details -> Run workflow.
+name: Sync Portal Details
+
+on:
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      FACTORIO_API_KEY: ${{ secrets.FACTORIO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./tools/sync_portal_details.sh

@@ -1,0 +1,76 @@
+name: Upload to Mod Portal
+
+# Manual retry for the mod-portal upload step. The release workflow already
+# attempts the upload after creating the GitHub release; use this when that
+# step failed (network blip, portal outage, API key missing at the time) so you
+# don't have to delete and re-tag. The upload script is idempotent, if the
+# version is already on the portal this is a fast noop.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload (e.g. v0.1.0). Defaults to latest published release."
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      FACTORIO_API_KEY: ${{ secrets.FACTORIO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+          fi
+          if [ -z "$TAG" ]; then
+            echo "::error::Could not resolve a tag to upload"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG} (version ${VERSION})"
+
+      - name: Read mod name from info.json at that tag
+        id: info
+        run: |
+          NAME=$(git show "${{ steps.tag.outputs.tag }}:companion-mod/info.json" | jq -r .name)
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify API key is configured
+        if: ${{ env.FACTORIO_API_KEY == '' }}
+        run: |
+          echo "::error::FACTORIO_API_KEY secret is not set"
+          exit 1
+
+      - name: Download release zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # release.yml builds the companion mod as <name>_<version>.zip.
+          ZIP="${{ steps.info.outputs.name }}_${{ steps.tag.outputs.version }}.zip"
+          gh release download "${{ steps.tag.outputs.tag }}" \
+            --pattern "${ZIP}" \
+            --output "${ZIP}"
+          ls -la "${ZIP}"
+
+      - name: Upload to Factorio mod portal
+        run: |
+          ZIP="${{ steps.info.outputs.name }}_${{ steps.tag.outputs.version }}.zip"
+          ./tools/upload_mod_portal.sh \
+            "${{ steps.info.outputs.name }}" \
+            "${{ steps.tag.outputs.version }}" \
+            "${ZIP}"

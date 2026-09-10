@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  service:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: service/go.mod
+      - name: service, vet / test / build
+        working-directory: service
+        run: |
+          go vet ./...
+          go test ./...
+          go build ./...
+
+  companion-mod:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lua5.4
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
+      - name: luac -p companion-mod/**/*.lua
+        # Parse-only syntax check -- catches malformed Lua before it ever reaches a
+        # real Factorio load. Deliberately does NOT catch Factorio-engine-level
+        # validation errors (e.g. a remote interface call rejected at runtime) --
+        # those need an actual Factorio process, out of scope for this check.
+        # No .lua files exist yet at the design stage this repo starts from, so an
+        # empty match is reported and skipped rather than failing the build.
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          files=(companion-mod/**/*.lua)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no .lua files under companion-mod/ yet, skipping"
+          else
+            luac5.4 -p "${files[@]}"
+            echo "luac -p OK (${#files[@]} file(s))"
+          fi
+
+      - name: Check companion-mod/changelog.txt format
+        # CONTEXT.md / CLAUDE.md document this exact check -- Factorio's changelog
+        # parser silently mis-renders (or drops) a malformed section rather than
+        # erroring, so this is the only thing that catches it before publish.
+        run: |
+          python3 -c "
+          lines = open('companion-mod/changelog.txt', encoding='utf-8').read().split(chr(10))
+          bad = [i+1 for i, l in enumerate(lines) if l != l.rstrip() or '\t' in l]
+          bad_seps = [i+1 for i, l in enumerate(lines)
+                      if set(l) == {'-'} and l and l != '-'*99]
+          if bad or bad_seps:
+              print('trailing-whitespace/tab lines:', bad or 'none')
+              print('bad separators:', bad_seps or 'none')
+              raise SystemExit(1)
+          print('changelog.txt format OK')
+          "

@@ -1,0 +1,20 @@
+# Local runtime config: contains secrets and machine-specific paths
+/.env
+/service/.env
+/service/aab.yaml
+/service/aab-local.yaml
+/service/aab.sftp.yaml
+
+# Built binaries
+/service/aab
+/wizard/aab-wizard
+
+# Runtime state written by the service
+/service/history.sqlite
+/service/history.sqlite-*
+
+# Git worktrees for feature branches
+/.worktrees/
+
+# Effective-config snapshot the service writes at startup (inspection only)
+aab.effective.yaml

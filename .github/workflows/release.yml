@@ -1,0 +1,165 @@
+name: release
+
+# Tag a release to publish: `git tag v0.1.0 && git push origin v0.1.0`.
+# The tag must match companion-mod/info.json's version (v<version>).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release + upload assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      FACTORIO_API_KEY: ${{ secrets.FACTORIO_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need history for the changelog/git-log fallback
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: service/go.mod
+
+      - name: Read mod info
+        id: info
+        run: |
+          NAME=$(jq -r .name companion-mod/info.json)
+          VERSION=$(jq -r .version companion-mod/info.json)
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "folder=${NAME}_${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Sanity-check tag matches info.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$TAG" != "${{ steps.info.outputs.version }}" ]; then
+            echo "::error::tag v${TAG} does not match companion-mod/info.json version ${{ steps.info.outputs.version }}"
+            exit 1
+          fi
+
+      # Tag of the most recent PUBLISHED release (not just the most recent tag, # a tag can exist without a release if an earlier run failed). Excludes the
+      # tag being pushed so a re-push doesn't collapse the notes to empty.
+      - name: Fetch previous published release
+        id: prev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(gh api "repos/${{ github.repository }}/releases" \
+            --jq "[.[] | select(.tag_name != \"${CURRENT_TAG}\") | select(.draft == false)][0].tag_name // \"\"" \
+            2>/dev/null || true)
+          PREV_VERSION="${PREV_TAG#v}"
+          echo "tag=${PREV_TAG}"         >> "$GITHUB_OUTPUT"
+          echo "version=${PREV_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Previous published release: '${PREV_TAG}' (version '${PREV_VERSION}')"
+
+      # Walk changelog.txt (newest-first) including entries until we reach the
+      # previous published version. Falls back to git log subjects.
+      - name: Extract release notes
+        id: notes
+        run: |
+          VERSION="${{ steps.info.outputs.version }}"
+          PREV_VERSION="${{ steps.prev.outputs.version }}"
+
+          NOTES=$(awk -v prev="$PREV_VERSION" '
+            BEGIN { collecting = 0 }
+            /^-{50,}$/ {
+              if (collecting) print ""
+              next
+            }
+            /^Version: / {
+              if (prev != "" && $2 == prev) { exit }
+              collecting = 1
+              print "### " $0
+              next
+            }
+            /^Date: / {
+              if (collecting) print "_" $0 "_"
+              next
+            }
+            collecting {
+              sub(/^  /, "")
+              print
+            }
+          ' companion-mod/changelog.txt)
+
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            PREV_TAG="${{ steps.prev.outputs.tag }}"
+            if [ -n "$PREV_TAG" ]; then
+              NOTES=$(git log --pretty=format:"- %s" "${PREV_TAG}..HEAD" \
+                | grep -v "^- Bump version" || true)
+            else
+              NOTES=$(git log --pretty=format:"- %s" HEAD \
+                | grep -v "^- Bump version" | head -50 || true)
+            fi
+          fi
+
+          NOTES="${NOTES:0:4000}"
+          {
+            echo 'notes<<NOTES_EOF'
+            echo "$NOTES"
+            echo 'NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          echo "--- Release notes preview ---"
+          echo "$NOTES"
+          echo "--- End preview ---"
+
+      # Companion Factorio mod zip: <name>_<version>/{info.json,control.lua,changelog.txt,…}.
+      # Copy only mod content from an explicit allowlist, the portal rejects zips
+      # containing .sh/.py/etc, and companion-mod/link-mod.sh must not leak in.
+      - name: Build companion mod zip
+        run: |
+          FOLDER="${{ steps.info.outputs.folder }}"
+          mkdir -p "build/${FOLDER}"
+          cp companion-mod/info.json companion-mod/control.lua companion-mod/changelog.txt companion-mod/thumbnail.png "build/${FOLDER}/"
+          cp LICENSE "build/${FOLDER}/"   # MIT requires the notice travel with copies
+          [ -f companion-mod/README.md ] && cp companion-mod/README.md "build/${FOLDER}/"
+          (cd build && zip -r "../${FOLDER}.zip" "${FOLDER}")
+
+      - name: Build cross-platform service binaries
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64; do
+            os=${target%/*}; arch=${target#*/}
+            ext=""; [ "$os" = windows ] && ext=".exe"
+            echo "building $os/$arch"
+            ( cd service && CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -ldflags "-s -w" \
+                -o "../dist/aab-$os-$arch$ext" ./cmd/aab )
+          done
+
+      - name: Create GitHub Release
+        id: release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            ${{ steps.info.outputs.folder }}.zip
+          # Curated notes from changelog.txt (canonical for this project).
+          body: ${{ steps.notes.outputs.notes }}
+
+      # Upload the companion mod to the Factorio mod portal. Skipped if no API
+      # key is set. Idempotent, safe to re-run. Recover a failed upload via the
+      # manual "Upload to Mod Portal" workflow.
+      - name: Upload companion mod to Factorio mod portal
+        id: upload
+        if: ${{ always() && steps.release.outcome == 'success' && env.FACTORIO_API_KEY != '' }}
+        run: |
+          ./tools/upload_mod_portal.sh \
+            "${{ steps.info.outputs.name }}" \
+            "${{ steps.info.outputs.version }}" \
+            "${{ steps.info.outputs.folder }}.zip"
+
+      # The upload API never touches the page itself, so the portal page is
+      # deployed from the files tracked in this repo: docs/portal.md for the
+      # description, tools/portal_meta.json for title/summary/category/tags/
+      # licence/links. Re-running this restores the page exactly, including
+      # after someone edits it by hand on the site. Non-fatal: a missing Edit
+      # scope or a transient error must not fail an otherwise-good release.
+      - name: Sync portal page from repo
+        if: ${{ steps.upload.outcome == 'success' && env.FACTORIO_API_KEY != '' }}
+        continue-on-error: true
+        run: ./tools/sync_portal_details.sh

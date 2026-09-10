@@ -1,0 +1,43 @@
+# AI Agent Bridge: example service config (Phase 0 skeleton). Copy to aab.yaml and edit.
+# Secrets come from env vars, never this file.
+#
+# This is a TEMPLATE with placeholder values. Do NOT deploy it verbatim as a live
+# aab.yaml: its mere presence switches the service into file mode, which ignores every
+# AAB_* environment variable. Panels/hosts driving the service via env vars should ship
+# NO aab.yaml at all (or set AAB_CONFIG=none to force env-var mode even if a stray file
+# appears).
+
+factorio:
+  rcon:
+    address: 127.0.0.1:27015
+    password_env: FACTORIO_RCON_PASSWORD
+  # Path to the JSONL the companion mod writes (local path, or remote path for sftp).
+  # Not used by Phase 0's subcommands, but validated now so later phases (history, "since
+  # I last died") don't need a config rewrite. Supports ${ENV} and a leading ~/.
+  events_file: ${HOME}/factorio/script-output/ai-agent-bridge/events.jsonl
+
+  # Only used when transport is "sftp" (the service on separate infra from Factorio).
+  # sftp:
+  #   host: game-host:22
+  #   user: aab-service
+  #   key_path: /secrets/aab_ed25519     # or set a password via password_env
+  #   password_env: SFTP_PASSWORD
+  #   known_hosts_path: /secrets/known_hosts # omit to skip host-key verification (logs a warning)
+
+transport: local        # local | sftp  (RCON is always the control path either way)
+poll_interval: 1s
+
+# Also write the service's own logs to a file (in addition to stdout). Useful when
+# stdout isn't visible, e.g. a hosting panel that backgrounds the service. Defaults to
+# aab.log next to the events file (local transport). Set to "-" to log to stdout only.
+# log_file: ${HOME}/factorio/script-output/ai-agent-bridge/aab.log
+
+anthropic:
+  api_key_env: ANTHROPIC_API_KEY
+  # Not required by Phase 0's status/probe/rpc/poll subcommands. Only the agent loop
+  # (Phase 1) calls the Anthropic API. Set it now so Phase 1 needs no config rewrite.
+  model: claude-opus-5
+
+# Per-question caps on the agent loop (Phase 1+). Not enforced by anything in Phase 0.
+max_rounds: 8
+max_tokens_per_question: 4096
