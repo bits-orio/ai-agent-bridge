@@ -24,6 +24,8 @@ type call struct {
 // into "<iface>__<fn>", so a bare function name is enough to find it.
 func firstCall(text string, defs []model.ToolDef) *call {
 	switch {
+	case has(text, "queue"):
+		return resolve(defs, "research_queue", nil)
 	case has(text, "research"):
 		return resolve(defs, "current_research", nil)
 	case has(text, "rate"):
@@ -46,6 +48,29 @@ func firstCall(text string, defs []model.ToolDef) *call {
 		return resolve(defs, "list_forces", nil)
 	case has(text, "surfaces"):
 		return resolve(defs, "list_surfaces", nil)
+	case has(text, "technology"), has(text, "tech "):
+		return resolve(defs, "tech_status", map[string]any{"tech": techOf(text)})
+	case has(text, "logistic"), has(text, "bots"):
+		return resolve(defs, "logistics_summary", map[string]any{"surface": "nauvis"})
+	case has(text, "how many"):
+		return resolve(defs, "entity_count", map[string]any{
+			"surface": "nauvis",
+			"name":    entityNameOf(text),
+		})
+	case has(text, "evolution"):
+		return resolve(defs, "evolution", map[string]any{"surface": "nauvis"})
+	case has(text, "rocket"):
+		return resolve(defs, "rockets", nil)
+	case has(text, "time"), has(text, "how long"):
+		return resolve(defs, "game_time", nil)
+	case has(text, "pollution"):
+		return resolve(defs, "pollution", map[string]any{"surface": "nauvis"})
+	case has(text, "since"):
+		return resolve(defs, "production_since", map[string]any{
+			"surface":    "nauvis",
+			"item":       itemOf(text),
+			"since_tick": 0,
+		})
 	default:
 		return nil
 	}
@@ -71,25 +96,8 @@ func resolve(defs []model.ToolDef, fn string, args map[string]any) *call {
 	return nil
 }
 
-// itemOf reads the item name out of "rate of iron-plate" or "rate for
-// copper-plate", skipping an article on the way.
-func itemOf(text string) string {
-	fields := strings.Fields(strings.ToLower(text))
-	for i, word := range fields {
-		if word != "of" && word != "for" {
-			continue
-		}
-		for _, candidate := range fields[i+1:] {
-			candidate = strings.Trim(candidate, ".,?!\"'")
-			switch candidate {
-			case "", "the", "a", "an", "my", "our", "your":
-				continue
-			}
-			return candidate
-		}
-	}
-	return "iron-plate"
-}
+// itemOf, techOf and entityNameOf, which read a tool argument out of the
+// question text, live in params.go.
 
 func has(text, word string) bool {
 	return strings.Contains(strings.ToLower(text), word)

@@ -109,6 +109,15 @@ hangs waiting for `Starting RCON`, check
 | ask "what forces are there" | no | no | service `run` loop, `answers` op |
 | ask "hello" -> provider greeting | no | yes (skips otherwise) | the probe seam, a second provider mod |
 | ask "table of players" | no | no | the `table` artifact shape |
+| ask "what is in the research queue" | no | no | the `research_queue` engine tool (breadth addendum) |
+| ask "tech status of automation" | no | no | the `tech_status` engine tool (breadth addendum) |
+| ask "logistic bots on nauvis" | no | no | the `logistics_summary` engine tool (breadth addendum) |
+| ask "how many character on nauvis" | no | no | the `entity_count` engine tool (breadth addendum) |
+| ask "evolution on nauvis" | no | no | the `evolution` engine tool (breadth addendum) |
+| ask "rockets launched" | no | no | the `rockets` engine tool (breadth addendum) |
+| ask "how long have we played" | no | no | the `game_time` engine tool (breadth addendum) |
+| ask "pollution on nauvis" | no | no | the `pollution` engine tool (breadth addendum) |
+| ask "iron plate production since the start" | no | no | the `production_since` engine tool (breadth addendum), `since_tick` 0 |
 | answer op: malformed artifact -> `bad_artifact` | no | no | artifact validation ahead of rendering (review-fix contract item 5) |
 | answer op: large table artifact accepted | no | no | the transport carrying an artifact past 1000 bytes (review-fix contract item 1) |
 | chat prefix creates a question | yes | no | `aab-chat-prefix` seeded into `mod-settings.dat` |

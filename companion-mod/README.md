@@ -250,11 +250,19 @@ service.
 |---|---|---|
 | `list_forces` | `limit` | the forces: name, player count, connected player count, with `total` and `shown` |
 | `list_players` | `connected`, `limit` | that force's players: name, connected, admin, with `known`, `total` and `shown` |
-| `current_research` | force only | what that force is researching, and its progress |
 | `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it, with `total` and `shown` |
+| `current_research` | force only | what that force is researching, and its progress |
+| `research_queue` | `limit` | the running technology and the queue behind it, in engine order: name, level, research units, progress, with `queued` and `shown` |
+| `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, and which prerequisites are still missing |
 | `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute |
 | `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked |
 | `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
+| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robot totals, robots available, cells, and the ten largest item counts, busiest network first |
+| `entity_count` | `surface`, `name` | how many entities of one prototype name that force has on one surface, counted by the engine |
+| `evolution` | `surface` | the evolution factor on one surface, and its time, pollution and spawner-kill parts |
+| `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
+| `rockets` | `limit` | rockets launched by that force, and the items it sent up, largest first |
+| `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
 
 Every tool that lists things is bounded, because a reply over the byte cap is
 refused whole rather than cut short. `list_players` shows connected players
@@ -262,7 +270,25 @@ only unless you pass `connected = false`, and returns 20 rows by default, 50 at
 most. `list_surfaces` returns 20 by default and 50 at most; `list_forces` 50 by
 default and 100 at most. All three sort by name before they cut and report
 `total` beside `shown`, so an agent can say "12 online of 214 known" instead of
-believing it saw everyone.
+believing it saw everyone. `research_queue` and `tech_status` return 10 rows by
+default and 25 at most, `rockets` the same, and `logistics_summary` 5 networks
+by default and 10 at most with ten item rows inside each. Contents and items are
+ranked by count before the cut, so what survives is the part worth reading.
+
+A tool that takes a `surface` answers `found = false` with a reason, rather than
+an error, when the game has no surface by that name. `tech_status` does the same
+for a technology name and `entity_count` for an entity prototype name. Those
+three arguments are the ones a model guesses from memory, and a guess that costs
+a whole round teaches it nothing; a reply that says "no surface by that name,
+call `list_surfaces`" gets the next call right. A force name that does not exist
+is still an error, because the service injects that one rather than guessing it.
+
+`logistics_summary` reads the force's own list of networks, `entity_count` asks
+the engine to count, and `rockets`, `game_time` and `evolution` read counters the
+engine already keeps. None of them walks entities in Lua, so they cost the same
+on a thousand-hour base as on a fresh map. `pollution` is the exception worth
+knowing about: it is the engine's whole-surface sum, which visits every chunk
+holding pollution.
 
 `window` is one of the engine's own precisions: `five_seconds`, `one_minute`,
 `ten_minutes`, `one_hour`, `ten_hours`, `fifty_hours`,

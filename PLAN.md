@@ -131,7 +131,7 @@ agent loop on the Anthropic Go SDK, one `summary` artifact printed to chat.
 Validates: a real question answered in game in under ten seconds on a
 multiplayer server, with the cost of that question visible to the operator.
 
-**Phase 2, depth. Built 2026-09-10; the popup still needs human eyes.** The popup renderer and the remaining shapes. The probe
+**Phase 2, depth. Built and reviewed 2026-09-10; thirteen engine tools; the popup still needs human eyes.** The popup renderer and the remaining shapes. The probe
 with one example provider in a separate test mod. The event file, the SQLite
 history and the history tools. Per-player follow-up context with a TTL.
 Round and token caps, per-player quota. Validates: a third mod adds a tool

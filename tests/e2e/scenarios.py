@@ -299,6 +299,72 @@ def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
     return "FAIL", "qid=%d expected shape=table, got %r: %r" % (qid, entry.get("shape"), entry)
 
 
+# ---------------------------------------------------------------------------
+# Breadth addendum (docs/design/phase1-2-spec.md "Breadth addendum"): one ask
+# per new engine tool. Each of these questions is worded to hit that tool's
+# fake-model keyword rule (service/internal/model/fake/keywords.go) and the
+# fake model's default shape, when the question carries none of "table",
+# "list", "compare" or "notice", is `summary`, whose single line carries the
+# compacted tool result JSON clipped to 160 characters (see PLAN.md's Fake
+# model section). So the tool's own JSON key shows up literally in `lines`,
+# and that key is what each of these checks for: real data from a real tool
+# call, not a guess at prose the model might produce. All server-only, no
+# --client and no tests/provider-mod needed.
+
+
+def _ask_and_expect_field(ctx: Ctx, question: str, field: str, force: str = "player") -> Tuple[Status, str]:
+    """Shared body for every breadth-addendum scenario below: ask `question`,
+    wait for its answer, and require the JSON key `field` to appear
+    somewhere in the answer's lines."""
+    qid = ask_via_remote(ctx.server_rcon, question, force=force)
+    try:
+        entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    lines = " | ".join(entry.get("lines") or [])
+    if field in lines:
+        return "PASS", "qid=%d shape=%s carried %r: %r" % (qid, entry.get("shape"), field, entry.get("lines"))
+    return "FAIL", "qid=%d answer did not carry %r: %r" % (qid, field, entry)
+
+
+def scenario_research_queue(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "what is in the research queue", "queue")
+
+
+def scenario_tech_status(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "tech status of automation", "researched")
+
+
+def scenario_logistics_summary(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "logistic bots on nauvis", "networks")
+
+
+def scenario_entity_count(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "how many character on nauvis", "count")
+
+
+def scenario_evolution(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "evolution on nauvis", "evolution_factor")
+
+
+def scenario_rockets(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "rockets launched", "rockets_launched")
+
+
+def scenario_game_time(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "how long have we played", "hours")
+
+
+def scenario_pollution(ctx: Ctx) -> Tuple[Status, str]:
+    # total_pollution, not the bare word: the sibling evolution tool returns a
+    # by_pollution key, so "pollution" alone would also pass on a mis-route.
+    return _ask_and_expect_field(ctx, "pollution on nauvis", "total_pollution")
+
+
+def scenario_production_since_start(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "iron plate production since the start", "produced")
+
+
 def scenario_chat_prefix(ctx: Ctx) -> Tuple[Status, str]:
     if ctx.client_player_index is None:
         return "SKIP", "needs --client (a connected player)"
@@ -515,6 +581,15 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask via remote interface: what forces are there", scenario_ask_forces),
     Scenario("ask hello: provider greeting", scenario_ask_hello),
     Scenario("ask: table of players", scenario_ask_table_of_players),
+    Scenario("ask: what is in the research queue", scenario_research_queue),
+    Scenario("ask: tech status of automation", scenario_tech_status),
+    Scenario("ask: logistic bots on nauvis", scenario_logistics_summary),
+    Scenario("ask: how many character on nauvis", scenario_entity_count),
+    Scenario("ask: evolution on nauvis", scenario_evolution),
+    Scenario("ask: rockets launched", scenario_rockets),
+    Scenario("ask: how long have we played", scenario_game_time),
+    Scenario("ask: pollution on nauvis", scenario_pollution),
+    Scenario("ask: iron plate production since the start", scenario_production_since_start),
     Scenario("answer op: malformed artifact -> bad_artifact", scenario_answer_bad_artifact),
     Scenario("answer op: large table artifact accepted", scenario_answer_large_table),
     Scenario("chat prefix creates a question", scenario_chat_prefix, needs_client=True),

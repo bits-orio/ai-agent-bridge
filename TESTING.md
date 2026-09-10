@@ -153,6 +153,11 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
   the old 1000-byte client limit made impossible. The asker label reached the log as
   `question 6 from player 1 (force player)` for a player and `another mod (force player)`
   for an interface call.
+- [x] 2026-09-10, after the review fixes and the breadth build: server-only 17 passed,
+  0 failed, 2 skipped; with client 19 passed, 0 failed. New scenarios cover
+  bad_artifact, a 6 KB answer command, and one ask per engine tool: research queue,
+  tech status, logistics, entity count, evolution, rockets, game time, pollution and
+  production since a tick.
 - [ ] Popup rendering seen by a person (`aab-answer-style` = `popup` or a table
   answer with a connected player).
 - [ ] `production_since` against real flow statistics.

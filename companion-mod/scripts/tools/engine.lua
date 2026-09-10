@@ -14,8 +14,17 @@ local basics           = require("scripts.tools.basics")
 local surfaces         = require("scripts.tools.surfaces")
 local production       = require("scripts.tools.production")
 local production_since = require("scripts.tools.production_since")
+local research         = require("scripts.tools.research")
+local logistics        = require("scripts.tools.logistics")
+local entity_count     = require("scripts.tools.entity_count")
+local environment      = require("scripts.tools.environment")
+local rockets          = require("scripts.tools.rockets")
+local game_time        = require("scripts.tools.game_time")
 
-local MODULES = { basics, surfaces, production, production_since }
+local MODULES = {
+  basics, surfaces, production, production_since,
+  research, logistics, entity_count, environment, rockets, game_time,
+}
 
 local INTERFACE = "ai-agent-bridge-tools"
 

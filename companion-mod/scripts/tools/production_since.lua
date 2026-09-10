@@ -69,13 +69,16 @@ local function production_since(a)
   local consumed = sum_samples(stats, a.item, "output", window, samples)
   local covered = math.floor(samples * ticks_per_sample)
 
+  -- The three numbers the question asked for come first, ahead of the method
+  -- fields, so a reader who sees only the head of this reply still sees the
+  -- answer. Every other engine tool leads with its headline figure the same way.
   return {
     force = force.name, surface = surface, item = a.item,
+    produced = produced, consumed = consumed, net = produced - consumed,
     since_tick = since, now_tick = game.tick,
     elapsed_ticks = elapsed, covered_ticks = covered,
     covers_full_period = covered >= elapsed,
     window = window_name, samples = samples,
-    produced = produced, consumed = consumed, net = produced - consumed,
   }
 end
 

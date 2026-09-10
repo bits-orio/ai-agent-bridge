@@ -44,6 +44,15 @@ var everyTool = defs(
 	"ai-agent-bridge-tools__list_forces",
 	"ai-agent-bridge-tools__list_players",
 	"ai-agent-bridge-tools__list_surfaces",
+	"ai-agent-bridge-tools__research_queue",
+	"ai-agent-bridge-tools__tech_status",
+	"ai-agent-bridge-tools__logistics_summary",
+	"ai-agent-bridge-tools__entity_count",
+	"ai-agent-bridge-tools__evolution",
+	"ai-agent-bridge-tools__rockets",
+	"ai-agent-bridge-tools__game_time",
+	"ai-agent-bridge-tools__pollution",
+	"ai-agent-bridge-tools__production_since",
 	"history__last_event",
 	"aab-test-provider__hello",
 )
@@ -59,6 +68,18 @@ func TestFirstStepPicksAToolByKeyword(t *testing.T) {
 		{"what was my last death", "history__last_event"},
 		{"hello", "aab-test-provider__hello"},
 		{"what surfaces exist", "ai-agent-bridge-tools__list_surfaces"},
+		{"what's in the queue", "ai-agent-bridge-tools__research_queue"},
+		{"what is in the research queue", "ai-agent-bridge-tools__research_queue"},
+		{"technology automation-2", "ai-agent-bridge-tools__tech_status"},
+		{"tech status of automation-2", "ai-agent-bridge-tools__tech_status"},
+		{"logistic network status", "ai-agent-bridge-tools__logistics_summary"},
+		{"how many turrets are there", "ai-agent-bridge-tools__entity_count"},
+		{"what is the evolution factor", "ai-agent-bridge-tools__evolution"},
+		{"rockets launched so far", "ai-agent-bridge-tools__rockets"},
+		{"what is the game time", "ai-agent-bridge-tools__game_time"},
+		{"how long have we played", "ai-agent-bridge-tools__game_time"},
+		{"how much pollution is there", "ai-agent-bridge-tools__pollution"},
+		{"iron plate production since the start", "ai-agent-bridge-tools__production_since"},
 	} {
 		step, err := New().Step(context.Background(), "", ask(tc.question), everyTool)
 		if err != nil {
@@ -80,6 +101,75 @@ func TestItemRateArguments(t *testing.T) {
 	step, _ = New().Step(context.Background(), "", ask("what is the production rate"), everyTool)
 	if got := input(t, firstBlock(t, step))["item"]; got != "iron-plate" {
 		t.Errorf("default item = %v, want iron-plate", got)
+	}
+}
+
+// "bots" routes to logistics_summary even though the question also matches
+// "how many": the addendum lists logistic/bots ahead of the generic
+// entity_count rule, so a robot-shaped question keeps its dedicated tool.
+func TestBotsBeatsGenericEntityCount(t *testing.T) {
+	step, _ := New().Step(context.Background(), "", ask("how many bots do we have"), everyTool)
+	if got := firstBlock(t, step).Name; got != "ai-agent-bridge-tools__logistics_summary" {
+		t.Errorf("called %q, want logistics_summary", got)
+	}
+}
+
+func TestTechStatusArguments(t *testing.T) {
+	for _, tc := range []struct{ question, want string }{
+		{"technology automation-2", "automation-2"},
+		{"tech status of automation-2", "automation-2"},
+		{"tech logistics-2", "logistics-2"},
+		{"what is the tech status for mining-productivity-1", "mining-productivity-1"},
+	} {
+		step, _ := New().Step(context.Background(), "", ask(tc.question), everyTool)
+		args := input(t, firstBlock(t, step))
+		if got := args["tech"]; got != tc.want {
+			t.Errorf("%q: tech = %v, want %v", tc.question, got, tc.want)
+		}
+	}
+}
+
+func TestEntityCountArguments(t *testing.T) {
+	step, _ := New().Step(context.Background(), "", ask("how many turrets are there"), everyTool)
+	args := input(t, firstBlock(t, step))
+	if args["name"] != "turrets" || args["surface"] != "nauvis" {
+		t.Errorf("entity_count args = %v", args)
+	}
+}
+
+// logistics_summary, evolution and pollution all take a required surface
+// that the fake model has no way to read out of the question, so all three
+// default to nauvis, matching item_rate's existing default.
+func TestSurfaceDefaultsToNauvis(t *testing.T) {
+	for _, tc := range []struct{ question, tool string }{
+		{"logistic network status", "ai-agent-bridge-tools__logistics_summary"},
+		{"what is the evolution factor", "ai-agent-bridge-tools__evolution"},
+		{"how much pollution is there", "ai-agent-bridge-tools__pollution"},
+	} {
+		step, _ := New().Step(context.Background(), "", ask(tc.question), everyTool)
+		block := firstBlock(t, step)
+		if block.Name != tc.tool {
+			t.Fatalf("%q called %q, want %q", tc.question, block.Name, tc.tool)
+		}
+		if got := input(t, block)["surface"]; got != "nauvis" {
+			t.Errorf("%q: surface = %v, want nauvis", tc.question, got)
+		}
+	}
+}
+
+func TestProductionSinceArguments(t *testing.T) {
+	step, _ := New().Step(context.Background(), "", ask("iron plate production since the start"), everyTool)
+	args := input(t, firstBlock(t, step))
+	if args["surface"] != "nauvis" || args["item"] != "iron-plate" {
+		t.Errorf("default production_since args = %v", args)
+	}
+	if got := args["since_tick"]; got != float64(0) {
+		t.Errorf("since_tick = %v, want 0", got)
+	}
+
+	step, _ = New().Step(context.Background(), "", ask("production of copper-plate since the start"), everyTool)
+	if got := input(t, firstBlock(t, step))["item"]; got != "copper-plate" {
+		t.Errorf("item = %v, want copper-plate", got)
 	}
 }
 
