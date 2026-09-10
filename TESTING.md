@@ -158,6 +158,9 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
   bad_artifact, a 6 KB answer command, and one ask per engine tool: research queue,
   tech status, logistics, entity count, evolution, rockets, game time, pollution and
   production since a tick.
+- [x] 2026-09-10, after the tools review fixes: server-only 18 passed, 0 failed, 2
+  skipped; with client 20 passed, 0 failed. New scenario reads the providers and
+  manifest ops. Fake-game suites: 187 and 139 checks.
 - [ ] Popup rendering seen by a person (`aab-answer-style` = `popup` or a table
   answer with a connected player).
 - [ ] `production_since` against real flow statistics.

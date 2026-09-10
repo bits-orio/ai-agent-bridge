@@ -13,6 +13,7 @@
 --   LuaForce::connected_players      R array[LuaPlayer]
 
 local force_lookup = require("scripts.tools.force_lookup")
+local bounded      = require("scripts.tools.bounded")
 
 -- 60 ticks a second, 3600 seconds an hour. The engine's own nominal rate, which
 -- is what a player means by "how long have we been playing" even on a server
@@ -23,13 +24,9 @@ local M = {}
 
 M.manifest = {
   game_time = {
-    desc = "How long this game has been running and who is on: current tick, ticks played, hours played, connected players on the server and connected players on this force. Use it to turn a tick into hours before you quote it, and as the denominator for any \"per hour\" claim. Ticks played counts from when the map was created, so it is the number a player means by playtime.",
+    desc = "How long this game has been running and who is on: current tick, ticks played, hours played, connected players on the server and on this force. Turn a tick into hours before you quote it. Ticks played counts from when the map was created, which is what a player means by playtime.",
   },
 }
-
-local function round_hundredths(value)
-  return math.floor(value * 100 + 0.5) / 100
-end
 
 local function game_time(a)
   local force = force_lookup.require_force(a.force)
@@ -38,7 +35,7 @@ local function game_time(a)
     force = force.name,
     tick = game.tick,
     ticks_played = played,
-    hours = round_hundredths(played / TICKS_PER_HOUR),
+    hours = bounded.round(played / TICKS_PER_HOUR, 2),
     connected_players = #game.connected_players,
     force_connected_players = #force.connected_players,
   }

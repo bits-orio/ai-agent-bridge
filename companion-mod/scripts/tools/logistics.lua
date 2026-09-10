@@ -12,52 +12,35 @@
 --     all_logistic_robots, available_logistic_robots,
 --     all_construction_robots, available_construction_robots
 --   LuaLogisticNetwork::get_contents(member?) -> array[ItemWithQualityCount],
---     each {name, quality, count}.
+--     each {name, quality, count}. Aggregated by name in
+--     scripts/tools/logistics_contents.lua.
 
-local force_lookup   = require("scripts.tools.force_lookup")
-local surface_lookup = require("scripts.tools.surface_lookup")
-local bounded        = require("scripts.tools.bounded")
+local force_lookup      = require("scripts.tools.force_lookup")
+local surface_lookup    = require("scripts.tools.surface_lookup")
+local contents_of       = require("scripts.tools.logistics_contents")
+local bounded           = require("scripts.tools.bounded")
 
+-- Five networks of eight item rows each is what fits the reply cap with room to
+-- spare. A mall surface can hold dozens of one-roboport networks, and the
+-- question behind this tool is always about the big ones.
 local DEFAULT_NETWORKS = 5
-local MAX_NETWORKS = 10
-local CONTENTS_PER_NETWORK = 10
+local MAX_NETWORKS = 5
+local CONTENTS_PER_NETWORK = 8
 
 local M = {}
 
 M.manifest = {
   logistics_summary = {
-    desc = "The logistic networks one force has on one surface: robot totals, how many robots are idle and available, how many logistic cells the network covers, and its ten largest item stacks by count. Use it for \"do we have enough bots\", \"what is sitting in the chests\" and \"how many networks are there\". Busiest network first. An unknown surface comes back as found = false rather than an error.",
+    desc = "The logistic networks one force has on one surface, busiest first: robot totals, how many are idle, how many cells the network covers, and its eight largest item stacks by count, each summed over every quality. A stack held at more than one quality carries a qualities breakdown; one held at a single quality other than normal says which. Answers \"do we have enough bots\" and \"what is in the chests\". An unknown surface comes back as found = false.",
     params = {
-      surface = "string! surface name from list_surfaces, for example nauvis",
+      surface = "string! surface name or index from list_surfaces, for example nauvis",
       limit   = "integer how many networks to return, default " .. DEFAULT_NETWORKS .. ", at most " .. MAX_NETWORKS,
     },
   },
 }
 
--- The ten biggest stacks, largest first. Quality rides along only when it is
--- something other than normal, because on most saves it is normal everywhere
--- and a repeated "normal" on every row is reply bytes spent saying nothing.
-local function largest_contents(network)
-  local rows = network.get_contents()
-  table.sort(rows, function(x, y)
-    if x.count ~= y.count then return x.count > y.count end
-    if x.name ~= y.name then return x.name < y.name end
-    return tostring(x.quality) < tostring(y.quality)
-  end)
-  local top = {}
-  for i = 1, math.min(CONTENTS_PER_NETWORK, #rows) do
-    local row = rows[i]
-    top[i] = {
-      name = row.name,
-      count = row.count,
-      quality = (row.quality ~= "normal") and row.quality or nil,
-    }
-  end
-  return top, #rows
-end
-
 local function network_row(network)
-  local contents, distinct = largest_contents(network)
+  local contents, distinct = contents_of.largest(network, CONTENTS_PER_NETWORK)
   return {
     id = network.network_id,
     cells = #network.cells,

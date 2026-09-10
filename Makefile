@@ -40,3 +40,8 @@ lua-check:
 	else \
 		luac5.4 -p $$files && echo "luac -p OK ($$(echo "$$files" | wc -l) file(s))"; \
 	fi
+
+## Companion protocol tests against the fake game (needs liblua5.4, no Factorio).
+lua-test:
+	python3 tests/lua/luarun.py tests/lua/aab_test.lua
+	python3 tests/lua/luarun.py tests/lua/aab_breadth_test.lua

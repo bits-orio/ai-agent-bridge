@@ -13,49 +13,58 @@
 -- and the newest sample is still filling, so a call two seconds after an event
 -- reads a sample that also holds a few ticks from before it. Both errors
 -- shrink as the period grows.
+--
+-- Every sample is summed over every quality the game has, so the figure is the
+-- force's whole production of that item rather than its normal-quality part
+-- (scripts/tools/flow.lua carries the quoted documentation for why a bare item
+-- name means normal quality alone). That is one get_flow_count per sample per
+-- quality per category, so a 300-sample read on a five-quality game makes three
+-- thousand of them. Each is a counter lookup inside the engine, and the
+-- alternative is an answer that is quietly a fifth of the truth.
 
-local force_lookup = require("scripts.tools.force_lookup")
-local flow         = require("scripts.tools.flow")
+local force_lookup   = require("scripts.tools.force_lookup")
+local surface_lookup = require("scripts.tools.surface_lookup")
+local flow           = require("scripts.tools.flow")
+local bounded        = require("scripts.tools.bounded")
 
 local M = {}
 
 M.manifest = {
   production_since = {
-    desc = "How many of one item a force produced and consumed on one surface since a given tick, summed from the engine's own flow samples. Pass the tick of an earlier event, for example the tick of a death or a research finish, and read produced, consumed and net. The reply reports covered_ticks, which rounds up to whole samples, so compare it against elapsed_ticks before quoting an exact figure.",
+    desc = "How many of one item a force produced and consumed on one surface since a given tick, summed over every quality from the engine's own flow samples. Pass the tick of an earlier event, a death or a research finish, and read produced, consumed and net. covered_ticks rounds up to whole samples, so check it against elapsed_ticks before quoting an exact figure. An unknown surface comes back as found = false.",
     params = {
-      surface    = "string! surface name, e.g. nauvis",
+      surface    = "string! surface name or index from list_surfaces, e.g. nauvis",
       item       = "string! item prototype name",
       since_tick = "integer! the tick to count from, never later than the current tick",
     },
   },
 }
 
-local function sum_samples(stats, item, category, window, samples)
+local function sum_samples(stats, spec, category, samples)
   local total = 0
   for index = 1, samples do
-    total = total + stats.get_flow_count{
-      name            = item,
-      category        = category,
-      precision_index = window.precision,
-      sample_index    = index,
-      count           = true,
-    }
+    spec.sample = index
+    total = total + flow.item_flow(stats, spec, category)
   end
   return total
 end
 
 local function production_since(a)
   local force = force_lookup.require_force(a.force)
-  local surface = flow.require_surface(a.surface)
-  if type(a.item) ~= "string" or a.item == "" then error("item is required") end
+  local surface, miss = surface_lookup.find(a.surface)
+  if not surface then
+    miss.force = force.name
+    return miss
+  end
+  if type(a.item) ~= "string" or a.item == "" then error("item is required", 0) end
 
   local since = tonumber(a.since_tick)
-  if not since then error("since_tick is required") end
+  if not since then error("since_tick is required", 0) end
   since = math.floor(since)
   if since < 0 then since = 0 end
 
   local elapsed = game.tick - since
-  if elapsed < 0 then error("since_tick is in the future: " .. since .. " > " .. game.tick) end
+  if elapsed < 0 then error("since_tick is in the future: " .. since .. " > " .. game.tick, 0) end
   if elapsed < 1 then elapsed = 1 end
 
   local window_name, window = flow.window_covering(elapsed)
@@ -65,16 +74,21 @@ local function production_since(a)
   if samples > flow.SAMPLES_PER_WINDOW then samples = flow.SAMPLES_PER_WINDOW end
 
   local stats = force.get_item_production_statistics(surface)
-  local produced = sum_samples(stats, a.item, "input", window, samples)
-  local consumed = sum_samples(stats, a.item, "output", window, samples)
+  local spec = { item = a.item, qualities = flow.quality_names(), window = window }
+  local produced = sum_samples(stats, spec, "input", samples)
+  local consumed = sum_samples(stats, spec, "output", samples)
   local covered = math.floor(samples * ticks_per_sample)
 
   -- The three numbers the question asked for come first, ahead of the method
   -- fields, so a reader who sees only the head of this reply still sees the
   -- answer. Every other engine tool leads with its headline figure the same way.
   return {
-    force = force.name, surface = surface, item = a.item,
-    produced = produced, consumed = consumed, net = produced - consumed,
+    found = true,
+    force = force.name, surface = surface.name, item = a.item,
+    produced = bounded.round(produced, 2),
+    consumed = bounded.round(consumed, 2),
+    net = bounded.round(produced - consumed, 2),
+    all_qualities = true,
     since_tick = since, now_tick = game.tick,
     elapsed_ticks = elapsed, covered_ticks = covered,
     covers_full_period = covered >= elapsed,

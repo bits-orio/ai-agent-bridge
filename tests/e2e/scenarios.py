@@ -184,6 +184,42 @@ def poll_for_answer(conn, qid: int, timeout: float, interval: float, after: Opti
     raise TimeoutError("no answer for qid=%d within %ss (last `answers` reply: %r)" % (qid, timeout, last_env))
 
 
+def real_answer_problem(entry: dict) -> Optional[str]:
+    """None when `entry`'s lines look like they came from a real tool call;
+    otherwise the reason they don't (second review-fix contract item 10,
+    tools-review findings 11, 12 and 14).
+
+    Two ways an answer can carry no real game data while still looking like
+    a normal reply to code that only checks a keyword or a shape:
+
+    - A line starting with "You asked: " is the fake model's echo()
+      (service/internal/model/fake/fake.go), used whenever no keyword
+      matches the tools the model was actually offered. That happens not
+      only for an off-topic question but whenever the tools catalog failed
+      to build: defsFor(nil) leaves only submit_answer, so nothing can ever
+      match and every question is answered from the system prompt alone
+      (finding 11). A scenario that only checks for a bare word the question
+      text itself contains (finding 12: "queue" is in "what is in the
+      research queue" too) can't tell this apart from a real answer.
+    - A line carrying "aab-rpc:" or "provider_error" is a Go-side rpc.Error
+      (service/internal/rpc/rpc.go's Error.Error(): "aab-rpc: <code>[: <msg>]",
+      and CodeProviderError is literally "provider_error") that leaked into
+      an artifact as if it were tool data, because agent.go's failed() puts
+      a failed tool call's error text in the same field a successful result
+      would occupy and the round loop never short-circuits on it. A
+      scenario that only checks an artifact's shape, not its content, still
+      passes when the tool behind it errored (finding 14).
+    """
+    for line in entry.get("lines") or []:
+        if line.startswith("You asked:"):
+            return "line %r is the echo fallback: no tool was ever called" % (line,)
+        if "aab-rpc:" in line:
+            return "line %r carries an 'aab-rpc:' client error instead of tool data" % (line,)
+        if "provider_error" in line:
+            return "line %r carries a provider_error code instead of tool data" % (line,)
+    return None
+
+
 def wait_for_needle_in_file(path, needle: str, timeout: float, interval: float = 0.05) -> bool:
     """Polls a plain text file (events.jsonl) for a substring, without
     assuming it exists yet. Used to confirm the companion actually wrote an
@@ -234,12 +270,62 @@ def scenario_status(ctx: Ctx) -> Tuple[Status, str]:
     )
 
 
+def scenario_providers_and_manifest(ctx: Ctx) -> Tuple[Status, str]:
+    """Calls the two-step catalog ops directly (second review-fix contract
+    item 1): `providers {}` -> `[{iface, v, tools: [names...]}]` for every
+    probe found, then `manifest {i}` -> one provider's manifest verbatim.
+
+    Confirms the companion's own tool provider shows up through `providers`
+    with its tool names, and that `manifest` then returns real `desc` text
+    for those same names, without hardcoding the companion's own interface
+    name (an internal wiring detail of companion-mod/scripts/tools/engine.lua,
+    not part of the frozen protocol): CONTEXT.md says "the companion is
+    itself a provider of the engine tools and is discovered the same way as
+    everyone else", so it is found here the same way `find_provider_iface`
+    finds tests/provider-mod above, by the tool names only the companion's
+    own provider carries (`list_forces`, `research_queue`;
+    companion-mod/scripts/tools/basics.lua and tools/research.lua)."""
+    env = aab_rpc(ctx.server_rcon, "providers")
+    if not env.get("ok"):
+        return "FAIL", "providers op returned not-ok: %r" % (env,)
+    entries = as_list(env.get("r"))
+    own = None
+    for entry in entries:
+        if "list_forces" in (entry.get("tools") or []):
+            own = entry
+            break
+    if own is None:
+        return "FAIL", "no provider in the `providers` reply carries list_forces (the companion's own tool provider): %r" % (entries,)
+
+    iface = own.get("iface")
+    own_tools = own.get("tools") or []
+    for name in ("list_forces", "research_queue"):
+        if name not in own_tools:
+            return "FAIL", "companion's own provider (iface=%r) is missing %r from its `providers` tool list: %r" % (iface, name, own)
+
+    man = aab_rpc(ctx.server_rcon, "manifest", i=iface)
+    if not man.get("ok"):
+        return "FAIL", "manifest op for iface=%r returned not-ok: %r" % (iface, man)
+    manifest_tools = (man.get("r") or {}).get("tools") or {}
+    for name in ("list_forces", "research_queue"):
+        tool_entry = manifest_tools.get(name)
+        if not isinstance(tool_entry, dict) or not tool_entry.get("desc"):
+            return "FAIL", "manifest for iface=%r has no usable desc entry for %r: %r" % (iface, name, tool_entry)
+
+    return "PASS", "providers listed iface=%r with %d tools including list_forces/research_queue; manifest returned desc text for both" % (
+        iface, len(own_tools),
+    )
+
+
 def scenario_ask_forces(ctx: Ctx) -> Tuple[Status, str]:
     qid = ask_via_remote(ctx.server_rcon, "What forces are there?", force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
     except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
     lines = " | ".join(entry.get("lines") or [])
     if "player" in lines.lower():
         return "PASS", "qid=%d shape=%s lines=%r" % (qid, entry.get("shape"), entry.get("lines"))
@@ -282,6 +368,9 @@ def scenario_ask_hello(ctx: Ctx) -> Tuple[Status, str]:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
     except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
     lines = " | ".join(entry.get("lines") or [])
     if marker in lines:
         return "PASS", "qid=%d answer carried %s.hello's greeting %r" % (qid, ctx.provider_iface, marker)
@@ -289,14 +378,29 @@ def scenario_ask_hello(ctx: Ctx) -> Tuple[Status, str]:
 
 
 def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
+    """Asks "table of players" and requires both the shape and the content
+    (second review-fix contract item 10, finding 14): the fake model derives
+    the table shape from the word "table" in the question text alone, with
+    no reference to whether list_players actually succeeded, so a shape
+    check by itself still passes when the tool errored and its error text
+    ended up as the table's one cell. Requiring '"players":' (the JSON key
+    list_players's own reply carries, review-fix contract item 10) ties the
+    check to the tool having actually run; real_answer_problem() below also
+    rules out the error text landing there."""
     qid = ask_via_remote(ctx.server_rcon, "table of players", force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
     except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
-    if entry.get("shape") == "table":
-        return "PASS", "qid=%d shape=table lines=%r" % (qid, entry.get("lines"))
-    return "FAIL", "qid=%d expected shape=table, got %r: %r" % (qid, entry.get("shape"), entry)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    if entry.get("shape") != "table":
+        return "FAIL", "qid=%d expected shape=table, got %r: %r" % (qid, entry.get("shape"), entry)
+    lines = " | ".join(entry.get("lines") or [])
+    if '"players":' not in lines:
+        return "FAIL", "qid=%d shape=table but did not carry list_players's own \"players\": key: %r" % (qid, entry)
+    return "PASS", "qid=%d shape=table carried \"players\": %r" % (qid, entry.get("lines"))
 
 
 # ---------------------------------------------------------------------------
@@ -314,13 +418,26 @@ def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
 
 def _ask_and_expect_field(ctx: Ctx, question: str, field: str, force: str = "player") -> Tuple[Status, str]:
     """Shared body for every breadth-addendum scenario below: ask `question`,
-    wait for its answer, and require the JSON key `field` to appear
-    somewhere in the answer's lines."""
+    wait for its answer, and require the JSON key `field` to appear somewhere
+    in the answer's lines.
+
+    `field` must be the quote and colon of a real JSON key, e.g. '"queued":',
+    never a bare word (second review-fix contract item 10). A bare word can
+    slip through two ways that have nothing to do with the tool ever being
+    called: it can already be a substring of the echoed question text itself
+    (finding 12: "queue" is in "what is in the research queue"), and it can
+    turn up by accident in a Lua error's traceback (finding 13:
+    "entity_count.lua" contains "count"). Neither text contains a literal
+    `"<key>":` fragment, so quoting the key is what actually ties the
+    assertion to the tool's own JSON reply."""
     qid = ask_via_remote(ctx.server_rcon, question, force=force)
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
     except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
     lines = " | ".join(entry.get("lines") or [])
     if field in lines:
         return "PASS", "qid=%d shape=%s carried %r: %r" % (qid, entry.get("shape"), field, entry.get("lines"))
@@ -328,41 +445,41 @@ def _ask_and_expect_field(ctx: Ctx, question: str, field: str, force: str = "pla
 
 
 def scenario_research_queue(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "what is in the research queue", "queue")
+    return _ask_and_expect_field(ctx, "what is in the research queue", '"queued":')
 
 
 def scenario_tech_status(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "tech status of automation", "researched")
+    return _ask_and_expect_field(ctx, "tech status of automation", '"researched":')
 
 
 def scenario_logistics_summary(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "logistic bots on nauvis", "networks")
+    return _ask_and_expect_field(ctx, "logistic bots on nauvis", '"networks":')
 
 
 def scenario_entity_count(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "how many character on nauvis", "count")
+    return _ask_and_expect_field(ctx, "how many character on nauvis", '"count":')
 
 
 def scenario_evolution(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "evolution on nauvis", "evolution_factor")
+    return _ask_and_expect_field(ctx, "evolution on nauvis", '"evolution_factor":')
 
 
 def scenario_rockets(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "rockets launched", "rockets_launched")
+    return _ask_and_expect_field(ctx, "rockets launched", '"rockets_launched":')
 
 
 def scenario_game_time(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "how long have we played", "hours")
+    return _ask_and_expect_field(ctx, "how long have we played", '"hours":')
 
 
 def scenario_pollution(ctx: Ctx) -> Tuple[Status, str]:
     # total_pollution, not the bare word: the sibling evolution tool returns a
     # by_pollution key, so "pollution" alone would also pass on a mis-route.
-    return _ask_and_expect_field(ctx, "pollution on nauvis", "total_pollution")
+    return _ask_and_expect_field(ctx, "pollution on nauvis", '"total_pollution":')
 
 
 def scenario_production_since_start(ctx: Ctx) -> Tuple[Status, str]:
-    return _ask_and_expect_field(ctx, "iron plate production since the start", "produced")
+    return _ask_and_expect_field(ctx, "iron plate production since the start", '"produced":')
 
 
 def scenario_chat_prefix(ctx: Ctx) -> Tuple[Status, str]:
@@ -552,12 +669,28 @@ def scenario_answer_large_table(ctx: Ctx) -> Tuple[Status, str]:
     companion's. This proves the transport this harness actually speaks
     (its own RCON client, and the companion's command handling) carries an
     artifact well past 1000 bytes with nothing special-cased on either
-    side."""
+    side.
+
+    Reads the question back through `answers` afterwards and requires the
+    recorded shape and first line to be exactly the table this scenario sent
+    (second review-fix contract item 10, finding 15): the service polls
+    every ctx.poll_interval too, and this question is created through the
+    same ai-agent-bridge-v1 path any other asker uses, so if the service's
+    own poll lands between ask_via_remote() and this scenario's own `answer`
+    call below, the service answers it first with the fake model's echo (no
+    keyword in "size probe ..." matches anything), and this scenario's
+    `answer` call then only hits rpc.lua's already-answered short-circuit
+    ("if question.answered then return ok_reply(true) end") without ever
+    rendering anything. That race can only turn a FAIL into a silent PASS
+    when the only assertion is `ok`, which is exactly why it was invisible
+    in CI; reading the companion's own recorded shape and title back closes
+    it, and real_answer_problem() below also catches the echo directly."""
     qid = ask_via_remote(ctx.server_rcon, "size probe (answered directly, not by the model)", force="player")
     columns = ["col-%d" % i for i in range(5)]
     cell = "x" * 150
     rows = [[cell] * 5 for _ in range(8)]
-    artifact = {"shape": "table", "title": "size probe", "columns": columns, "rows": rows}
+    title = "size probe"
+    artifact = {"shape": "table", "title": title, "columns": columns, "rows": rows}
     req = {"v": 1, "op": "answer"}
     req.update({"qid": qid, "artifact": artifact})
     command_len = len("/aab-rpc " + json.dumps(req))
@@ -566,7 +699,28 @@ def scenario_answer_large_table(ctx: Ctx) -> Tuple[Status, str]:
     env = aab_rpc(ctx.server_rcon, "answer", qid=qid, artifact=artifact)
     if not env.get("ok"):
         return "FAIL", "a %d-byte answer command (well past 1000 bytes) was refused: %r" % (command_len, env)
-    return "PASS", "answer op accepted a %d-byte command (qid=%d), past the 1000-byte figure that turned out to be gorcon's limit, not the transport's" % (command_len, qid)
+
+    try:
+        entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", "answer op returned ok=true but the question never showed up answered through `answers`: %s" % e
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", (
+            "qid=%d answer op returned ok=true, but the recorded answer is not the table this scenario sent: %s "
+            "(the service's own poll likely answered qid=%d first, and this scenario's `answer` call only hit "
+            "the already-answered short-circuit): %r"
+        ) % (qid, problem, qid, entry)
+    if entry.get("shape") != "table":
+        return "FAIL", "qid=%d answer op returned ok=true, but the recorded shape is %r, not table: %r" % (qid, entry.get("shape"), entry)
+    lines = entry.get("lines") or []
+    if not lines or lines[0] != title:
+        return "FAIL", "qid=%d recorded shape=table, but the first line is %r, not the title %r this scenario sent: %r" % (qid, lines[0] if lines else None, title, entry)
+    return "PASS", (
+        "answer op accepted a %d-byte command (qid=%d), past the 1000-byte figure that turned out to be gorcon's "
+        "limit, not the transport's, and the companion's own record confirms it actually rendered this table "
+        "(shape=table, first line=%r)"
+    ) % (command_len, qid, title)
 
 
 @dataclass
@@ -578,6 +732,7 @@ class Scenario:
 
 SCENARIOS: List[Scenario] = [
     Scenario("status", scenario_status),
+    Scenario("providers + manifest ops: companion's own provider", scenario_providers_and_manifest),
     Scenario("ask via remote interface: what forces are there", scenario_ask_forces),
     Scenario("ask hello: provider greeting", scenario_ask_hello),
     Scenario("ask: table of players", scenario_ask_table_of_players),

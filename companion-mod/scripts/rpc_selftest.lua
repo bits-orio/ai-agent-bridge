@@ -30,7 +30,7 @@ end
 
 --- Prints a JSON string of req.kb kilobytes so the reply size at which RCON
 --- truncates can be measured from outside. Deliberately NOT subject to
---- rpc.lua's MAX_RESULT_BYTES cap, see the is_big check there, so it carries
+--- rpc.lua's per-op reply cap (big is never capped), so it carries
 --- its own ceiling: a command runs on every peer, and a mistyped kb would ask
 --- the server and every client to allocate the same absurd string at once.
 --- MAX_KB is 4096, the 4 MB reply that measurement reached (TESTING.md 1.5).

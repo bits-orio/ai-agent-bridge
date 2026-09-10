@@ -100,12 +100,20 @@ in its `status` reply.
   answered`, so a quiet log still tells you the service is alive.
 
   If you never see a `question N from ...` line for what you typed, the
-  service isn't seeing your question at all: confirm `factorio.rcon.address`
-  and `FACTORIO_RCON_PASSWORD` actually match the server. A poll that can't
-  reach the server logs `run: poll failed: <error>` once (not on every
-  retry) and names the real cause. If the `question` line shows up but the
-  `answer` line, or the reply in game, doesn't, look for `answer N: could not
-  deliver it: <error>` right after it.
+  service is either not reaching the server or holding your question back,
+  and two other lines tell you which. `run: poll failed: <error>` once (not
+  on every retry) means it cannot reach the server at all, so confirm
+  `factorio.rcon.address` and `FACTORIO_RCON_PASSWORD` actually match it.
+  `question N: no catalog available, leaving it pending and trying again
+  next tick` means it has your question and is waiting to read the tool list
+  off the companion; the `catalog:` line just above it names the reason, and
+  the question runs by itself once the list arrives.
+
+  If the `question` line shows up but the `answer` line, or the reply in
+  game, doesn't, look for `answer N: could not deliver it, trying again next
+  tick: <error>` right after it. `answer N: the companion refused the
+  artifact, sending a notice instead` means the answer itself was a shape
+  the game cannot render, so the asker gets a short notice in its place.
 - **The service refuses to start.** It writes `aab.effective.yaml` next to
   itself on every run: the fully-resolved config with each secret marked
   `SET (n chars)` or `MISSING`. Read that before re-reading the YAML.

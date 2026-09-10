@@ -86,19 +86,29 @@ question 7 from Bob (player 1, force player): what is my iron plate rate
 answer 7 shape=summary rounds=2 tokens=1840/96 cost=$0.0116
 ```
 
-Three other lines are worth knowing:
+A few other lines are worth knowing:
 
 - `poll failed: ...` once per failure streak, not once per poll. A server that is down
   costs one line, and `poll recovered` says when it came back.
 - `answer 7: could not deliver it, trying again next tick: ...` when the answer itself
   did not land. The artifact is already paid for, so it is offered again with no second
   model run. After three failures the service says it is giving up on that question.
+- `answer 7: the companion refused the artifact, sending a notice instead: ...` when the
+  game cannot render that shape. The asker is told so once, and the question is done.
+- `question 7: no catalog available, leaving it pending ...` when the service cannot read
+  the server's tools. The question waits for the next tick rather than being answered out
+  of the system prompt with no game data in it.
+- `poll reply too large at 16 questions, trying 8` when a page of long questions outgrows
+  the companion's reply cap. The page halves until a reply fits and doubles back toward
+  sixteen after every poll that lands.
 - `idle, 12 questions answered` every five minutes with nothing to do, so an idle
   service is tellable from a wedged one.
 
-The service keeps no cursor, on disk or in memory. The companion serves the oldest
-unanswered questions, a page at a time, so restarting the service resumes rather than
-re-answering everything the companion's ring still holds.
+No cursor is written to disk. In memory the service tracks the highest question id it has
+finished with, delivered or given up on, and polls from there, so a question it abandoned
+cannot sit at the head of every later page. The companion serves the oldest unanswered
+questions above that id, a page at a time, so restarting the service resumes from zero
+rather than re-answering everything the companion's ring still holds.
 
 The other four subcommands drive the protocol by hand, which is what the Phase 0 checks
 in [../TESTING.md](../TESTING.md) use:
@@ -112,9 +122,10 @@ in [../TESTING.md](../TESTING.md) use:
 
 - **`status`**: protocol version, mod version, tick, player count, pending questions, and
   the highest question id the save has issued.
-- **`probe`**: the full catalog every provider on the server exposes, manifests verbatim.
-  A provider whose manifest does not decode is skipped with a line naming it; the rest of
-  the catalog still comes through.
+- **`probe`**: the full catalog every provider on the server exposes, manifests verbatim,
+  read the way the service reads it: the providers list, then one manifest per provider.
+  A provider whose manifest does not arrive or does not decode is skipped with a line
+  naming it; the rest of the catalog still comes through.
 - **`rpc <json>`**: one raw `aab-rpc-v1` request, a JSON object carrying its own `"op"`.
 - **`poll [after]`**: unanswered questions with an id above `after`, oldest first.
 
@@ -173,7 +184,10 @@ once.
 
 1. The poll loop picks up a question with its force hint and the asker's name.
 2. The catalog is rebuilt if it is older than ten minutes, or if the last tool call
-   reported an unknown provider. Nothing about it is stored (CONTEXT.md invariant 3).
+   reported an unknown provider: the providers list, then one manifest per provider, so
+   one mod's oversized manifest costs only its own tools. Nothing about it is stored
+   (CONTEXT.md invariant 3). With no catalog at all the question waits instead, since an
+   answer with no game tools behind it is a confident guess.
 3. The agent sends the system prompt, the asker's last few exchanges and the question,
    with every tool the server exposes plus `submit_answer`.
 4. The model calls tools. A round's calls all run at once and come back in one message.
@@ -189,15 +203,18 @@ once.
 ## Layout
 
 ```
-cmd/aab/             main: config load and subcommand dispatch; run.go is the service
-                      itself; dotenv.go and logfile.go copied from open-discord-bridge
+cmd/aab/             main: config load and subcommand dispatch; run.go wires the
+                      service up, runner.go holds its state and loop, poll.go one tick,
+                      answer.go one question, catalog.go the tool catalog; dotenv.go and
+                      logfile.go copied from open-discord-bridge
 internal/config/      YAML config, AAB_* env config, env-resolved secrets, validation,
                       the effective-config snapshot
 internal/rcon/        the Source RCON protocol, written out: auth, exec, one
                       length-prefixed reply of any size, one reconnect
 internal/rpc/         the aab-rpc-v1 client: envelope parsing, typed op helpers
-                      (status/tools/call/poll/answer), per-provider manifest decoding,
-                      the oversized-command guard
+                      (status/providers/manifest/tools/call/poll/answer), the two-step
+                      catalog read, per-provider manifest decoding, the
+                      oversized-command guard
 internal/transport/   copied from open-discord-bridge. Local and SFTP polling tailer for
                       the companion's events.jsonl
 internal/tools/       the one shape every tool takes: name, description, schema, call

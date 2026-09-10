@@ -80,6 +80,8 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 |---|---|---|---|
 | `status` | `{}` | protocol version, mod version, tick, player count, pending question count, highest question id issued (`last_id`) | no |
 | `tools` | `{}` | sorted list of `{iface, v, tools}` per provider, manifests verbatim | no |
+| `providers` | `{}` | sorted list of `{iface, v, tools: [names]}`, one small row per provider | no |
+| `manifest` | `{i}` | one provider's manifest verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
 | `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64) | no |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
@@ -155,8 +157,8 @@ Permissioned acting tools. Sub-agents on a cheaper model.
 3. **RCON size caps.** Measured 2026-09-10 on 2.0.77: replies up to 4 MB
    arrive complete in one packet and commands up to 1 MB are accepted, no
    truncation either way. The companion's cap is therefore
-   a token-budget choice. Current plan: keep 8000 bytes as the default, make it a
-   map setting, and refuse above it.
+   a token-budget choice. Resolved: tool results and the legacy tools op are capped at 8000 bytes,
+   one manifest at 32 KB, other reads at 64 KB, refused above, never truncated.
 4. **Command handlers may block the simulation for every player while they
    run.** Current plan: measure in Phase 0; if true, each tool gets a hard
    time budget in Lua as well as a byte cap.

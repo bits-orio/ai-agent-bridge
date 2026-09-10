@@ -1,5 +1,8 @@
--- Shared window and surface resolution for every tool that reads
--- LuaFlowStatistics, plus the sample arithmetic production_since needs.
+-- Shared window resolution for every tool that reads LuaFlowStatistics, the
+-- quality summing all three of them need, and the sample arithmetic
+-- production_since needs. Surfaces are not resolved here: every surface-taking
+-- tool goes through scripts/tools/surface_lookup.lua, which answers a miss with
+-- found = false rather than an error.
 --
 -- Verified against the official LuaFlowStatistics docs (fetched 2026-09-10),
 -- not from memory:
@@ -13,6 +16,13 @@
 --    the per-time-frame value."
 --   "All return values are normalized to be per-tick for electric networks and
 --    per-minute for all other types."
+-- and, for the quality summing below:
+--   get_flow_count's name is a FlowStatisticsID, which for item statistics is
+--   an ItemWithQualityID. A bare prototype name is the NORMAL quality alone
+--   ("The prototype name. Normal quality will be used."), so reading one item
+--   means one call per quality with the ItemIDAndQualityIDPair form
+--   {name = item, quality = quality}. LuaPrototypes::quality is the
+--   LuaCustomTable[string -> LuaQualityPrototype] of the qualities a game has.
 
 local SAMPLES_PER_WINDOW = 300
 local TICKS_PER_SECOND = 60
@@ -56,17 +66,42 @@ M.window_names = table.concat(ORDER, ", ")
 function M.require_window(name)
   local window = WINDOWS[name]
   if not window then
-    error("unknown window: " .. tostring(name) .. " (want one of " .. M.window_names .. ")")
+    error("unknown window: " .. tostring(name) .. " (want one of " .. M.window_names .. ")", 0)
   end
   return window
 end
 
---- Checks a surface name exists and returns it unchanged.
-function M.require_surface(name)
-  if type(name) ~= "string" or not game.surfaces[name] then
-    error("unknown surface: " .. tostring(name))
+--- Every quality name this game has, sorted, as a fresh list. Read once per
+--- tool call and passed down, because a 300-sample sum would otherwise rebuild
+--- it 300 times. A game with no quality prototypes at all still reads its
+--- normal-quality flow.
+function M.quality_names()
+  local names = {}
+  for name in pairs(prototypes.quality or {}) do names[#names + 1] = name end
+  table.sort(names)
+  if #names == 0 then names[1] = "normal" end
+  return names
+end
+
+--- One item's flow, summed over every quality in spec.qualities. spec is
+--- {item, qualities, window, sample}: with no sample this is the window average
+--- the engine normalises per minute, with one it is that sample's item count.
+---
+--- The summing is the whole point. A force that makes the same plate at five
+--- qualities would otherwise report only the normal-quality part of its own
+--- production, with nothing in the reply to say a filter had been applied.
+function M.item_flow(stats, spec, category)
+  local total = 0
+  for _, quality in ipairs(spec.qualities) do
+    total = total + stats.get_flow_count{
+      name            = { name = spec.item, quality = quality },
+      category        = category,
+      precision_index = spec.window.precision,
+      sample_index    = spec.sample,
+      count           = spec.sample ~= nil,
+    }
   end
-  return name
+  return total
 end
 
 --- The smallest window whose span covers elapsed_ticks, as name, window. Falls

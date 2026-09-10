@@ -33,4 +33,23 @@ function M.by_name(rows)
   return rows
 end
 
+--- The one rounding helper every double in a reply passes through: four
+--- decimals for an evolution factor, two for a progress fraction, a rate or an
+--- hour count.
+---
+--- Why it exists at all: helpers.table_to_json writes a double at full
+--- round-trip precision, so an evolution factor of 0.31 reaches the model as
+--- 0.3100000000000000088817841970012523233890533447265625. Fifty-odd bytes of
+--- the reply's budget spent on digits that carry no information, and a figure
+--- the model may quote back at a player verbatim.
+---
+--- Anything that is not a number comes back untouched, so an absent progress
+--- stays absent rather than becoming 0.
+function M.round(value, places)
+  if type(value) ~= "number" then return value end
+  local scale = 10 ^ (places or 2)
+  if value < 0 then return -math.floor(-value * scale + 0.5) / scale end
+  return math.floor(value * scale + 0.5) / scale
+end
+
 return M

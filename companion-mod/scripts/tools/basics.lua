@@ -14,13 +14,13 @@ local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "The forces on the server: name, player count, connected player count. Sorted by name. The reply reports total beside shown, so raise limit if there are more forces than came back.",
+    desc = "The forces on the server: name, player count, connected player count, sorted by name. total beside shown says whether there are more.",
     params = {
       limit = "integer how many rows to return, default " .. DEFAULT_FORCES .. ", at most " .. MAX_FORCES,
     },
   },
   list_players = {
-    desc = "Players belonging to one force: name, connected, admin. Connected players only unless you pass connected=false. The reply reports known, every player the force has ever had, total, how many matched, and shown, how many rows came back, so say \"12 online of 214 known\" rather than counting rows.",
+    desc = "Players belonging to one force: name, connected, admin. Connected players only unless you pass connected=false. known is every player the force has ever had, total how many matched, shown how many rows came back, so say \"12 online of 214 known\" rather than counting rows.",
     params = {
       connected = "boolean true (the default) for connected players only, false for every player the force has ever had",
       limit     = "integer how many rows to return, default " .. DEFAULT_PLAYERS .. ", at most " .. MAX_PLAYERS,
@@ -82,7 +82,7 @@ local function current_research(a)
   end
   return {
     force = force.name, researching = true, tech = tech.name,
-    level = tech.level, progress = force.research_progress,
+    level = tech.level, progress = bounded.round(force.research_progress, 2),
   }
 end
 

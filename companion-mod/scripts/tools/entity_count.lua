@@ -20,9 +20,9 @@ local M = {}
 
 M.manifest = {
   entity_count = {
-    desc = "How many entities of one prototype name one force has built on one surface, counted by the engine over the whole surface. Use it for \"how many labs do we have\", \"how many rocket silos\", \"how many radars\". Pass the internal prototype name, not the display name. A name no prototype has, or a surface this game does not have, comes back as found = false rather than an error, so guess and read the reply.",
+    desc = "How many entities of one prototype name one force has built on one surface, counted by the engine over the whole surface. Answers \"how many labs do we have\". Pass the internal prototype name, not the display name. A name no prototype has, or a surface this game does not have, comes back as found = false rather than an error, so guess and read the reply.",
     params = {
-      surface = "string! surface name from list_surfaces, for example nauvis",
+      surface = "string! surface name or index from list_surfaces, for example nauvis",
       name    = "string! entity prototype name, for example lab, assembling-machine-2, rocket-silo",
     },
   },
@@ -35,7 +35,7 @@ local function entity_count(a)
     miss.force = force.name
     return miss
   end
-  if type(a.name) ~= "string" or a.name == "" then error("name is required") end
+  if type(a.name) ~= "string" or a.name == "" then error("name is required", 0) end
 
   -- Checked here rather than inside the filter: an unknown prototype name is the
   -- likeliest thing to be wrong about, and a clear found = false beats the

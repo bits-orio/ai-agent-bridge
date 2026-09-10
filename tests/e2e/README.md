@@ -106,6 +106,7 @@ hangs waiting for `Starting RCON`, check
 | scenario | needs `--client` | needs `tests/provider-mod` | needs |
 |---|---|---|---|
 | `status` | no | no | companion only |
+| `providers` + `manifest` ops: companion's own provider | no | no | the two-step catalog ops (second review-fix contract item 1) |
 | ask "what forces are there" | no | no | service `run` loop, `answers` op |
 | ask "hello" -> provider greeting | no | yes (skips otherwise) | the probe seam, a second provider mod |
 | ask "table of players" | no | no | the `table` artifact shape |
@@ -119,7 +120,7 @@ hangs waiting for `Starting RCON`, check
 | ask "pollution on nauvis" | no | no | the `pollution` engine tool (breadth addendum) |
 | ask "iron plate production since the start" | no | no | the `production_since` engine tool (breadth addendum), `since_tick` 0 |
 | answer op: malformed artifact -> `bad_artifact` | no | no | artifact validation ahead of rendering (review-fix contract item 5) |
-| answer op: large table artifact accepted | no | no | the transport carrying an artifact past 1000 bytes (review-fix contract item 1) |
+| answer op: large table artifact accepted | no | no | the transport carrying an artifact past 1000 bytes (review-fix contract item 1); reads the question back through `answers` and checks the recorded shape and title match what was sent (second review-fix contract item 10) |
 | chat prefix creates a question | yes | no | `aab-chat-prefix` seeded into `mod-settings.dat` |
 | last death via history | yes | no | `events.jsonl` + the history tools |
 | per-player quota | no | no | `questions_per_player_per_hour` (asserts both the 1st question, within budget, and the 21st, refused) |
@@ -131,3 +132,37 @@ subcommand and the fake model to exist and be wired up. As of this writing
 in parallel with this harness. That is expected, not a bug in the harness:
 a scenario prints `FAIL` with the observed reply until its dependency lands,
 then starts passing with no change needed here.
+
+## What "PASS" actually proves (second review-fix contract item 10)
+
+An `ask` scenario can look like it exercised a tool when it never did: the
+fake model's `echo()` answers any unmatched question with a summary line
+that starts `You asked: ` and simply repeats the question text back, and a
+tool call that errored surfaces the Go client's own error text (always
+carrying `aab-rpc:`, and often the code `provider_error`) as if it were the
+tool's own result. Either one can satisfy a check that only looks for a
+keyword the question text already contains, or only checks an artifact's
+shape rather than its content. `real_answer_problem()` in `scenarios.py`
+catches both, and every `ask`-style scenario calls it right after
+`poll_for_answer` succeeds and before its own assertion runs. Two scenarios
+add more on top of that:
+
+- Every breadth-addendum scenario (`_ask_and_expect_field`) asserts a
+  quoted JSON key with its colon, for example `"queued":`, never a bare
+  word: a bare word can already be a substring of the question it asked
+  (`"queue"` is in "what is in the research queue"), or of a Lua error's
+  traceback (`"count"` is in `entity_count.lua`), neither of which contains
+  a literal `"<key>":` fragment.
+- "answer op: large table artifact accepted" reads the question back
+  through `answers` afterward and requires the recorded shape and first
+  line to be the table it sent, because the service polls concurrently with
+  the scenario and can answer the same question first (with the echo
+  fallback) between the scenario creating it and directly calling `answer`
+  on it; checking only `ok: true` on that direct call cannot tell its own
+  answer apart from having raced the service's already-answered
+  short-circuit.
+
+`questions_per_player_per_hour` (the quota scenario) is the one exception:
+its "quota probe N" questions are deliberately worded to match no keyword,
+so its first question is expected to come back as the echo, and it does not
+call `real_answer_problem()`.

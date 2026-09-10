@@ -7,7 +7,8 @@
 -- Invariant (CONTEXT.md): this command never writes storage except the
 -- `answer` op (via questions.record_answer, and only once rendering has
 -- succeeded) and the Phase 0 `write` op. `answers` reads back what `answer`
--- stored.
+-- stored. The three catalog ops live in scripts/rpc_catalog.lua and are merged
+-- into the same dispatch table below.
 
 local probe          = require("scripts.probe")
 local questions      = require("scripts.questions")
@@ -18,9 +19,20 @@ local remote_iface   = require("scripts.remote")
 local render         = require("scripts.render")
 local events         = require("scripts.events")
 local selftest       = require("scripts.rpc_selftest")
+local catalog        = require("scripts.rpc_catalog")
 
 local PROTOCOL_VERSION = 1
-local MAX_RESULT_BYTES = 8000
+-- Reply caps by op. Tool results (call) and the legacy whole-catalog read
+-- (tools) stay small because their bytes end up in the model's context;
+-- catalog, question and answer reads are bookkeeping the service consumes,
+-- so they get room to grow (RCON itself carries megabytes, TESTING.md 1.5).
+-- The Phase 0 big op measures the transport and is never capped.
+local DEFAULT_CAP = 65536
+local CAPS = { call = 8000, tools = 8000, manifest = 32768 }
+
+local function reply_cap(op)
+  return CAPS[op] or DEFAULT_CAP
+end
 
 local function ok_reply(r) return { ok = true, r = r } end
 local function err_reply(e, m) return { ok = false, e = e, m = m } end
@@ -39,10 +51,8 @@ function OPS.status(_req, _cmd)
   })
 end
 
-function OPS.tools(_req, _cmd)
-  return ok_reply(probe.catalog())
-end
-
+-- `a` is optional: probe.call substitutes the empty table for a missing one,
+-- so a zero-argument tool called without arguments works.
 function OPS.call(req, _cmd)
   return probe.call(req.i, req.f, req.a)
 end
@@ -98,8 +108,10 @@ function OPS.answers(req, _cmd)
   return ok_reply(question_reads.answers(req.after, req.limit))
 end
 
-for name, fn in pairs(selftest.ops) do
-  OPS[name] = fn
+for _, module in ipairs({ catalog, selftest }) do
+  for name, fn in pairs(module.ops) do
+    OPS[name] = fn
+  end
 end
 
 local M = {}
@@ -133,9 +145,10 @@ function M.handle(cmd)
 
   -- "big" exists to measure the RCON transport's own size limit (Phase 0),
   -- so it must bypass this cap rather than be capped by it.
-  local is_big = type(req) == "table" and req.op == "big"
-  if not is_big and #json > MAX_RESULT_BYTES then
-    json = helpers.table_to_json(err_reply("too_large", "result exceeds " .. MAX_RESULT_BYTES .. " bytes"))
+  local op_name = type(req) == "table" and req.op or nil
+  local cap = reply_cap(op_name)
+  if op_name ~= "big" and #json > cap then
+    json = helpers.table_to_json(err_reply("too_large", "result exceeds " .. cap .. " bytes"))
   end
 
   rcon.print(json)

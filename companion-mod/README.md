@@ -91,6 +91,10 @@ Notes:
   `string`, `integer`, `number`, `boolean`, trailing `!` for required.
 - Tools return plain data only, a Lua table leaks through `remote.call`
   intact, and a value that can't be serialised to JSON breaks the caller.
+- Your tool is always handed a table, even when the caller sent no arguments,
+  so `args.force` is safe to read without checking the table itself.
+- Raise a message a model should read with `error(message, 0)`. Level 0 keeps
+  your mod's file and line out of the sentence the agent sees.
 - Keep each tool bounded. A result over the size cap the service enforces is
   refused, never truncated.
 - Your manifest is checked before it reaches the agent. An entry whose `desc`
@@ -99,6 +103,9 @@ Notes:
   costs you every tool but nobody else theirs. A dropped tool cannot be
   called either, so a typo in a manifest shows up as `no_tool` rather than as
   a broken catalog.
+- Keep your manifest small enough to send on its own. It is fetched one
+  provider at a time, so wordy descriptions cost you your own tools and
+  nobody else's, but they do still cost you yours.
 
 ### 2. Questions by interface, `ai-agent-bridge-v1`
 
@@ -167,14 +174,37 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 | op | request | reply `r` | writes storage |
 |---|---|---|---|
 | `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, which `/ask` command name is live | no |
-| `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider | no |
-| `call` | `{i, f, a}` | the provider's return value, plain data | no |
+| `providers` | `{}` | sorted list of `{iface, v, tools}`, one per provider, `tools` being the sorted tool names | no |
+| `manifest` | `{i}` | one provider's manifest verbatim, `{v, tools}` | no |
+| `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider, manifests and all | no |
+| `call` | `{i, f, a?}` | the provider's return value, plain data | no |
 | `poll` | `{after?, limit?}` | unanswered questions with id greater than `after`, oldest first, each `{id, text, player_index, player_name, force, tick}` | no |
 | `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders it, raises `on_answer` |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, oldest first, each `{id, shape, lines, player_index}` | no |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
 `provider_error`, `bad_artifact`, `bad_result`, `too_large`, `no_question`.
+
+### Reading the catalog in two steps
+
+`providers` then one `manifest` per provider is how a client should read the
+catalog. Every reply this command sends has a byte cap, and `tools` puts every
+provider on the server under one of them: install one mod with forty wordy tool
+descriptions and the whole catalog comes back `too_large`, which leaves an agent
+answering with no tools at all, the companion's own included. `providers` is
+names only, so it stays small however much anyone had to say, and a `manifest`
+too large to send costs that one provider its tools and nobody else theirs.
+`tools` stays for small servers and for the test harness.
+
+`manifest` takes `i`, the provider's interface name, and answers `no_provider`
+when nothing by that name carries a probe. Both ops drop exactly what the
+catalog drops: an entry whose `desc` is not a string, a provider whose probe
+errors.
+
+`a` is optional on `call`. A tool always receives a table, so a tool that takes
+no arguments can be called with none and a tool that needs `force` answers
+"force is required" in its own words rather than erroring on a nil argument. An
+`a` that is not an object is `bad_json`.
 
 `after` defaults to 0 and `limit` to 16, with 64 the most any one reply
 carries. Page by sending the id of the last row you saw as the next `after`.
@@ -254,10 +284,10 @@ service.
 | `current_research` | force only | what that force is researching, and its progress |
 | `research_queue` | `limit` | the running technology and the queue behind it, in engine order: name, level, research units, progress, with `queued` and `shown` |
 | `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, and which prerequisites are still missing |
-| `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute |
-| `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked |
-| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
-| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robot totals, robots available, cells, and the ten largest item counts, busiest network first |
+| `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute, summed over every quality |
+| `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked, each summed over every quality |
+| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick, over every quality |
+| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robot totals, robots available, cells, and the eight largest item counts, busiest network first |
 | `entity_count` | `surface`, `name` | how many entities of one prototype name that force has on one surface, counted by the engine |
 | `evolution` | `surface` | the evolution factor on one surface, and its time, pollution and spawner-kill parts |
 | `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
@@ -271,17 +301,27 @@ most. `list_surfaces` returns 20 by default and 50 at most; `list_forces` 50 by
 default and 100 at most. All three sort by name before they cut and report
 `total` beside `shown`, so an agent can say "12 online of 214 known" instead of
 believing it saw everyone. `research_queue` and `tech_status` return 10 rows by
-default and 25 at most, `rockets` the same, and `logistics_summary` 5 networks
-by default and 10 at most with ten item rows inside each. Contents and items are
-ranked by count before the cut, so what survives is the part worth reading.
+default and 25 at most, `rockets` the same, and `logistics_summary` 5 networks,
+which is also its maximum, with eight item rows inside each. Contents and items
+are ranked by count before the cut, so what survives is the part worth reading.
 
-A tool that takes a `surface` answers `found = false` with a reason, rather than
-an error, when the game has no surface by that name. `tech_status` does the same
-for a technology name and `entity_count` for an entity prototype name. Those
-three arguments are the ones a model guesses from memory, and a guess that costs
-a whole round teaches it nothing; a reply that says "no surface by that name,
-call `list_surfaces`" gets the next call right. A force name that does not exist
-is still an error, because the service injects that one rather than guessing it.
+Every double in a reply is rounded before it is sent: four decimals for an
+evolution factor, two for a progress fraction, a rate, an hour count or a
+pollution total. A raw double reaches a reader as fifty-odd digits of
+`0.3100000000000000088817841970012523233890533447265625`, which spends the
+reply's budget on nothing and invites a model to quote precision that was never
+measured.
+
+Every tool that takes a `surface` takes either a name or the index
+`list_surfaces` publishes, resolves it the same way as every other, and answers
+`found = false` with a reason when this game has no such surface. `tech_status`
+does the same for a technology name and `entity_count` for an entity prototype
+name. Those three arguments are the ones a model guesses from memory, and a
+guess that costs a whole round teaches it nothing; a reply that says "no surface
+by that name or index, call `list_surfaces`" gets the next call right. "Surface
+is required" is reserved for an argument that was genuinely absent. A force name that does
+not exist is still an error, because the service injects that one rather than
+guessing it.
 
 `logistics_summary` reads the force's own list of networks, `entity_count` asks
 the engine to count, and `rockets`, `game_time` and `evolution` read counters the
@@ -289,6 +329,21 @@ engine already keeps. None of them walks entities in Lua, so they cost the same
 on a thousand-hour base as on a fresh map. `pollution` is the exception worth
 knowing about: it is the engine's whole-surface sum, which visits every chunk
 holding pollution.
+
+`item_rate`, `top_items` and `production_since` read one figure per quality and
+add them up, because the engine treats a bare item name as normal quality alone:
+a force making the same plate at five qualities would otherwise be told its own
+production was a fifth of what it is. `logistics_summary` aggregates a network's
+contents by item name for the same reason, reports `distinct_items` as the number
+of names, and adds a `qualities` breakdown to a row held at more than one. A row
+held at a single quality other than normal says which one.
+
+`research_queue` gives a level-based technology one row per queue entry, because
+three queued levels of mining productivity are three entries resolving to one
+technology. Each row reports the level it will research, the current level plus
+the repeats ahead of it. `units` and `progress` belong to the first row only, so
+never sum `units` over the repeats: the later levels cost more and the engine
+keeps that in a count formula this does not evaluate.
 
 `window` is one of the engine's own precisions: `five_seconds`, `one_minute`,
 `ten_minutes`, `one_hour`, `ten_hours`, `fifty_hours`,

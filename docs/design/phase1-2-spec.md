@@ -270,3 +270,49 @@ command limit and the 4 KB packet limit were gorcon's, not the game's.
     ignores `InterruptibleStdioStream` and passes `stdin=DEVNULL`; in client
     mode an empty chat prefix is a FAIL; QUICKSTART's troubleshooting describes
     the `question N from ...` and `poll failed` lines the service really logs.
+
+## Second review-fix contract (tools review, 2026-09-10)
+
+1. **Catalog in two steps.** New read-only ops beside `tools`: `providers {}`
+   returns `[{iface, v, tools: [names...]}]` for every probe found, sorted;
+   `manifest {i}` returns one provider's manifest verbatim. The service builds
+   its catalog from `providers` plus one `manifest` call per provider, so a
+   provider whose manifest is too large costs itself its tools and nobody
+   else theirs. `tools` stays for small servers and for the harness.
+2. **No catalog, no answer.** When the service has no catalog yet and the
+   rebuild fails, the question stays pending and the log says
+   `no catalog available`, retrying next tick. A stale catalog is still used.
+3. **Done questions leave the page.** The service polls with `after` set to
+   the highest question id it has finished with (delivered, or given up on),
+   so a question it abandoned cannot pin the page. A `bad_artifact` refusal
+   is followed by one notice delivery ("I could not put that answer into a
+   shape the game can show"), which the companion renders and marks answered.
+4. **Page growth.** After every successful poll the page doubles back toward
+   `pollLimit`; a `too_large` reply halves it again. One wasted poll per two
+   ticks while a backlog of long questions drains is acceptable.
+5. **Level-based technologies in the queue.** Each repeated entry reports
+   `level` as the technology's current level plus the number of earlier
+   entries with the same name; `units` and `progress` are reported for the
+   first entry only.
+6. **Qualities.** Flow reads sum across every quality in `prototypes.quality`
+   with `{name=item, quality=q}`; `production_since`, `item_rate` and
+   `top_items` share that helper in `flow.lua`. `logistics_summary`
+   aggregates contents by item name, adds a `qualities` breakdown only when a
+   name has more than one, and reports `distinct_items` as unique names.
+7. **Reply sizes.** `logistics_summary` shows at most 5 networks and 8
+   contents each. Every double in a reply passes through one rounding helper
+   in `bounded.lua`: four decimals for evolution factors, two for progress
+   and rates.
+8. **One surface contract.** `surface_lookup.find` accepts a name or an
+   index and every surface-taking tool uses it and returns `found=false`
+   for a miss; `flow.require_surface` goes away.
+9. **Missing argument table.** `probe.call` substitutes `{}` for a missing
+   `a`, so a zero-argument tool called without arguments works and a tool
+   that needs `force` says so in its own words.
+10. **Harness assertions.** Every ask scenario fails when the answer line
+    starts with `You asked:` or carries `aab-rpc:` or `provider_error`, and
+    asserts a quoted key with its colon (for example `"queued":`) that the
+    echoed question text cannot contain. The table-of-players scenario also
+    requires `"players"`. The large-table scenario reads the question back
+    through `answers` and checks the recorded shape and first line are the
+    ones it sent.

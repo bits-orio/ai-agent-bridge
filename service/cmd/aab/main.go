@@ -82,7 +82,7 @@ subcommands:
                   loop, serve the control API. This is the one you leave running
   status          print the companion's status op reply (protocol/mod version, tick,
                   player count, pending question count)
-  probe           print the companion's tools op catalog (every provider's manifest)
+  probe           print every provider's manifest, read one provider at a time
   rpc <json>      send one raw aab-rpc-v1 request, a JSON object including its own
                   "op" field, e.g. aab rpc '{"op":"poll","after":0}'; print the reply
   poll [after]    print questions with id greater than after (default: 0, everything
@@ -99,10 +99,16 @@ func runStatus(ctx context.Context, c *rpc.Client) {
 	printJSON(st)
 }
 
+// runProbe prints the catalog the way the service reads it: the providers list,
+// then one manifest each, so one provider's oversized manifest costs only its own
+// entry. A companion older than those two ops answers the one-reply tools op.
 func runProbe(ctx context.Context, c *rpc.Client) {
-	tools, err := c.Tools(ctx)
+	providers, _, err := c.Catalog(ctx)
+	if rpc.HasCode(err, rpc.CodeBadOp) {
+		providers, err = c.Tools(ctx)
+	}
 	fatalOnRPCError("probe", err)
-	printJSON(tools)
+	printJSON(providers)
 }
 
 // runRPC sends args[0], a JSON object that must carry its own "op" field, as one raw

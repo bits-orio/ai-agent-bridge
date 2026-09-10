@@ -19,20 +19,26 @@
 
 local force_lookup   = require("scripts.tools.force_lookup")
 local surface_lookup = require("scripts.tools.surface_lookup")
+local bounded        = require("scripts.tools.bounded")
+
+-- Four decimals on an evolution factor, which is where the number stops meaning
+-- anything to a player, and two on a pollution total. Without this each one
+-- reaches the model as fifty-odd digits of a double (scripts/tools/bounded.lua).
+local EVOLUTION_PLACES = 4
 
 local M = {}
 
 M.manifest = {
   evolution = {
-    desc = "How far the enemies on one surface have evolved against one force, from 0 to 1, plus the three parts the engine adds up to get there: time survived, pollution absorbed, and spawners killed. Use it for \"how bad are the biters\" and to say which part is driving the number. Evolution is per surface in this version, so ask about the surface the question is about. An unknown surface comes back as found = false rather than an error.",
+    desc = "How far the enemies on one surface have evolved against one force, from 0 to 1, plus the three parts the engine adds up to get there: time survived, pollution absorbed, spawners killed. Say which part is driving the number. Evolution is per surface in this version, so ask about the surface the question is about. An unknown surface comes back as found = false.",
     params = {
-      surface = "string! surface name from list_surfaces, for example nauvis",
+      surface = "string! surface name or index from list_surfaces, for example nauvis",
     },
   },
   pollution = {
-    desc = "Total pollution on one surface right now, and which pollutant that surface uses, if any. Use it for \"how much pollution are we making\" and as the context for an evolution answer. This is the whole-surface sum, not a reading at one position, and a surface with pollution turned off answers 0 with pollution_enabled false. An unknown surface comes back as found = false rather than an error.",
+    desc = "Total pollution on one surface right now, and which pollutant that surface uses. Context for an evolution answer. This is the whole-surface sum, not a reading at one position, and a surface with pollution turned off answers 0 with pollution_enabled false. An unknown surface comes back as found = false.",
     params = {
-      surface = "string! surface name from list_surfaces, for example nauvis",
+      surface = "string! surface name or index from list_surfaces, for example nauvis",
     },
   },
 }
@@ -48,10 +54,10 @@ local function evolution(a)
     found = true,
     force = force.name,
     surface = surface.name,
-    evolution_factor = force.get_evolution_factor(surface),
-    by_time = force.get_evolution_factor_by_time(surface),
-    by_pollution = force.get_evolution_factor_by_pollution(surface),
-    by_killing_spawners = force.get_evolution_factor_by_killing_spawners(surface),
+    evolution_factor = bounded.round(force.get_evolution_factor(surface), EVOLUTION_PLACES),
+    by_time = bounded.round(force.get_evolution_factor_by_time(surface), EVOLUTION_PLACES),
+    by_pollution = bounded.round(force.get_evolution_factor_by_pollution(surface), EVOLUTION_PLACES),
+    by_killing_spawners = bounded.round(force.get_evolution_factor_by_killing_spawners(surface), EVOLUTION_PLACES),
   }
 end
 
@@ -69,7 +75,7 @@ local function pollution(a)
     surface = surface.name,
     pollution_enabled = pollutant ~= nil,
     pollutant = pollutant and pollutant.name or nil,
-    total_pollution = surface.get_total_pollution(),
+    total_pollution = bounded.round(surface.get_total_pollution(), 2),
   }
 end
 
