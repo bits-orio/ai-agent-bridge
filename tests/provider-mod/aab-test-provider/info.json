@@ -1,0 +1,11 @@
+{
+  "name": "aab-test-provider",
+  "version": "0.1.0",
+  "title": "AAB Test Provider",
+  "author": "bits-orio",
+  "factorio_version": "2.0",
+  "dependencies": [
+    "base >= 2.0"
+  ],
+  "description": "Test fixture for the AI Agent Bridge end-to-end harness. Exposes an agent_tools_v1 probe with one tool that answers and one that always errors, so the probe path and the provider_error path can both be driven from outside. Not useful in a real game."
+}

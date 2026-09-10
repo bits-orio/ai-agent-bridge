@@ -1,7 +1,8 @@
 // Command aab is the service half of AI Agent Bridge (CONTEXT.md): one process per
-// Factorio server, driving the companion mod's aab-rpc-v1 protocol over RCON. This is the
-// Phase 0 skeleton (PLAN.md): four subcommands to exercise the transport, no agent loop
-// yet.
+// Factorio server, driving the companion mod's aab-rpc-v1 protocol over RCON.
+//
+// "aab run" is the service itself. The other four subcommands exercise the transport by
+// hand, which is what the Phase 0 checks in TESTING.md use.
 package main
 
 import (
@@ -31,6 +32,14 @@ func main() {
 	}
 	sub, rest := args[0], args[1:]
 
+	// Flags may also follow the subcommand, the way the Go tool takes them, so both
+	// "aab -config aab.yaml run" and "aab run -config aab.yaml" mean the same thing.
+	subFlags := flag.NewFlagSet(sub, flag.ExitOnError)
+	subFlags.StringVar(cfgPath, "config", *cfgPath, "path to config file")
+	subFlags.Usage = usage
+	_ = subFlags.Parse(rest)
+	rest = subFlags.Args()
+
 	// Load a .env sitting next to the config file (the setup wizard writes one there) so
 	// the service's secrets are available without the caller having to `source` it first.
 	// Real environment variables always win.
@@ -48,6 +57,8 @@ func main() {
 	ctx := context.Background()
 
 	switch sub {
+	case "run":
+		runService(cfg, client)
 	case "status":
 		runStatus(ctx, client)
 	case "probe":
@@ -67,6 +78,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage: aab [-config path] <subcommand> [args]
 
 subcommands:
+  run             run the service: poll for questions, answer them with the agent
+                  loop, serve the control API. This is the one you leave running
   status          print the companion's status op reply (protocol/mod version, tick,
                   player count, pending question count)
   probe           print the companion's tools op catalog (every provider's manifest)

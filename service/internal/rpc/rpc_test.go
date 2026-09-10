@@ -46,6 +46,11 @@ func TestCallSendsOpAndParsesOKReply(t *testing.T) {
 	if string(sent["op"]) != `"status"` {
 		t.Errorf(`sent op = %s, want "status"`, sent["op"])
 	}
+	// The companion refuses any request whose v is not 1 with bad_version, so every
+	// request carries it (companion-mod/scripts/rpc.lua).
+	if string(sent["v"]) != `1` {
+		t.Errorf(`sent v = %s, want 1`, sent["v"])
+	}
 }
 
 func TestCallMergesPayloadFieldsWithOp(t *testing.T) {

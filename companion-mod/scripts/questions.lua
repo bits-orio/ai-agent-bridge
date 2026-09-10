@@ -1,12 +1,14 @@
--- The player-facing question ring (CONTEXT.md "Question"). /ask (or
--- /aab-ask, see register_command below) creates one; the service drains
--- them with aab-rpc's `poll` op and marks them answered with `answer`.
--- Bounded at RING_SIZE so a server nobody polls for a while can't grow
--- storage without limit.
+-- The question ring (CONTEXT.md "Question"). The /ask command
+-- (scripts/ask_command.lua), the chat prefix (scripts/chat.lua) and the
+-- ai-agent-bridge-v1 remote interface all create one; the service drains them
+-- with aab-rpc's `poll` op, marks them answered with `answer`, and reads back
+-- what the player saw with `answers`. Bounded at RING_SIZE so a server nobody
+-- polls for a while can't grow storage without limit.
+
+local events        = require("scripts.events")
+local player_lookup = require("scripts.player_lookup")
 
 local RING_SIZE = 64
-
-local active_command -- module-local: which command name is live this session
 
 local M = {}
 
@@ -18,7 +20,7 @@ end
 --- Creates a question. spec = { text, player_index?, force? }. Returns the
 --- new question id, or nil if spec.text is missing. This is also reachable
 --- from the ai-agent-bridge-v1 remote interface by any other mod, so bad
---- input returns nil rather than error()s -- a mistake in a caller's spec
+--- input returns nil rather than error()s: a mistake in a caller's spec
 --- should not crash that caller.
 function M.ask(spec)
   if type(spec) ~= "table" or type(spec.text) ~= "string" or spec.text == "" then
@@ -39,10 +41,18 @@ function M.ask(spec)
   if #q.ring > RING_SIZE then
     table.remove(q.ring, 1)
   end
+
+  local player = player_lookup.by_index(spec.player_index)
+  events.write("question", {
+    qid    = qid,
+    player = player and player.name or nil,
+    force  = spec.force,
+    text   = spec.text,
+  })
   return qid
 end
 
---- Questions with id > after, oldest first -- the aab-rpc `poll` op.
+--- Questions with id > after, oldest first: the aab-rpc `poll` op.
 function M.poll(after)
   M.ensure_storage()
   after = tonumber(after) or 0
@@ -50,6 +60,20 @@ function M.poll(after)
   for _, q in ipairs(storage.aab.q.ring) do
     if q.id > after then
       out[#out + 1] = { id = q.id, text = q.text, player_index = q.player_index, force = q.force, tick = q.tick }
+    end
+  end
+  return out
+end
+
+--- Answered questions with id > after, oldest first, each with the lines the
+--- asker actually saw: the aab-rpc `answers` op. Pure read.
+function M.answers(after)
+  M.ensure_storage()
+  after = tonumber(after) or 0
+  local out = {}
+  for _, q in ipairs(storage.aab.q.ring) do
+    if q.answered and q.id > after then
+      out[#out + 1] = { id = q.id, shape = q.shape, lines = q.lines or {}, player_index = q.player_index }
     end
   end
   return out
@@ -68,6 +92,14 @@ function M.mark_answered(qid)
   return nil
 end
 
+--- Stores what the companion rendered onto the question, so the `answers` op
+--- stays a pure read. Called from the `answer` op only, the one place in the
+--- rpc command allowed to write storage (CONTEXT.md invariant 2).
+function M.record_render(question, rendered)
+  question.shape = rendered.shape
+  question.lines = rendered.lines
+end
+
 function M.pending_count()
   M.ensure_storage()
   local n = 0
@@ -77,34 +109,14 @@ function M.pending_count()
   return n
 end
 
-function M.active_command()
-  return active_command
-end
-
-local function handle_ask(cmd)
-  local player = cmd.player_index and game.get_player(cmd.player_index)
-  if not player then return end -- player-only; RCON callers use the ai-agent-bridge-v1 ask() function instead
-  if not cmd.parameter or cmd.parameter == "" then
-    player.print("[AI Agent Bridge] Usage: /" .. active_command .. " <question>")
-    return
-  end
-  local qid = M.ask({ text = cmd.parameter, player_index = cmd.player_index, force = player.force.name })
+--- Takes a question from a player and tells them it landed. Shared by the
+--- /ask command and the chat prefix.
+function M.ask_as_player(player, text)
+  local qid = M.ask({ text = text, player_index = player.index, force = player.force.name })
   if qid then
-    player.print("[AI Agent Bridge] Got it, thinking about: " .. cmd.parameter)
+    player.print("[AI Agent Bridge] Got it, thinking about: " .. text)
   end
-end
-
---- Registers the player command every load. /ask is the preferred name; if
---- another mod already owns it this falls back to /aab-ask and remembers
---- which one is live so the aab-rpc `status` op can report it.
-function M.register_command()
-  local added = pcall(commands.add_command, "ask", "Ask the AI Agent Bridge a question about this game.", handle_ask)
-  if added then
-    active_command = "ask"
-  else
-    commands.add_command("aab-ask", "Ask the AI Agent Bridge a question about this game.", handle_ask)
-    active_command = "aab-ask"
-  end
+  return qid
 end
 
 return M

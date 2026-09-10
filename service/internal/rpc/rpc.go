@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rcon"
 )
@@ -17,6 +18,11 @@ import (
 // command is the console command every aab-rpc-v1 request is sent through (PLAN.md § The
 // protocol, aab-rpc-v1).
 const command = "aab-rpc"
+
+// protocolVersion is the "v" field every request must carry. The companion refuses a
+// request whose v is anything but 1 with bad_version
+// (companion-mod/scripts/rpc.lua), so it is not optional.
+const protocolVersion = 1
 
 // Error codes defined by aab-rpc-v1 (PLAN.md). CodeTooLarge doubles as the client-side
 // code returned when Call refuses to even send an oversized request. The companion could
@@ -115,8 +121,9 @@ func buildCommand(op string, payload any) (string, error) {
 	return "/" + command + " " + string(body), nil
 }
 
-// mergeOp folds op into payload's top-level JSON object as "op", the field every
-// aab-rpc-v1 request dispatches on. payload must marshal to a JSON object (or be nil).
+// mergeOp folds op and the protocol version into payload's top-level JSON object as "op"
+// and "v", the two fields every aab-rpc-v1 request must carry. payload must marshal to a
+// JSON object (or be nil).
 func mergeOp(op string, payload any) ([]byte, error) {
 	fields := map[string]json.RawMessage{}
 	if payload != nil {
@@ -135,5 +142,6 @@ func mergeOp(op string, payload any) ([]byte, error) {
 		return nil, err
 	}
 	fields["op"] = opJSON
+	fields["v"] = json.RawMessage(strconv.Itoa(protocolVersion))
 	return json.Marshal(fields)
 }

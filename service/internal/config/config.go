@@ -25,9 +25,14 @@ import (
 // Defaults applied whenever a field is left unset, in both config modes.
 const (
 	defaultModel                = "claude-opus-5"
-	defaultMaxRounds            = 8
-	defaultMaxTokensPerQuestion = 4096
+	defaultMaxRounds            = 6
+	defaultMaxTokensPerQuestion = 20000
+	defaultMemoryTTL            = 10 * time.Minute
+	defaultQuestionsPerHour     = 20
 	defaultPollInterval         = time.Second
+	defaultHistoryPath          = "history.sqlite"
+	defaultControlAddr          = "127.0.0.1:8090"
+	defaultControlTokenEnv      = "AAB_CONTROL_TOKEN"
 )
 
 // Duration is a time.Duration that unmarshals from a YAML string like "2s".
@@ -51,13 +56,39 @@ func (d Duration) MarshalYAML() (any, error) {
 }
 
 type Config struct {
-	Factorio             FactorioConfig  `yaml:"factorio"`
-	Transport            string          `yaml:"transport"` // "local" or "sftp"
-	PollInterval         Duration        `yaml:"poll_interval"`
-	Anthropic            AnthropicConfig `yaml:"anthropic"`
-	MaxRounds            int             `yaml:"max_rounds"`              // per-question cap on agent-loop rounds
-	MaxTokensPerQuestion int             `yaml:"max_tokens_per_question"` // per-question token budget
-	LogFile              string          `yaml:"log_file"`                // also write logs here (default: aab.log next to events; "-" = stderr only)
+	Factorio     FactorioConfig   `yaml:"factorio"`
+	Transport    string           `yaml:"transport"` // "local" or "sftp"
+	PollInterval Duration         `yaml:"poll_interval"`
+	Anthropic    AnthropicConfig  `yaml:"anthropic"`
+	Agent        AgentConfig      `yaml:"agent"`
+	History      HistoryConfig    `yaml:"history"`
+	ControlAPI   ControlAPIConfig `yaml:"control_api"`
+	LogFile      string           `yaml:"log_file"` // also write logs here (default: aab.log next to events; "-" = stderr only)
+}
+
+// AgentConfig is the per-question budget the operator sets. A question that
+// hits any of these caps still answers, with a notice saying why.
+type AgentConfig struct {
+	MaxRounds                 int      `yaml:"max_rounds"`                    // model turns per question
+	MaxTokensPerQuestion      int      `yaml:"max_tokens_per_question"`       // token budget across those turns
+	MemoryTTL                 Duration `yaml:"memory_ttl"`                    // how long a player's follow-up context lives
+	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
+}
+
+// HistoryConfig points at the SQLite file the service keeps a save's whole
+// event history in. A relative path is resolved against the config file, so
+// moving the config moves the history with it.
+type HistoryConfig struct {
+	Path string `yaml:"path"`
+}
+
+// ControlAPIConfig is the service's own HTTP surface. An empty addr turns it
+// off. The bearer token, when one is named, is resolved from the environment
+// like every other secret.
+type ControlAPIConfig struct {
+	Addr     string `yaml:"addr"`
+	TokenEnv string `yaml:"token_env"`
+	Token    string `yaml:"-"` // resolved from env at load time
 }
 
 // FactorioConfig groups everything needed to reach the companion mod: RCON for the
@@ -132,12 +163,9 @@ func Load(path string) (*Config, error) {
 	if c.Anthropic.Model == "" {
 		c.Anthropic.Model = defaultModel
 	}
-	if c.MaxRounds == 0 {
-		c.MaxRounds = defaultMaxRounds
-	}
-	if c.MaxTokensPerQuestion == 0 {
-		c.MaxTokensPerQuestion = defaultMaxTokensPerQuestion
-	}
+	c.applyAgentDefaults()
+	c.History.Path = resolveHistoryPath(c.History.Path, path)
+	c.applyControlDefaults()
 
 	// Resolve secrets from the environment; never store them in the YAML.
 	if c.Factorio.RCON.PasswordEnv != "" {
@@ -148,6 +176,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Factorio.SFTP.PasswordEnv != "" {
 		c.Factorio.SFTP.Password = os.Getenv(c.Factorio.SFTP.PasswordEnv)
+	}
+	if c.ControlAPI.TokenEnv != "" {
+		c.ControlAPI.Token = os.Getenv(c.ControlAPI.TokenEnv)
 	}
 
 	return finish(&c, Meta{Mode: "file", ConfigPath: path, Warnings: unknownKeyWarnings(b)})
@@ -211,7 +242,13 @@ func loadFromEnv(m Meta) (*Config, error) {
 			APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 			Model:     getenvDefault("AAB_MODEL", defaultModel),
 		},
+		History: HistoryConfig{Path: expandPath(os.Getenv("AAB_HISTORY_PATH"))},
+		ControlAPI: ControlAPIConfig{
+			Addr:     getenvDefault("AAB_CONTROL_ADDR", defaultControlAddr),
+			TokenEnv: getenvDefault("AAB_CONTROL_TOKEN_ENV", defaultControlTokenEnv),
+		},
 	}
+	c.ControlAPI.Token = os.Getenv(c.ControlAPI.TokenEnv)
 
 	if v := os.Getenv("AAB_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -223,25 +260,83 @@ func loadFromEnv(m Meta) (*Config, error) {
 		c.PollInterval = Duration(defaultPollInterval)
 	}
 
-	c.MaxRounds = defaultMaxRounds
 	if v := os.Getenv("AAB_MAX_ROUNDS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("AAB_MAX_ROUNDS: invalid value %q", v)
 		}
-		c.MaxRounds = n
+		c.Agent.MaxRounds = n
 	}
-
-	c.MaxTokensPerQuestion = defaultMaxTokensPerQuestion
 	if v := os.Getenv("AAB_MAX_TOKENS_PER_QUESTION"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
 			return nil, fmt.Errorf("AAB_MAX_TOKENS_PER_QUESTION: invalid value %q", v)
 		}
-		c.MaxTokensPerQuestion = n
+		c.Agent.MaxTokensPerQuestion = n
+	}
+	if v := os.Getenv("AAB_MEMORY_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_MEMORY_TTL: %w", err)
+		}
+		c.Agent.MemoryTTL = Duration(d)
+	}
+	if v := os.Getenv("AAB_QUESTIONS_PER_PLAYER_PER_HOUR"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_QUESTIONS_PER_PLAYER_PER_HOUR: invalid value %q", v)
+		}
+		c.Agent.QuestionsPerPlayerPerHour = n
 	}
 
+	c.applyAgentDefaults()
+	// Env-var mode has no config file to anchor a relative history path to.
+	c.History.Path = resolveHistoryPath(c.History.Path, "")
+	c.applyControlDefaults()
+
 	return finish(c, m)
+}
+
+// applyAgentDefaults fills the agent caps left unset. A quota below zero is a
+// deliberate "no quota", so only an unset (zero) value takes the default.
+func (c *Config) applyAgentDefaults() {
+	if c.Agent.MaxRounds == 0 {
+		c.Agent.MaxRounds = defaultMaxRounds
+	}
+	if c.Agent.MaxTokensPerQuestion == 0 {
+		c.Agent.MaxTokensPerQuestion = defaultMaxTokensPerQuestion
+	}
+	if c.Agent.MemoryTTL == 0 {
+		c.Agent.MemoryTTL = Duration(defaultMemoryTTL)
+	}
+	if c.Agent.QuestionsPerPlayerPerHour == 0 {
+		c.Agent.QuestionsPerPlayerPerHour = defaultQuestionsPerHour
+	}
+}
+
+func (c *Config) applyControlDefaults() {
+	if c.ControlAPI.TokenEnv == "" {
+		c.ControlAPI.TokenEnv = defaultControlTokenEnv
+	}
+}
+
+// resolveHistoryPath keeps the history file beside the config that named it,
+// so a service started from another directory still finds the same database.
+// In env-var mode there is no config file to anchor to and a relative path
+// stays relative to the working directory.
+func resolveHistoryPath(path, configPath string) string {
+	if path == "" {
+		path = defaultHistoryPath
+	}
+	path = expandPath(path)
+	if filepath.IsAbs(path) || configPath == "" {
+		return path
+	}
+	dir := filepath.Dir(configPath)
+	if dir == "" || dir == "." {
+		return path
+	}
+	return filepath.Join(dir, path)
 }
 
 func getenvDefault(key, def string) string {
@@ -252,6 +347,9 @@ func getenvDefault(key, def string) string {
 }
 
 func (c *Config) Interval() time.Duration { return time.Duration(c.PollInterval) }
+
+// MemoryTTL is how long a player's follow-up context lives.
+func (c *Config) MemoryTTL() time.Duration { return time.Duration(c.Agent.MemoryTTL) }
 
 func expandPath(p string) string {
 	p = os.ExpandEnv(p)

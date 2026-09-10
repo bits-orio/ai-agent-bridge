@@ -132,3 +132,20 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   under what flags. Note explicitly that `local-rcon-socket` itself was not found.
 
   Result:
+
+## 2. Automated harness (`tests/e2e`)
+
+`make e2e` builds the service in Docker, starts a headless 2.0.77 server on ports
+34210 and 27110 with the companion and the test provider mod, starts the service on
+the scripted `fake` model, and runs every scenario. `make e2e-client` also launches a
+standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
+
+- [x] 2026-09-10, server-only: 6 passed, 0 failed, 2 skipped (the two need a player).
+- [x] 2026-09-10, with client: 8 passed, 0 failed. Chat prefix `!ask ` from the
+  connected player created a question and got a summary; a scripted death was found
+  by the `last_event` history tool; the 21st question in an hour was refused with a
+  notice; the test provider's `boom` came back as `provider_error`.
+- [ ] Popup rendering seen by a person (`aab-answer-style` = `popup` or a table
+  answer with a connected player).
+- [ ] `production_since` against real flow statistics.
+- [ ] A live model call (needs an API key in `.env`).

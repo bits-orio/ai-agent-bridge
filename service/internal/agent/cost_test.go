@@ -1,0 +1,47 @@
+package agent
+
+import (
+	"math"
+	"testing"
+
+	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
+)
+
+func TestCostUSD(t *testing.T) {
+	million := model.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}
+	for _, tc := range []struct {
+		name  string
+		usage model.Usage
+		want  float64
+	}{
+		{"claude-opus-5", million, 30},
+		{"claude-sonnet-5", million, 12},
+		{"claude-haiku-4-5", million, 6},
+		// A dated id prices as its family.
+		{"claude-haiku-4-5-20251001", million, 6},
+		// An unknown model prices at zero rather than at a guess.
+		{"some-other-model", million, 0},
+		{"fake", million, 0},
+		// The everyday case: a few thousand tokens, in fractions of a cent.
+		{"claude-opus-5", model.Usage{InputTokens: 4000, OutputTokens: 300}, 0.0275},
+		// Cache counters are reported but not priced.
+		{"claude-opus-5", model.Usage{CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000}, 0},
+	} {
+		got := CostUSD(tc.name, tc.usage)
+		if math.Abs(got-tc.want) > 1e-9 {
+			t.Errorf("CostUSD(%q, %+v) = %v, want %v", tc.name, tc.usage, got, tc.want)
+		}
+	}
+}
+
+// Prefix matching must not let a shorter family swallow a longer id that has
+// its own price.
+func TestPriceForPrefersTheLongestMatch(t *testing.T) {
+	prices["claude-opus-5-mini"] = price{in: 1, out: 2}
+	defer delete(prices, "claude-opus-5-mini")
+
+	p, ok := priceFor("claude-opus-5-mini-20260101")
+	if !ok || p.in != 1 {
+		t.Fatalf("priceFor picked %+v (found %v), want the mini price", p, ok)
+	}
+}

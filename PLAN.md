@@ -1,8 +1,8 @@
 # AI Agent Bridge (AAB): plan
 
-Status: design stage, 2026-09-10. Nothing runnable yet. The design brief that
-produced this plan lives beside the repo for now (`/tmp/flma-review/`) and moves
-into `docs/` once the first phase lands.
+Status: Phases 0, 1 and 2 built and passing the rig harness on 2.0.77 with the
+scripted model, 2026-09-10. No live model call has been made yet (no API key on
+the development machine). The design brief is under `docs/design/`.
 
 AAB is two halves. A Factorio companion mod exposes a tiny protocol over a
 console command. A Go service, one per server, drives that protocol over RCON:
@@ -111,7 +111,7 @@ Player-facing: `/ask <question>`. A chat prefix is a setting, off by default.
 
 ## Phases
 
-**Phase 0, checks.** A companion skeleton whose rpc command carries test
+**Phase 0, checks. Done 2026-09-10, five of six recorded in TESTING.md.** A companion skeleton whose rpc command carries test
 operations, and a Go binary that can send one command and print the reply.
 Six one-line tests on the dev rig, each recorded in `TESTING.md` with its
 result: `rcon.print` returns to the caller; `player_index` is nil over RCON;
@@ -120,13 +120,13 @@ second client; `pcall(remote.call, ...)` catches a provider error; the reply
 size at which RCON truncates; whether `local-rcon-socket` enables single-player
 use. Validates: every transport assumption the design rests on.
 
-**Phase 1, the loop.** `/ask` in game, the poll and answer operations, five
+**Phase 1, the loop. Built 2026-09-10, verified with the fake model.** `/ask` in game, the poll and answer operations, five
 engine tools (forces, players, research, production rate, top items), the
 agent loop on the Anthropic Go SDK, one `summary` artifact printed to chat.
 Validates: a real question answered in game in under ten seconds on a
 multiplayer server, with the cost of that question visible to the operator.
 
-**Phase 2, depth.** The popup renderer and the remaining shapes. The probe
+**Phase 2, depth. Built 2026-09-10; the popup still needs human eyes.** The popup renderer and the remaining shapes. The probe
 with one example provider in a separate test mod. The event file, the SQLite
 history and the history tools. Per-player follow-up context with a TTL.
 Round and token caps, per-player quota. Validates: a third mod adds a tool
@@ -166,5 +166,7 @@ Permissioned acting tools. Sub-agents on a cheaper model.
 7. **Model providers.** Current plan: the Anthropic SDK only through `1.0`,
    behind a small interface in the agent package so a second provider is an
    addition rather than a rewrite.
-8. **Where the design brief lives.** Current plan: move `flma-review.md` and
-   `successor-design.md` into `docs/design/` with the Phase 1 commit.
+8. **Runtime-global settings cannot be written from RCON.** `settings.global`
+   writes from a console command are refused by the engine (measured 2026-09-10).
+   Current plan: the harness seeds `mod-settings.dat` before the map exists;
+   operators change settings in the map settings dialog as usual.

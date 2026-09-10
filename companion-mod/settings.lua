@@ -13,15 +13,25 @@ data:extend({
         order = "a-a",
     },
     {
-        -- Reserved for a Phase 2 chat trigger (PLAN.md open question 2): a
-        -- prefix that turns an ordinary chat message into a question. Off
-        -- (blank) by default so ordinary chat never reaches the model.
-        -- Unused by any control-stage code until that lands.
+        -- The chat trigger (PLAN.md open question 2). Blank means off, so
+        -- ordinary chat never reaches the model. Matched literally, spaces
+        -- included, by scripts/chat.lua.
         type = "string-setting",
         name = "aab-chat-prefix",
         setting_type = "runtime-global",
         default_value = "",
         allow_blank = true,
         order = "a-b",
+    },
+    {
+        -- Where an answer appears. "auto" puts the shapes that want columns
+        -- or room into a popup and everything else in chat; see
+        -- scripts/render.lua.
+        type = "string-setting",
+        name = "aab-answer-style",
+        setting_type = "runtime-global",
+        default_value = "auto",
+        allowed_values = { "auto", "chat", "popup" },
+        order = "a-c",
     },
 })

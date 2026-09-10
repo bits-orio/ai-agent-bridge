@@ -1,9 +1,13 @@
 # AI Agent Bridge: Service
 
-Go binary, one process per Factorio server. Drives the companion mod's `aab-rpc-v1`
-protocol over RCON. See [../CONTEXT.md](../CONTEXT.md) and [../PLAN.md](../PLAN.md) for
-the domain words and the phased plan. This is the Phase 0 skeleton: transport and a
-protocol client, no agent loop yet.
+Go binary, one process per Factorio server. It drives the companion mod's `aab-rpc-v1`
+protocol over RCON: it picks up the questions players ask, runs an agent whose tools are
+bounded reads of live game state, and sends a typed answer back into the game. See
+[../CONTEXT.md](../CONTEXT.md) for the domain words and [../PLAN.md](../PLAN.md) for the
+phased plan.
+
+The service is the only party that polls. Nothing runs inside the game until a question
+arrives.
 
 ## Build
 
@@ -16,26 +20,73 @@ go test ./...
 go build -o aab ./cmd/aab
 ```
 
+With no Go toolchain on the machine, run the same gates in a container:
+
+```sh
+cd service
+docker run --rm -v "$PWD":/src -w /src -e CGO_ENABLED=0 golang:1.25-alpine \
+  sh -c "gofmt -l . ; go vet ./... && go test ./... && go build -o aab ./cmd/aab"
+```
+
+`CGO_ENABLED=0` is deliberate: the history store uses a pure-Go SQLite driver, so the
+binary stays static and cross-compiles without a C toolchain.
+
 ## Configure
 
 ```sh
 cp aab.yaml.example aab.yaml   # edit paths and the RCON address
+cp ../.env.example .env        # fill in the API key and the RCON password
 ```
 
 Secrets are read from the env vars named in `aab.yaml` (`rcon.password_env`,
-`anthropic.api_key_env`), never put them in the YAML. A `.env` file next to `aab.yaml`
-is auto-loaded (real environment variables always win); see `.env.example` conventions in
-[open-discord-bridge](https://github.com/bits-orio/open-discord-bridge/blob/main/bridge/.env.example)
-for the shape.
+`anthropic.api_key_env`, `control_api.token_env`), never from the YAML itself. A `.env`
+file next to `aab.yaml` is loaded at startup, and a real environment variable always
+wins over a line in it.
 
 With no `aab.yaml` present (or `AAB_CONFIG=none` set), the service reads its whole
-configuration from `AAB_*` environment variables instead. See
-`internal/config/config.go` for the full list. Every load, in either mode, writes
-`aab.effective.yaml` to the working directory: the fully-resolved config, secrets
-redacted to `SET (n chars)` / `MISSING`, for inspecting exactly what the service resolved
-without exposing anything. It is output only, the service never reads it back.
+configuration from `AAB_*` environment variables instead:
+
+| Key | Env var | Default |
+|---|---|---|
+| `factorio.rcon.address` | `AAB_RCON_ADDRESS` | |
+| `factorio.events_file` | `AAB_EVENTS_FILE` | |
+| `transport` | `AAB_TRANSPORT` | `local` |
+| `poll_interval` | `AAB_POLL_INTERVAL` | `1s` |
+| `anthropic.model` | `AAB_MODEL` | `claude-opus-5` |
+| `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
+| `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
+| `agent.memory_ttl` | `AAB_MEMORY_TTL` | `10m` |
+| `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
+| `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
+| `control_api.addr` | `AAB_CONTROL_ADDR` | `127.0.0.1:8090` |
+| `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |
+| `log_file` | `AAB_LOG_FILE` | `aab.log` next to the events file |
+
+Secrets keep their own names in both modes: `ANTHROPIC_API_KEY`,
+`FACTORIO_RCON_PASSWORD`, `AAB_CONTROL_TOKEN`, `SFTP_PASSWORD`.
+
+Every load, in either mode, writes `aab.effective.yaml` to the working directory: the
+fully-resolved config with secrets reduced to `SET (n chars)` or `MISSING`, so you can
+see exactly what the service resolved without exposing anything. It is output only, the
+service never reads it back.
 
 ## Run
+
+```sh
+./aab -config aab.yaml run
+```
+
+That is the one you leave running. It connects over RCON, builds the tool catalog, tails
+the events file into the history database, polls for questions every `poll_interval`,
+answers each in order, and serves the control API. Every question logs two lines:
+
+```
+question 7 from player 1 (force player): what is my iron plate rate
+answer 7 shape=summary rounds=2 tokens_in=1840 tokens_out=96 cost_usd=0.0116
+```
+
+The other four subcommands drive the protocol by hand, which is what the Phase 0 checks
+in [../TESTING.md](../TESTING.md) use:
 
 ```sh
 ./aab -config aab.yaml status
@@ -44,35 +95,82 @@ without exposing anything. It is output only, the service never reads it back.
 ./aab -config aab.yaml poll 0
 ```
 
-## Subcommands
+- **`status`**: protocol version, mod version, tick, player count, pending questions.
+- **`probe`**: the full catalog every provider on the server exposes, manifests verbatim.
+- **`rpc <json>`**: one raw `aab-rpc-v1` request, a JSON object carrying its own `"op"`.
+- **`poll [after]`**: questions with an id above the cursor.
 
-- **`status`**: sends the `status` op, prints the reply: protocol version, mod version,
-  tick, player count, pending question count.
-- **`probe`**: sends the `tools` op, prints the full catalog every provider on the server
-  exposes (the companion's own engine tools plus anything another mod adds via
-  `agent_tools_v1`).
-- **`rpc <json>`**: sends one raw `aab-rpc-v1` request and prints the reply. `<json>` is a
-  JSON object carrying its own `"op"` field, e.g.
-  `aab rpc '{"op":"call","i":"ai-agent-bridge-v1","f":"list_forces","a":{}}'`. This is the
-  escape hatch for exercising an op the typed client helpers (`internal/rpc/ops.go`)
-  don't cover yet, and for the Phase 0 dev-rig checks in `../PLAN.md`.
-- **`poll [after]`**: sends the `poll` op with the given cursor (default `0`, meaning
-  everything still pending) and prints the questions.
+Each exits non-zero on an `{"ok":false,...}` reply and prints the protocol's error code.
 
-Every subcommand exits non-zero and prints the error on an `{"ok":false,...}` reply,
-including the protocol's error code (`bad_op`, `no_provider`, `too_large`, and so on).
-See `../PLAN.md` § The protocol, aab-rpc-v1, for the full table.
+## Without an API key
+
+Set `anthropic.model` to `fake` and the service runs a scripted model instead: it picks
+one tool from keywords in the question, then submits an artifact carrying that tool's
+result. It calls no API, needs no key, and answers the same way every time, which is what
+the end-to-end harness runs against a real Factorio server.
+
+## Control API
+
+`/healthz` is always open, for a container health check.
+
+`/v1/status` reports what the service has done, and needs the bearer token when
+`control_api.token_env` names one that is set:
+
+```sh
+curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/status
+```
+
+```json
+{
+  "connected": true,
+  "mod_version": "0.2.0",
+  "questions_answered": 12,
+  "tokens_in": 21840,
+  "tokens_out": 1130,
+  "cost_usd": 0.1375,
+  "model": "claude-opus-5",
+  "uptime": "42m8s"
+}
+```
+
+The cost is the operator's own money, so it is reported rather than hidden (ADR 0005).
+Prices come from a small table in `internal/agent/cost.go`; a model the table does not
+know prices at zero rather than at a guess.
+
+## How a question is answered
+
+1. The poll loop picks up a question and its force hint.
+2. The catalog is rebuilt if it is older than ten minutes, or if the last tool call
+   reported an unknown provider. Nothing about it is stored (CONTEXT.md invariant 3).
+3. The agent sends the system prompt, the asker's last few exchanges and the question,
+   with every tool the server exposes plus `submit_answer`.
+4. The model calls tools. A round's calls all run at once and come back in one message.
+   A tool that fails becomes a failed tool result, never a failed question.
+5. `submit_answer` ends the loop. The artifact is validated and clipped, then sent back
+   over RCON for the companion to render.
+6. Anything else that can end a question, a round cap, a token budget, a quota, a model
+   that stops talking, ends it with an artifact too. A player always gets an answer.
 
 ## Layout
 
 ```
-cmd/aab/            main: config load + subcommand dispatch; dotenv.go and logfile.go
-                     copied from open-discord-bridge/bridge/cmd/bridge
-internal/config/     YAML config + env-resolved secrets + validation + effective snapshot
-internal/transport/  copied from open-discord-bridge/bridge/internal/transport. Local- and
-                     SFTP-polling tailer for the companion's events.jsonl (Phase 2+)
-internal/rcon/       copied from open-discord-bridge/bridge/internal/rcon. Reconnecting
-                     Factorio RCON client
-internal/rpc/        the aab-rpc-v1 client: envelope parsing, typed op helpers
-                     (status/tools/call/poll/answer), the oversized-command guard
+cmd/aab/             main: config load and subcommand dispatch; run.go is the service
+                      itself; dotenv.go and logfile.go copied from open-discord-bridge
+internal/config/      YAML config, AAB_* env config, env-resolved secrets, validation,
+                      the effective-config snapshot
+internal/rcon/        copied from open-discord-bridge. Reconnecting Factorio RCON client
+internal/rpc/         the aab-rpc-v1 client: envelope parsing, typed op helpers
+                      (status/tools/call/poll/answer), the oversized-command guard
+internal/transport/   copied from open-discord-bridge. Local and SFTP polling tailer for
+                      the companion's events.jsonl
+internal/tools/       the one shape every tool takes: name, description, schema, call
+internal/catalog/     the companion's tools reply turned into tools: name mangling,
+                      the parameter grammar, the injected force argument
+internal/history/     the SQLite event store and the tools that read it
+internal/model/       the neutral model boundary: blocks, messages, usage, one interface
+internal/model/anthropic/  that interface on the official Anthropic Go SDK
+internal/model/fake/  that interface, scripted, for tests and the harness
+internal/agent/       the loop, the artifact shapes, validation and clipping, per-player
+                      memory and quota, the price table
+internal/controlapi/  /healthz and /v1/status
 ```

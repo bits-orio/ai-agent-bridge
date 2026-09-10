@@ -18,3 +18,8 @@
 
 # Effective-config snapshot the service writes at startup (inspection only)
 aab.effective.yaml
+
+# tests/e2e/run.py's own scratch state: write-data dirs, logs, the generated
+# mods dir/mod-list, the generated aab.e2e.yaml and history.sqlite
+/tests/e2e/.run/
+/tests/e2e/__pycache__/

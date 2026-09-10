@@ -118,6 +118,7 @@ func secretLines(c *Config) []string {
 	lines := []string{
 		secretLine(c.Factorio.RCON.PasswordEnv, "factorio.rcon.password_env", c.Factorio.RCON.Password),
 		secretLine(c.Anthropic.APIKeyEnv, "anthropic.api_key_env", c.Anthropic.APIKey),
+		secretLine(c.ControlAPI.TokenEnv, "control_api.token_env", c.ControlAPI.Token),
 	}
 	if c.Transport == "sftp" {
 		lines = append(lines, secretLine(c.Factorio.SFTP.PasswordEnv, "factorio.sftp.password_env", c.Factorio.SFTP.Password))

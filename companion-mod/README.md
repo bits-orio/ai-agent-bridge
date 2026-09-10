@@ -21,8 +21,27 @@ tools to the agent without this mod knowing anything about them.
 3. **Run the service** from [the GitHub repo](https://github.com/bits-orio/ai-agent-bridge)
    and point it at your server. Bring your own Anthropic API key.
 
-Once it's running, type `/ask <question>` in chat and the answer prints back
-to you a few seconds later.
+Once it's running, type `/ask <question>` in chat and the answer comes back a
+few seconds later, in chat or in a popup window depending on its shape.
+
+## Settings
+
+All three are runtime-global: change them from Settings > Mod settings while
+the server runs, no restart needed.
+
+| setting | default | what it does |
+|---|---|---|
+| `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Turn it off and the file stops growing. |
+| `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks a question. Set it and any chat line starting with those exact characters becomes a question, with the rest of the line as the text. |
+| `aab-answer-style` | auto | `auto` opens a popup for tables, comparisons and lists longer than three items, and prints everything else to chat. `chat` always prints. `popup` always opens the window. |
+
+The chat prefix is matched literally, spaces included, and never as a pattern.
+Pick something no ordinary sentence starts with, `?` or `@ai ` for example, or
+a prefix like `ai` will also fire on "airlocks are cheaper".
+
+The popup needs the asker to still be connected. A question asked by another
+mod, or by a player who has since left, is answered in chat whatever the
+setting says.
 
 ---
 
@@ -97,14 +116,16 @@ end
 
 ### 3. Answers by event, `on_answer`
 
-Raised once per answered question, for any subscriber. `get_event_id` must
+Raised once per answered question, for any subscriber. `e.artifact` is what
+the model submitted; `e.shape` and `e.lines` are what this mod rendered from
+it, the same lines the `answers` op returns. `get_event_id` must
 be resolved fresh every session, a `generate_event_name()` id is only valid
 in the session that generated it, so fetch it from `on_init` and
 `on_configuration_changed` (where `remote.call` is legal), cache it in
 `storage`, and read the cached value back in `on_load` (where it isn't):
 
 ```lua
-local function on_answer(e) --[[ e.qid, e.question, e.artifact ]] end
+local function on_answer(e) --[[ e.qid, e.question, e.artifact, e.shape, e.lines ]] end
 
 local function fetch_event_id()
   if remote.interfaces["ai-agent-bridge-v1"] then
@@ -137,10 +158,15 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 | `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider, manifests verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
 | `poll` | `{after}` | questions with id greater than `after`, oldest first | no |
-| `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders to chat, raises `on_answer` |
+| `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders it, raises `on_answer` |
+| `answers` | `{after}` | answered questions with id greater than `after`, oldest first, each `{id, shape, lines, player_index}` | no |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
 `provider_error`, `bad_result`, `too_large`, `no_question`.
+
+`lines` on an `answers` row is exactly what the asker saw, title first when
+the artifact had one, already clipped to the shape's caps and stripped of
+control characters. The `answer` op stores them; `answers` only reads them.
 
 This mod never writes `storage` from the `aab-rpc` command except on
 `answer`. A lost RCON reply costs nothing, the service re-polls the same
@@ -160,8 +186,9 @@ the frozen v1 surface above.
 
 ## Answer artifacts
 
-The model fills one of five shapes; this mod renders it to chat, never the
-other way round:
+The model fills one of five shapes; this mod renders it, never the other way
+round. Every shape but `notice` may carry a `title`, which becomes the first
+chat line or the popup's window caption.
 
 - `summary`, up to three lines.
 - `comparison`, two named columns, up to five rows.
@@ -169,15 +196,67 @@ other way round:
 - `table`, up to five columns, up to eight rows.
 - `notice`, one line, a warning or confirmation.
 
+Every string is clipped to 160 bytes on a UTF-8 boundary and has its control
+characters replaced by spaces, so a player name echoed back into an answer
+cannot forge an extra line. Factorio rich text such as `[item=iron-plate]`
+passes through untouched.
+
+In a popup, the `table` shape becomes a real GUI table with a bold header row.
+Every other shape becomes a column of labels. The window centres itself, its
+titlebar drags, and Esc or the close button dismisses it.
+
+## Tools this mod provides
+
+The companion is a provider like any other mod, on the interface
+`ai-agent-bridge-tools`. `force` is injected into every one of these by the
+service.
+
+| tool | arguments | returns |
+|---|---|---|
+| `list_forces` | force only | every force: name, player count, connected player count |
+| `list_players` | force only | that force's players: name, connected, admin |
+| `current_research` | force only | what that force is researching, and its progress |
+| `list_surfaces` | force only | every surface: name, index, planet if it has one, how many of that force's players stand on it |
+| `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute |
+| `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked |
+| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
+
+`window` is one of the engine's own precisions: `five_seconds`, `one_minute`,
+`ten_minutes`, `one_hour`, `ten_hours`, `fifty_hours`,
+`two_hundred_fifty_hours`, `one_thousand_hours`.
+
+`production_since` pairs with a tick out of the event history, so "how much
+iron since I last died" is one call. It sums the engine's flow samples from the
+smallest precision window that covers the elapsed ticks. The engine keeps 300
+samples per window, so the sum rounds up to a whole number of samples. The
+reply reports `elapsed_ticks`, `covered_ticks` and `covers_full_period` so you
+can see by how much, and the newest sample is still filling as you read it.
+Both errors shrink as the period grows.
+
 ## `events.jsonl` line shape
 
-Appended to `script-output/ai-agent-bridge/events.jsonl` on player deaths,
-joins, leaves, console chat, research finishes and rocket launches, gated
-by the `aab-events-enabled` setting. One JSON object per line:
+Appended to `script-output/ai-agent-bridge/events.jsonl`, gated by the
+`aab-events-enabled` setting, truncated once per session and appended to after
+that. The server writes it, never a client. One JSON object per line:
 
 ```json
-{"event":"player_died","tick":1234,"data":{"player":"Bob","force":"player","cause":"biter"}}
+{"event":"player_died","tick":1234,"data":{"player":"Bob","force":"player","cause":"small-biter"}}
+{"event":"question","tick":1240,"data":{"qid":7,"player":"Bob","force":"player","text":"how much iron since I died"}}
+{"event":"answer","tick":1512,"data":{"qid":7,"shape":"summary"}}
 ```
+
+| `event` | `data` |
+|---|---|
+| `player_died` | `player`, `force`, `cause` |
+| `player_joined`, `player_left` | `player`, `force` |
+| `console_chat` | `player`, `force`, `message` |
+| `research_finished` | `force`, `tech`, `level` |
+| `rocket_launched` | `force`, `surface` |
+| `question` | `qid`, `player`, `force`, `text` |
+| `answer` | `qid`, `shape` |
+
+A question a player asked with the chat prefix appears twice, once as the
+`console_chat` line they typed and once as the `question` it became.
 
 See the [GitHub repo](https://github.com/bits-orio/ai-agent-bridge) for the
 full design (`CONTEXT.md`, `PLAN.md`) and the service that drives this

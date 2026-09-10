@@ -5,12 +5,15 @@
 -- merged into the same dispatch table below.
 --
 -- Invariant (CONTEXT.md): this command never writes storage except the
--- `answer` op (via questions.mark_answered) and the Phase 0 `write` op.
+-- `answer` op (via questions.mark_answered and questions.record_render) and
+-- the Phase 0 `write` op. `answers` reads back what `answer` stored.
 
-local probe         = require("scripts.probe")
+local probe          = require("scripts.probe")
 local questions      = require("scripts.questions")
+local ask_command    = require("scripts.ask_command")
 local remote_iface   = require("scripts.remote")
 local render         = require("scripts.render")
+local events         = require("scripts.events")
 local selftest       = require("scripts.rpc_selftest")
 
 local PROTOCOL_VERSION = 1
@@ -28,7 +31,7 @@ function OPS.status(_req, _cmd)
     tick         = game.tick,
     player_count = #game.connected_players,
     pending      = questions.pending_count(),
-    ask_command  = questions.active_command(),
+    ask_command  = ask_command.active_name(),
   })
 end
 
@@ -52,9 +55,21 @@ function OPS.answer(req, _cmd)
   if not question then
     return err_reply("no_question", "no question with id " .. tostring(req.qid))
   end
-  render.render(question, req.artifact)
-  remote_iface.raise_answer({ qid = req.qid, question = question.text, artifact = req.artifact })
+  local rendered = render.render(question, req.artifact)
+  questions.record_render(question, rendered)
+  events.write("answer", { qid = req.qid, shape = rendered.shape })
+  remote_iface.raise_answer({
+    qid = req.qid, question = question.text, artifact = req.artifact,
+    shape = rendered.shape, lines = rendered.lines,
+  })
   return ok_reply(true)
+end
+
+-- Pure read: what the companion rendered for questions already answered. The
+-- service uses it to confirm an answer reached the game, and the end-to-end
+-- harness asserts on the lines a player would have seen.
+function OPS.answers(req, _cmd)
+  return ok_reply(questions.answers(req.after))
 end
 
 for name, fn in pairs(selftest.ops) do
