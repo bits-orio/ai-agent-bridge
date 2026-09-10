@@ -147,8 +147,9 @@ Permissioned acting tools. Sub-agents on a cheaper model.
 2. **Chat trigger.** Current plan: the command ships first; a chat prefix
    setting arrives in Phase 2, off by default so ordinary chat never reaches
    the model.
-3. **RCON reply size cap.** Measured 2026-09-10 on 2.0.77: replies up to 4 MB
-   arrive complete in one packet, no truncation. The companion's cap is therefore
+3. **RCON size caps.** Measured 2026-09-10 on 2.0.77: replies up to 4 MB
+   arrive complete in one packet and commands up to 1 MB are accepted, no
+   truncation either way. The companion's cap is therefore
    a token-budget choice. Current plan: keep 8000 bytes as the default, make it a
    map setting, and refuse above it.
 4. **Command handlers may block the simulation for every player while they

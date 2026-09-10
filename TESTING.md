@@ -93,7 +93,7 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   whether it's silently truncated, dropped entirely, or the connection errors. PLAN.md
   sets the RCON cap at half whatever this measures.
 
-  Result: PASS 2026-09-10 on 2.0.77: replies of 4,000, 16,384, 65,536, 262,144, 1,048,576 and 4,194,304 bytes all arrived complete in a single RCON packet, byte-exact. No ceiling found up to 4 MB, so the companion's byte cap is a token-budget choice, not a transport limit.
+  Result: PASS 2026-09-10 on 2.0.77: replies of 4,000, 16,384, 65,536, 262,144, 1,048,576 and 4,194,304 bytes all arrived complete in a single RCON packet, byte-exact. No ceiling found up to 4 MB, so the companion's byte cap is a token-budget choice, not a transport limit. Commands in the other direction: `/sc` bodies of 942, 2,042, 4,042, 8,042, 16,042, 65,042, 250,042 and 1,000,042 bytes were all accepted and executed (measured 2026-09-10). The 1000-byte command limit and the 4 KB reply limit were gorcon's client-side constants, which is why the service now ships its own RCON client.
 
 - [x] **1.7 the companion's own rpc command, first load**
 

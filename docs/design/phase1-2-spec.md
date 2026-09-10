@@ -199,3 +199,74 @@ Harness scenarios added (server-only): one ask per new tool, asserting the
 answer carries the tool's key fields (for example `rockets_launched`,
 `evolution_factor`, `hours`), plus "iron plate production since the start"
 for `production_since`.
+
+## Review-fix contract (after the adversarial review, 2026-09-10)
+
+Measured on the rig: Factorio accepts RCON commands of at least 1,000,042
+bytes and returns replies of at least 4 MB in one packet. The 1000-byte
+command limit and the 4 KB packet limit were gorcon's, not the game's.
+
+1. **RCON client.** `service/internal/rcon` drops gorcon for an in-house
+   Source RCON client (auth, exec, one length-prefixed response of any size),
+   keeping the wrapper API (`New`, `Execute`, `Close`, reconnect once on a
+   connection error, no redial on a local validation error) and its fake
+   server tests. `rcon.MaxCommandLen` becomes 262144 with a comment citing
+   the measurement. Empty commands are still refused locally.
+2. **Answer budget.** `agent.validate` enforces a total marshalled artifact
+   size of at most 6000 bytes by dropping trailing rows or items and then
+   shortening cells, after the shape caps. Cells are capped at 160 runes in
+   Go; the companion clips at 640 bytes on a UTF-8 boundary as a safety net.
+3. **poll.** Request `{after?, limit?}`: oldest unanswered questions with id
+   greater than `after` (default 0), at most `limit` (default 16, max 64).
+   Rows gain `player_name`. The service always polls with `after` 0, keeps an
+   in-flight set, retries a question whose answer delivery failed on the next
+   tick, and gives up on a question after three delivery failures with a log
+   line. No cursor is persisted.
+4. **status** gains `last_id` (the highest question id issued so far).
+5. **answer.** The companion validates the artifact (known shape, fields of
+   the right types) and returns `bad_artifact` on failure; rendering runs
+   inside pcall; a question is marked answered and its render recorded only
+   after rendering succeeded. Go maps `bad_artifact` to a typed error and
+   does not retry it.
+6. **Manifests.** The companion's probe drops manifest entries whose `desc`
+   is not a string or whose `params` is not a map of strings, and drops a
+   provider whose manifest cannot be read, with one log line each. The
+   service decodes the tools reply per provider and skips one that fails to
+   decode, never the whole catalog.
+7. **Thinking blocks.** `model.Block` gains types `thinking` (Thinking,
+   Signature) and `redacted_thinking` (Data). The Anthropic converter decodes
+   `ThinkingBlock` and `RedactedThinkingBlock` and re-emits them in their
+   original position with `NewThinkingBlock` and `NewRedactedThinkingBlock`.
+   The fake model never emits them.
+8. **Force default everywhere.** The agent fills `force` with the asker's
+   force for any tool whose schema declares a `force` property when the model
+   omits it, game and history tools alike. The prompt's claim is then true.
+9. **Asker label** becomes `<player_name> (player <index>, force <force>)`
+   when a name is known.
+10. **Bounded enumerations.** `list_players{force, connected?, limit?}`
+    defaults to connected players, limit 20 (max 50), returns `total`,
+    `shown`, `players`. `list_surfaces{force, limit?}` limit 20 (max 50) with
+    `total`. Rows sorted by name before cutting.
+11. **Agent loop.** A round with `submit_answer` beside other tool calls
+    rejects the submission with an error tool result and continues. Two
+    submissions in one round: the first by block order wins. An `end_turn`
+    text answer drops blank lines before clipping, and an all-blank summary
+    becomes the stalled notice. A model error refunds the quota slot.
+    Catalog tool names truncate the interface prefix, never the function
+    name, and collisions are logged and skipped.
+12. **Companion hardening.** `render_shapes.line` returns
+    `(unrenderable value)` for anything that is not a string, number or
+    boolean. `questions.ask` keeps `force` only when it is a string and
+    `player_index` only when it is a number. The `big` selftest op clamps
+    `kb` to 4096.
+13. **Harness.** Reset `history.sqlite` (and journal files) before each run;
+    after a scripted death, wait until `last_event` sees it before asking;
+    the quota scenario requires a summary on the first question and a notice
+    on the twenty-first; fail fast when the control-API port already answers
+    and require `connected: true` from the launched service; `--keep` prints
+    the PIDs to `.run/pids` and `make e2e-stop` kills them; the provider-error
+    scenario SKIPs without a probe-exposing provider; `poll_for_answer` passes
+    a captured `after` cursor and fails fast on `ok: false`; the log watcher
+    ignores `InterruptibleStdioStream` and passes `stdin=DEVNULL`; in client
+    mode an empty chat prefix is a FAIL; QUICKSTART's troubleshooting describes
+    the `question N from ...` and `poll failed` lines the service really logs.
