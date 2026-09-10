@@ -15,11 +15,14 @@ import (
 )
 
 // Block types. A Block is the smallest piece of a turn: some text, a request
-// to call a tool, or the result of one.
+// to call a tool, the result of one, or a piece of the model's own reasoning
+// that has to be handed back verbatim on the next round.
 const (
-	BlockText       = "text"
-	BlockToolUse    = "tool_use"
-	BlockToolResult = "tool_result"
+	BlockText             = "text"
+	BlockToolUse          = "tool_use"
+	BlockToolResult       = "tool_result"
+	BlockThinking         = "thinking"
+	BlockRedactedThinking = "redacted_thinking"
 )
 
 // Message roles.
@@ -42,14 +45,24 @@ const (
 //   - BlockText: Text.
 //   - BlockToolUse: ID, Name, Input (the arguments, as raw JSON).
 //   - BlockToolResult: ID (the tool_use it answers), Content, IsError.
+//   - BlockThinking: Thinking, Signature.
+//   - BlockRedactedThinking: Data.
+//
+// The loop reads only text and tool calls, but it keeps every block a turn
+// produced and replays them in order: a thinking block is signed, and a model
+// that thought before calling a tool expects its own reasoning back on the
+// next round.
 type Block struct {
-	Type    string
-	Text    string
-	ID      string
-	Name    string
-	Input   json.RawMessage
-	Content string
-	IsError bool
+	Type      string
+	Text      string
+	ID        string
+	Name      string
+	Input     json.RawMessage
+	Content   string
+	IsError   bool
+	Thinking  string
+	Signature string
+	Data      string
 }
 
 // Message is one turn in the conversation.

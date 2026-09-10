@@ -145,6 +145,14 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
   connected player created a question and got a summary; a scripted death was found
   by the `last_event` history tool; the 21st question in an hour was refused with a
   notice; the test provider's `boom` came back as `provider_error`.
+- [x] 2026-09-10, after the review fixes, both modes re-run on the same rig: 8 passed,
+  0 failed, 2 skipped server-only, and 10 passed, 0 failed with a client. Two scenarios
+  are new. A comparison artifact whose rows are bare numbers came back `bad_artifact`
+  with the question left pending (the service then answered it itself a tick later), and
+  a table artifact at the shape caps went through as a 6,342-byte `answer` command, which
+  the old 1000-byte client limit made impossible. The asker label reached the log as
+  `question 6 from player 1 (force player)` for a player and `another mod (force player)`
+  for an interface call.
 - [ ] Popup rendering seen by a person (`aab-answer-style` = `popup` or a table
   answer with a connected player).
 - [ ] `production_since` against real flow statistics.

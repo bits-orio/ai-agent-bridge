@@ -21,7 +21,9 @@ Python 3 standard library only.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -36,6 +38,12 @@ import scenarios
 REPO_ROOT = rig.REPO_ROOT
 RUN_ROOT = rig.DEFAULT_RUN_ROOT
 CONTROL_API_ADDR = "127.0.0.1:8090"
+
+# Shared by write_config (the YAML the service actually reads) and
+# tailer_settle_seconds below, so the two can never drift apart the way a
+# second hardcoded "300ms" would invite.
+POLL_INTERVAL_YAML = "300ms"
+POLL_INTERVAL_SECONDS = 0.3
 
 
 def build_service() -> Path:
@@ -84,7 +92,7 @@ def write_config(run_root: Path, server: "rig.Server") -> Path:
           events_file: %s
 
         transport: local
-        poll_interval: 300ms
+        poll_interval: %s
 
         anthropic:
           api_key_env: ANTHROPIC_API_KEY
@@ -102,9 +110,106 @@ def write_config(run_root: Path, server: "rig.Server") -> Path:
         control_api:
           addr: %s
         """
-    ) % (time.strftime("%Y-%m-%dT%H:%M:%S"), server.rcon_port, server.events_file, history_path, CONTROL_API_ADDR)
+    ) % (
+        time.strftime("%Y-%m-%dT%H:%M:%S"),
+        server.rcon_port,
+        server.events_file,
+        POLL_INTERVAL_YAML,
+        history_path,
+        CONTROL_API_ADDR,
+    )
     cfg_path.write_text(content, encoding="utf-8")
     return cfg_path
+
+
+def reset_history(run_root: Path) -> None:
+    """Deletes any history.sqlite this run root already carries, plus its
+    -journal/-wal/-shm siblings, before write_config points a fresh service
+    at it. service/internal/history/history.go says outright "Reopening an
+    existing file keeps its rows; Open never truncates", so a run that
+    doesn't do this can pass scenario_last_death on a *previous* run's row
+    instead of its own (review-fix contract item 13)."""
+    base = run_root / "history.sqlite"
+    removed = []
+    for suffix in ("", "-journal", "-wal", "-shm"):
+        p = Path(str(base) + suffix)
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+    if removed:
+        print("run.py: reset history: removed %s" % ", ".join(removed))
+
+
+def fail_if_control_api_already_up(addr: str) -> None:
+    """Refuses to start a second service against the same fixed control-API
+    address. Without this, a leftover --keep run's service (or an
+    operator's own `aab run`, whose example config uses this same address)
+    answers /healthz for the *new* run's readiness check, this run's own
+    service is left bound-failed and silently logging in the background,
+    two services end up polling the same companion, and every question gets
+    answered twice (review-fix contract item 13)."""
+    url = "http://%s/healthz" % addr
+    try:
+        with urllib.request.urlopen(url, timeout=2) as resp:
+            if resp.status == 200:
+                raise RuntimeError(
+                    "control API at http://%s already answers, before this run started its own service. "
+                    "A previous `--keep` run (or another aab process) is still listening there. "
+                    "Stop it first (`make e2e-stop`, or kill its PID) and re-run." % addr
+                )
+    except (urllib.error.URLError, OSError):
+        pass  # nothing listening yet, as expected
+
+
+def read_pids(run_root: Path) -> dict:
+    pids_path = run_root / "pids"
+    pids = {}
+    if not pids_path.is_file():
+        return pids
+    for line in pids_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        label, _, raw_pid = line.partition(":")
+        try:
+            pids[label] = int(raw_pid)
+        except ValueError:
+            continue
+    return pids
+
+
+def write_pids(run_root: Path, pids: dict) -> Path:
+    pids_path = run_root / "pids"
+    pids_path.write_text(
+        "".join("%s:%d\n" % (label, pid) for label, pid in pids.items() if pid is not None),
+        encoding="utf-8",
+    )
+    return pids_path
+
+
+def stop_kept_run(run_root: Path) -> int:
+    """`make e2e-stop` / `run.py --stop`: kills whatever a previous --keep
+    run left behind, reading the PIDs --keep wrote to run_root/pids. Safe to
+    run with nothing to stop; the README's old advice here
+    (`python3 -c "import rig; rig.Server(name='server').stop()"`) did
+    nothing at all, since a freshly constructed Server has proc=None
+    regardless of what is actually running (review-fix contract item 13 /
+    the finding this replaces)."""
+    pids_path = run_root / "pids"
+    pids = read_pids(run_root)
+    if not pids:
+        print("run.py --stop: no %s (nothing kept, or already stopped)" % pids_path)
+        return 0
+    for label, pid in pids.items():
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print("run.py --stop: sent SIGTERM to %s (pid %d)" % (label, pid))
+        except ProcessLookupError:
+            print("run.py --stop: %s (pid %d) already gone" % (label, pid))
+        except OSError as e:
+            print("run.py --stop: could not signal %s (pid %d): %s" % (label, pid, e))
+    pids_path.unlink()
+    return 0
 
 
 def start_service(service_bin: Path, cfg_path: Path, run_root: Path, rcon_password: str) -> subprocess.Popen:
@@ -142,23 +247,37 @@ def stop_service(proc):
 
 
 def wait_for_service_ready(addr: str, timeout: float, proc: subprocess.Popen, log_path: Path) -> None:
-    url = "http://%s/healthz" % addr
+    """Waits not just for /healthz to answer (any listener on the port
+    satisfies that, including a stale one this run didn't start, see
+    fail_if_control_api_already_up), but for /v1/status to report
+    connected=true, proving the process answering is this run's own service
+    and that it actually reached the companion over RCON (review-fix
+    contract item 13)."""
+    healthz_url = "http://%s/healthz" % addr
+    status_url = "http://%s/v1/status" % addr
     deadline = time.monotonic() + timeout
     last_err = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
             raise RuntimeError(
-                "service process exited (code %s) before %s answered:\n%s" % (proc.returncode, url, text[-2000:])
+                "service process exited (code %s) before %s reported connected:\n%s" % (proc.returncode, status_url, text[-2000:])
             )
         try:
-            with urllib.request.urlopen(url, timeout=2) as resp:
-                if resp.status == 200:
-                    return
-        except (urllib.error.URLError, OSError) as e:
+            with urllib.request.urlopen(healthz_url, timeout=2) as resp:
+                if resp.status != 200:
+                    last_err = RuntimeError("healthz returned status %s" % resp.status)
+                    time.sleep(1)
+                    continue
+            with urllib.request.urlopen(status_url, timeout=2) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+            if body.get("connected") is True:
+                return
+            last_err = RuntimeError("status reports connected=%r (not yet true): %r" % (body.get("connected"), body))
+        except (urllib.error.URLError, OSError, ValueError) as e:
             last_err = e
         time.sleep(1)
-    raise TimeoutError("%s did not answer within %ss (last error: %r)" % (url, timeout, last_err))
+    raise TimeoutError("%s never reported connected:true within %ss (last error: %r)" % (status_url, timeout, last_err))
 
 
 def resolve_client_player_index(server_rcon: "rig.RCON", timeout: float = 20.0, interval: float = 0.5):
@@ -184,9 +303,18 @@ def main() -> int:
     parser.add_argument("--client", action="store_true", help="also launch a standalone client and run the player-only scenarios")
     parser.add_argument("--keep", action="store_true", help="leave the server/client/service running after the run for manual inspection")
     parser.add_argument("--answer-timeout", type=float, default=25.0, help="seconds to wait for a question to be answered (default 25)")
+    parser.add_argument("--stop", action="store_true", help="kill the processes a previous --keep run left behind (tests/e2e/.run/pids) and exit; starts nothing (also `make e2e-stop`)")
     args = parser.parse_args()
 
     RUN_ROOT.mkdir(parents=True, exist_ok=True)
+
+    if args.stop:
+        return stop_kept_run(RUN_ROOT)
+
+    # Fail fast rather than let a leftover --keep run's service quietly
+    # answer this run's readiness check (see fail_if_control_api_already_up).
+    fail_if_control_api_already_up(CONTROL_API_ADDR)
+    reset_history(RUN_ROOT)
 
     mods = [rig.companion_mod()]
     provider = rig.provider_mod()
@@ -245,6 +373,12 @@ def main() -> int:
             client_player_index=client_player_index,
             provider_iface=provider_iface,
             answer_timeout=args.answer_timeout,
+            events_file=server.events_file,
+            # scenario_last_death: once events.jsonl carries the death, give
+            # the tailer and the poll loop (two independent tickers, both on
+            # this same interval) a full interval plus margin to both catch
+            # up.
+            tailer_settle_seconds=POLL_INTERVAL_SECONDS * 2 + 0.3,
         )
 
         print("run.py: running scenarios ...")
@@ -269,7 +403,18 @@ def main() -> int:
                 client.stop()
             server.stop()
         else:
-            print("run.py: --keep set, leaving server/client/service running (rcon %d, control API %s)" % (server.rcon_port, CONTROL_API_ADDR))
+            pids = {}
+            if service_proc is not None:
+                pids["service"] = service_proc.pid
+            if server.proc is not None:
+                pids["server"] = server.proc.pid
+            if client is not None and client.proc is not None:
+                pids["client"] = client.proc.pid
+            pids_path = write_pids(RUN_ROOT, pids)
+            print(
+                "run.py: --keep set, leaving processes running: %s (rcon %d, control API %s); PIDs written to %s, stop with `make e2e-stop`"
+                % (", ".join("%s=%d" % (label, pid) for label, pid in pids.items()), server.rcon_port, CONTROL_API_ADDR, pids_path)
+            )
 
     return exit_code
 

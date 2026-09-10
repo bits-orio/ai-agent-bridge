@@ -43,6 +43,12 @@ func toContentBlocks(blocks []model.Block) []sdk.ContentBlockParamUnion {
 			out = append(out, sdk.NewToolUseBlock(b.ID, decodeInput(b.Input), b.Name))
 		case model.BlockToolResult:
 			out = append(out, sdk.NewToolResultBlock(b.ID, b.Content, b.IsError))
+		case model.BlockThinking:
+			// Signature first, then the text: that is the SDK's argument
+			// order (NewThinkingBlock(signature, thinking)).
+			out = append(out, sdk.NewThinkingBlock(b.Signature, b.Thinking))
+		case model.BlockRedactedThinking:
+			out = append(out, sdk.NewRedactedThinkingBlock(b.Data))
 		}
 	}
 	return out
@@ -114,15 +120,26 @@ func extraSchemaFields(schema map[string]any) map[string]any {
 	return out
 }
 
-// fromContentBlocks converts a response's content into neutral blocks. Any
-// block variant the loop cannot act on, a thinking block for instance, is
-// dropped: the loop only ever needs the text and the tool calls.
+// fromContentBlocks converts a response's content into neutral blocks.
+// Thinking blocks are kept in the position they arrived in and handed back
+// unchanged on the next round: extended thinking signs each block, and a
+// signed block dropped from the history invalidates the turn it belonged to.
+// A variant this loop has no use for at all, a server tool result for
+// instance, is dropped.
 func fromContentBlocks(content []sdk.ContentBlockUnion) []model.Block {
 	var out []model.Block
 	for _, block := range content {
 		switch variant := block.AsAny().(type) {
 		case sdk.TextBlock:
 			out = append(out, model.Block{Type: model.BlockText, Text: variant.Text})
+		case sdk.ThinkingBlock:
+			out = append(out, model.Block{
+				Type:      model.BlockThinking,
+				Thinking:  variant.Thinking,
+				Signature: variant.Signature,
+			})
+		case sdk.RedactedThinkingBlock:
+			out = append(out, model.Block{Type: model.BlockRedactedThinking, Data: variant.Data})
 		case sdk.ToolUseBlock:
 			out = append(out, model.Block{
 				Type:  model.BlockToolUse,

@@ -1,110 +1,155 @@
-// Copied from open-discord-bridge/bridge/internal/rcon/rcon_test.go, unchanged.
-
 package rcon
 
 import (
-	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
-
-	gorcon "github.com/gorcon/rcon"
-	"github.com/gorcon/rcon/rcontest"
 )
 
-// TestIsLocalValidationErr checks that gorcon's client-side validation errors (raised
-// before any bytes touch the socket) are classified separately from errors that
-// indicate the connection itself is broken.
-func TestIsLocalValidationErr(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"command too long", gorcon.ErrCommandTooLong, true},
-		{"command empty", gorcon.ErrCommandEmpty, true},
-		{"wrapped command too long", errors.New("rcon: " + gorcon.ErrCommandTooLong.Error()), false}, // not the same error, just similar text
-		{"auth failed", gorcon.ErrAuthFailed, false},
-		{"invalid packet id", gorcon.ErrInvalidPacketID, false},
-		{"generic io error", errors.New("read tcp 127.0.0.1:1234: connection reset by peer"), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isLocalValidationErr(tt.err); got != tt.want {
-				t.Errorf("isLocalValidationErr(%v) = %v, want %v", tt.err, got, tt.want)
-			}
-		})
-	}
-}
-
-// TestExecute_CommandTooLong_DoesNotRedial verifies that sending a command over
-// MaxCommandLen fails that single call without tearing down and re-dialing an otherwise
-// healthy connection. Regression test for treating every Execute error as connection-dead.
-func TestExecute_CommandTooLong_DoesNotRedial(t *testing.T) {
-	var authCount int32
-	server := rcontest.NewServer(rcontest.SetSettings(rcontest.Settings{Password: "pw"}))
-	defer server.Close()
-	server.SetAuthHandler(func(c *rcontest.Context) {
-		atomic.AddInt32(&authCount, 1)
-		rcontest.AuthHandler(c)
-	})
-
+// The happy path: one dial, one password handshake, the reply the server sent.
+func TestExecuteRoundTrip(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
 	c := New(server.Addr(), "pw")
 	defer c.Close()
 
-	if _, err := c.Execute("help"); err != nil {
-		t.Fatalf("initial execute: %v", err)
+	if got := mustExecute(t, c, "/aab-rpc {}"); got != "/aab-rpc {}" {
+		t.Errorf("reply = %q, want the command echoed back", got)
 	}
-	if got := atomic.LoadInt32(&authCount); got != 1 {
-		t.Fatalf("auth count after first execute = %d, want 1", got)
-	}
-
-	oversized := strings.Repeat("x", MaxCommandLen+1)
-	if _, err := c.Execute(oversized); !errors.Is(err, gorcon.ErrCommandTooLong) {
-		t.Fatalf("execute oversized command: got err %v, want ErrCommandTooLong", err)
-	}
-	if got := atomic.LoadInt32(&authCount); got != 1 {
-		t.Errorf("auth count after oversized execute = %d, want still 1 (should not re-dial)", got)
-	}
-
-	// The connection must still be usable afterward: a real reconnect bug would have
-	// nil'd out c.conn, and this call would either fail or trigger a fresh dial.
-	if _, err := c.Execute("help"); err != nil {
-		t.Fatalf("execute after oversized command: %v", err)
-	}
-	if got := atomic.LoadInt32(&authCount); got != 1 {
-		t.Errorf("auth count after follow-up execute = %d, want still 1", got)
+	if got := server.auths.Load(); got != 1 {
+		t.Errorf("auth count = %d, want 1", got)
 	}
 }
 
-// TestExecute_ConnectionError_Redials verifies the reconnect path still works for a
-// genuine connection failure (as opposed to the client-side validation error above).
-func TestExecute_ConnectionError_Redials(t *testing.T) {
-	var authCount int32
-	server := rcontest.NewServer(rcontest.SetSettings(rcontest.Settings{Password: "pw"}))
-	defer server.Close()
-	server.SetAuthHandler(func(c *rcontest.Context) {
-		atomic.AddInt32(&authCount, 1)
-		rcontest.AuthHandler(c)
-	})
-
+// One connection serves many commands: a second Execute must not re-authenticate.
+func TestExecuteReusesTheConnection(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
 	c := New(server.Addr(), "pw")
 	defer c.Close()
 
-	if _, err := c.Execute("help"); err != nil {
-		t.Fatalf("initial execute: %v", err)
+	mustExecute(t, c, "one")
+	mustExecute(t, c, "two")
+	if got := server.auths.Load(); got != 1 {
+		t.Errorf("auth count = %d, want 1: the client re-dialled when it did not need to", got)
 	}
+}
 
-	// Simulate a dropped connection (e.g. game restart) by closing the client's socket
-	// out from under it, then confirm the next Execute re-dials and succeeds.
+// A wrong password is reported as such, not as a transport error, and the
+// client does not keep the useless socket.
+func TestAuthFailure(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
+	c := New(server.Addr(), "wrong")
+	defer c.Close()
+
+	_, err := c.Execute("help")
+	wantErr(t, err, ErrAuthFailed)
+
 	c.mu.Lock()
-	c.conn.Close()
+	conn := c.conn
 	c.mu.Unlock()
-
-	if _, err := c.Execute("help"); err != nil {
-		t.Fatalf("execute after dropped connection: %v", err)
+	if conn != nil {
+		t.Error("the client kept a connection it failed to authenticate on")
 	}
-	if got := atomic.LoadInt32(&authCount); got != 2 {
-		t.Errorf("auth count after dropped connection = %d, want 2 (should re-dial)", got)
+}
+
+// An empty command is refused locally, before anything is dialled.
+func TestExecuteEmptyCommandRefusedWithoutDialling(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	_, err := c.Execute("")
+	wantErr(t, err, ErrCommandEmpty)
+	if got := server.auths.Load(); got != 0 {
+		t.Errorf("auth count = %d, want 0: an empty command must not reach the server", got)
+	}
+}
+
+// A command over MaxCommandLen fails that one call without tearing down an
+// otherwise healthy connection. Regression test for treating every Execute
+// error as connection-dead.
+func TestExecuteCommandTooLongDoesNotRedial(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	mustExecute(t, c, "help")
+	if got := server.auths.Load(); got != 1 {
+		t.Fatalf("auth count after the first execute = %d, want 1", got)
+	}
+
+	_, err := c.Execute(strings.Repeat("x", MaxCommandLen+1))
+	wantErr(t, err, ErrCommandTooLong)
+	if got := server.auths.Load(); got != 1 {
+		t.Errorf("auth count after the oversized command = %d, want still 1", got)
+	}
+
+	// The connection must still be usable: a reconnect bug would have dropped
+	// it and this call would dial again.
+	mustExecute(t, c, "help")
+	if got := server.auths.Load(); got != 1 {
+		t.Errorf("auth count after the follow-up execute = %d, want still 1", got)
+	}
+}
+
+// A genuine connection failure does reconnect, once.
+func TestExecuteRedialsAfterADroppedConnection(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	mustExecute(t, c, "help")
+	server.DropConnections()
+
+	mustExecute(t, c, "help")
+	if got := server.auths.Load(); got != 2 {
+		t.Errorf("auth count after the drop = %d, want 2", got)
+	}
+}
+
+// The whole point of dropping gorcon: a 100 KB command and a 100 KB reply both
+// survive the round trip byte-exact. gorcon refused anything over 1000 bytes
+// out and 4 KB back; Factorio itself takes a megabyte in and returns 4 MB
+// (TESTING.md check 1.5).
+func TestExecuteCarriesA100KBCommandAndReply(t *testing.T) {
+	const size = 100 * 1024
+	body := strings.Repeat("aab", size/3+1)[:size]
+
+	server := newFakeServer(t, "pw", func(cmd string) string {
+		if cmd != "/aab-rpc "+body {
+			t.Errorf("server received %d bytes, want the %d-byte command intact", len(cmd), len(body)+9)
+		}
+		return body
+	})
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	got := mustExecute(t, c, "/aab-rpc "+body)
+	if len(got) != size {
+		t.Fatalf("reply is %d bytes, want %d", len(got), size)
+	}
+	if got != body {
+		t.Error("reply came back changed")
+	}
+}
+
+// A reply whose length prefix is absurd is refused rather than allocated for.
+func TestReadPacketRefusesAnAbsurdLength(t *testing.T) {
+	framed := []byte{0xff, 0xff, 0xff, 0x7f} // 2 GB, claimed
+	if _, err := readPacket(strings.NewReader(string(framed))); err == nil {
+		t.Fatal("expected an oversized reply length to be refused")
+	}
+}
+
+// Ids are echoed back by the server, so they must never collide with the
+// protocol's "password refused" sentinel.
+func TestNextIDSkipsTheAuthFailureSentinel(t *testing.T) {
+	c := New("127.0.0.1:0", "pw")
+	if got := c.nextID(); got != 1 {
+		t.Errorf("first id = %d, want 1", got)
+	}
+	c.lastID = 2147483645
+	for range 4 {
+		if got := c.nextID(); got == authFailedID || got == 0 {
+			t.Fatalf("id %d collides with a reserved value", got)
+		}
 	}
 }

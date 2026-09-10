@@ -24,6 +24,9 @@ import (
 // maxNameLen is the model API's limit on a tool name.
 const maxNameLen = 64
 
+// sep joins the interface half of a tool name to the function half.
+const sep = "__"
+
 // Caller runs one tool on one provider. *rpc.Client satisfies it; tests and
 // the catalog-refresh wrapper in cmd/aab use their own.
 type Caller interface {
@@ -53,7 +56,8 @@ func Build(providers rpc.ToolsReply, caller Caller) *Catalog {
 		for _, fn := range sortedKeys(p.Tools) {
 			name := ToolName(p.Iface, fn)
 			if prev, taken := c.byName[name]; taken {
-				log.Printf("catalog: %s.%s and %s.%s both map to tool name %q, keeping the first", prev.Iface, prev.Fn, p.Iface, fn, name)
+				log.Printf("catalog: %s.%s and %s.%s both map to tool name %q: keeping the first, skipping the second",
+					prev.Iface, prev.Fn, p.Iface, fn, name)
 				continue
 			}
 			c.byName[name] = Target{Iface: p.Iface, Fn: fn}
@@ -97,12 +101,32 @@ func describe(iface, fn string, manifest rpc.ToolManifest) string {
 var unsafeNameChar = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
 // ToolName is the name the model sees for one provider function.
+//
+// The 64 characters are budgeted so the function name survives whole and the
+// interface prefix is what gives way (review-fix contract 11). Cutting the tail
+// instead used to collapse every tool on a long interface into one name: a
+// 54-character interface exposing production_rate and production_since produced
+// the same truncated name twice, the collision check kept the first, and the
+// other function vanished from the catalog behind a log line.
 func ToolName(iface, fn string) string {
-	name := unsafeNameChar.ReplaceAllString(iface+"__"+fn, "_")
-	if len(name) > maxNameLen {
-		name = name[:maxNameLen]
+	fnSafe := safeName(fn)
+	// Pathological only: a function name that fills the budget on its own still
+	// leaves one character for the interface, so two interfaces are tellable
+	// apart by the collision log rather than silently merged.
+	if room := maxNameLen - len(sep) - 1; len(fnSafe) > room {
+		fnSafe = fnSafe[:room]
 	}
-	return name
+	ifaceSafe := safeName(iface)
+	if budget := maxNameLen - len(sep) - len(fnSafe); len(ifaceSafe) > budget {
+		ifaceSafe = ifaceSafe[:budget]
+	}
+	return ifaceSafe + sep + fnSafe
+}
+
+// safeName replaces every character the model API disallows in a tool name. The
+// result is ASCII, so the byte slicing above never splits a character.
+func safeName(s string) string {
+	return unsafeNameChar.ReplaceAllString(s, "_")
 }
 
 func sortedKeys(m map[string]rpc.ToolManifest) []string {

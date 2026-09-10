@@ -78,12 +78,27 @@ service never reads it back.
 
 That is the one you leave running. It connects over RCON, builds the tool catalog, tails
 the events file into the history database, polls for questions every `poll_interval`,
-answers each in order, and serves the control API. Every question logs two lines:
+answers each in order, and serves the control API. Every question logs two lines, one
+when it is picked up and one when the answer reaches the game:
 
 ```
-question 7 from player 1 (force player): what is my iron plate rate
-answer 7 shape=summary rounds=2 tokens_in=1840 tokens_out=96 cost_usd=0.0116
+question 7 from Bob (player 1, force player): what is my iron plate rate
+answer 7 shape=summary rounds=2 tokens=1840/96 cost=$0.0116
 ```
+
+Three other lines are worth knowing:
+
+- `poll failed: ...` once per failure streak, not once per poll. A server that is down
+  costs one line, and `poll recovered` says when it came back.
+- `answer 7: could not deliver it, trying again next tick: ...` when the answer itself
+  did not land. The artifact is already paid for, so it is offered again with no second
+  model run. After three failures the service says it is giving up on that question.
+- `idle, 12 questions answered` every five minutes with nothing to do, so an idle
+  service is tellable from a wedged one.
+
+The service keeps no cursor, on disk or in memory. The companion serves the oldest
+unanswered questions, a page at a time, so restarting the service resumes rather than
+re-answering everything the companion's ring still holds.
 
 The other four subcommands drive the protocol by hand, which is what the Phase 0 checks
 in [../TESTING.md](../TESTING.md) use:
@@ -95,10 +110,13 @@ in [../TESTING.md](../TESTING.md) use:
 ./aab -config aab.yaml poll 0
 ```
 
-- **`status`**: protocol version, mod version, tick, player count, pending questions.
+- **`status`**: protocol version, mod version, tick, player count, pending questions, and
+  the highest question id the save has issued.
 - **`probe`**: the full catalog every provider on the server exposes, manifests verbatim.
+  A provider whose manifest does not decode is skipped with a line naming it; the rest of
+  the catalog still comes through.
 - **`rpc <json>`**: one raw `aab-rpc-v1` request, a JSON object carrying its own `"op"`.
-- **`poll [after]`**: questions with an id above the cursor.
+- **`poll [after]`**: unanswered questions with an id above `after`, oldest first.
 
 Each exits non-zero on an `{"ok":false,...}` reply and prints the protocol's error code.
 
@@ -137,9 +155,23 @@ The cost is the operator's own money, so it is reported rather than hidden (ADR 
 Prices come from a small table in `internal/agent/cost.go`; a model the table does not
 know prices at zero rather than at a guess.
 
+## The RCON client
+
+`internal/rcon` speaks the Source RCON protocol itself: an int32 length, an int32 request
+id, an int32 type, the body, two NUL bytes. The library it replaced refused any command
+over 1000 bytes and any reply over 4 KB, both its own client-side constants. Factorio
+accepted a 1,000,042-byte command on 2.0.77 and returned 4 MB replies whole
+([../TESTING.md](../TESTING.md) check 1.5), and the 1000-byte ceiling had made every
+table and list answer undeliverable.
+
+`MaxCommandLen` is now 262144: a budget the service picks rather than a limit the game
+imposes. An empty or over-long command is refused before anything is dialled, so a bad
+command never tears down a healthy connection, and a genuine connection error reconnects
+once.
+
 ## How a question is answered
 
-1. The poll loop picks up a question and its force hint.
+1. The poll loop picks up a question with its force hint and the asker's name.
 2. The catalog is rebuilt if it is older than ten minutes, or if the last tool call
    reported an unknown provider. Nothing about it is stored (CONTEXT.md invariant 3).
 3. The agent sends the system prompt, the asker's last few exchanges and the question,
@@ -150,6 +182,9 @@ know prices at zero rather than at a guess.
    over RCON for the companion to render.
 6. Anything else that can end a question, a round cap, a token budget, a quota, a model
    that stops talking, ends it with an artifact too. A player always gets an answer.
+7. The companion renders the artifact and only then marks the question answered, so a
+   question the service could not deliver comes back on the next poll and is delivered
+   again from the artifact already in hand.
 
 ## Layout
 
@@ -158,9 +193,11 @@ cmd/aab/             main: config load and subcommand dispatch; run.go is the se
                       itself; dotenv.go and logfile.go copied from open-discord-bridge
 internal/config/      YAML config, AAB_* env config, env-resolved secrets, validation,
                       the effective-config snapshot
-internal/rcon/        copied from open-discord-bridge. Reconnecting Factorio RCON client
+internal/rcon/        the Source RCON protocol, written out: auth, exec, one
+                      length-prefixed reply of any size, one reconnect
 internal/rpc/         the aab-rpc-v1 client: envelope parsing, typed op helpers
-                      (status/tools/call/poll/answer), the oversized-command guard
+                      (status/tools/call/poll/answer), per-provider manifest decoding,
+                      the oversized-command guard
 internal/transport/   copied from open-discord-bridge. Local and SFTP polling tailer for
                       the companion's events.jsonl
 internal/tools/       the one shape every tool takes: name, description, schema, call

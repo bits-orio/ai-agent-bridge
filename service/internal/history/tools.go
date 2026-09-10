@@ -43,7 +43,7 @@ func (s *Store) Tools() []tools.Tool {
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Force name to filter to. Omitted matches every force.",
+					"description": "Force name to filter to. Omitted reads the asker's force, the same as every other tool.",
 				},
 				"player": map[string]any{
 					"type":        "string",
@@ -75,7 +75,7 @@ func (s *Store) Tools() []tools.Tool {
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Restrict to this force's events.",
+					"description": "Restrict to this force's events. Omitted reads the asker's force.",
 				},
 			}, "event"),
 			Call: s.lastEvent,
@@ -92,7 +92,7 @@ func (s *Store) Tools() []tools.Tool {
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Restrict the count to this force.",
+					"description": "Restrict the count to this force. Omitted counts the asker's force.",
 				},
 				"since_tick": map[string]any{
 					"type":        "integer",

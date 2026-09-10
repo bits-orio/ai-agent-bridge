@@ -18,7 +18,7 @@ func systemPrompt(q Question) string {
 	b.WriteString("You are the in-game assistant on a Factorio multiplayer server. ")
 	b.WriteString("You answer one question from one player by reading live game state with the tools you are given.\n\n")
 
-	fmt.Fprintf(&b, "The question comes from %s, whose force is %q. ", q.askerLabel(), q.force())
+	fmt.Fprintf(&b, "The question comes from %s, whose force is %q. ", q.AskerLabel(), q.force())
 	b.WriteString("Every tool takes a force argument. Leave it out and it reads the asker's force; ")
 	b.WriteString("set it when the question names another force. Any player may ask about any force.\n\n")
 

@@ -57,7 +57,7 @@ func TestCallMergesPayloadFieldsWithOp(t *testing.T) {
 	fake := &fakeRCON{resp: `{"ok":true,"r":[]}`}
 	c := New(fake)
 
-	if _, err := c.Call(context.Background(), "poll", pollRequest{After: 17}); err != nil {
+	if _, err := c.Call(context.Background(), "poll", pollRequest{After: 17, Limit: 16}); err != nil {
 		t.Fatalf("Call: %v", err)
 	}
 	var sent map[string]json.RawMessage
@@ -69,6 +69,9 @@ func TestCallMergesPayloadFieldsWithOp(t *testing.T) {
 	}
 	if string(sent["after"]) != `17` {
 		t.Errorf(`sent after = %s, want 17`, sent["after"])
+	}
+	if string(sent["limit"]) != `16` {
+		t.Errorf(`sent limit = %s, want 16`, sent["limit"])
 	}
 }
 
@@ -137,14 +140,14 @@ func TestCallContextAlreadyCanceled(t *testing.T) {
 }
 
 func TestStatusParsesReply(t *testing.T) {
-	fake := &fakeRCON{resp: `{"ok":true,"r":{"protocol":1,"mod_version":"0.1.0","tick":12345,"player_count":2,"pending":3,"ask_command":"ask"}}`}
+	fake := &fakeRCON{resp: `{"ok":true,"r":{"protocol":1,"mod_version":"0.1.0","tick":12345,"player_count":2,"pending":3,"ask_command":"ask","last_id":41}}`}
 	c := New(fake)
 
 	got, err := c.Status(context.Background())
 	if err != nil {
 		t.Fatalf("Status: %v", err)
 	}
-	want := StatusReply{ProtocolVersion: 1, ModVersion: "0.1.0", Tick: 12345, PlayerCount: 2, PendingCount: 3, AskCommand: "ask"}
+	want := StatusReply{ProtocolVersion: 1, ModVersion: "0.1.0", Tick: 12345, PlayerCount: 2, PendingCount: 3, AskCommand: "ask", LastID: 41}
 	if got != want {
 		t.Errorf("Status() = %+v, want %+v", got, want)
 	}
@@ -165,18 +168,45 @@ func TestToolsParsesCatalog(t *testing.T) {
 
 func TestPollParsesQuestions(t *testing.T) {
 	pi := 3
-	fake := &fakeRCON{resp: `{"ok":true,"r":[{"id":5,"text":"how much iron?","player_index":3,"force":"player","tick":900}]}`}
+	fake := &fakeRCON{resp: `{"ok":true,"r":[{"id":5,"text":"how much iron?","player_index":3,"player_name":"Bob","force":"player","tick":900}]}`}
 	c := New(fake)
 
-	got, err := c.Poll(context.Background(), 4)
+	got, err := c.Poll(context.Background(), 4, 16)
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	want := PollReply{{ID: 5, Text: "how much iron?", PlayerIndex: &pi, Force: "player", Tick: 900}}
+	want := PollReply{{ID: 5, Text: "how much iron?", PlayerIndex: &pi, PlayerName: "Bob", Force: "player", Tick: 900}}
 	if len(got) != 1 || got[0].ID != want[0].ID || got[0].Text != want[0].Text ||
 		got[0].PlayerIndex == nil || *got[0].PlayerIndex != *want[0].PlayerIndex ||
+		got[0].PlayerName != want[0].PlayerName ||
 		got[0].Force != want[0].Force || got[0].Tick != want[0].Tick {
 		t.Errorf("Poll() = %+v, want %+v", got, want)
+	}
+}
+
+// The page size is clamped rather than refused, so the request always says what
+// the companion will actually do.
+func TestPollClampsTheLimit(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":true,"r":{}}`}
+	c := New(fake)
+
+	if _, err := c.Poll(context.Background(), 0, MaxPollLimit*10); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	var sent map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(fake.last, "/aab-rpc ")), &sent); err != nil {
+		t.Fatalf("sent command is not valid JSON: %v", err)
+	}
+	if got := string(sent["limit"]); got != "64" {
+		t.Errorf("sent limit = %s, want it clamped to 64", got)
+	}
+
+	// Limit 0 leaves the field out entirely: the companion picks its own page size.
+	if _, err := c.Poll(context.Background(), 0, 0); err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if strings.Contains(fake.last, "limit") {
+		t.Errorf("command = %q, want no limit field", fake.last)
 	}
 }
 
@@ -215,10 +245,61 @@ func TestAnswerNoQuestionError(t *testing.T) {
 	}
 }
 
+// One provider's broken manifest costs that provider its tools, not the whole
+// catalog: the companion's own engine tools ride in the same reply, and losing
+// them left the agent answering from the prompt alone (review-fix contract 6).
+func TestToolsSkipsOnlyTheProviderThatCannotDecode(t *testing.T) {
+	for _, tc := range []struct{ name, bad string }{
+		{"tools is a list of names", `{"iface":"bad-mod","v":1,"tools":["team_list","team_standings"]}`},
+		{"params is a nested table", `{"iface":"bad-mod","v":1,"tools":{"x":{"desc":"x","params":{"milestone":{"type":"string"}}}}}`},
+		{"desc is a localised string", `{"iface":"bad-mod","v":1,"tools":{"x":{"desc":["bad-mod.tool-desc"]}}}`},
+		{"v is a string", `{"iface":"bad-mod","v":"1","tools":{"x":{"desc":"x"}}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			good := `{"iface":"ai-agent-bridge-tools","v":1,"tools":{"list_forces":{"desc":"Every force."}}}`
+			fake := &fakeRCON{resp: `{"ok":true,"r":[` + tc.bad + `,` + good + `]}`}
+
+			got, err := New(fake).Tools(context.Background())
+			if err != nil {
+				t.Fatalf("Tools: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("Tools() returned %d provider(s), want 1: %+v", len(got), got)
+			}
+			if got[0].Iface != "ai-agent-bridge-tools" || got[0].Tools["list_forces"].Desc != "Every force." {
+				t.Errorf("kept %+v, want the provider that decodes", got[0])
+			}
+		})
+	}
+}
+
+// A reply that is not a list at all is still a failed call: there is nothing to
+// salvage per provider.
+func TestToolsRejectsAReplyThatIsNotAList(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":true,"r":"nope"}`}
+	if _, err := New(fake).Tools(context.Background()); err == nil {
+		t.Fatal("expected a non-list tools reply to be an error")
+	}
+}
+
+func TestHasCode(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":false,"e":"bad_artifact","m":"unknown shape \"graph\""}`}
+	_, err := New(fake).Answer(context.Background(), 7, map[string]string{"shape": "graph"})
+	if !HasCode(err, CodeBadArtifact) {
+		t.Errorf("HasCode(%v, bad_artifact) = false, want true", err)
+	}
+	if HasCode(err, CodeNoQuestion) {
+		t.Error("HasCode matched the wrong code")
+	}
+	if HasCode(nil, CodeBadArtifact) {
+		t.Error("HasCode(nil) = true, want false")
+	}
+}
+
 func TestEmptyObjectDecodesAsEmptyList(t *testing.T) {
 	fake := &fakeRCON{resp: `{"ok":true,"r":{}}`}
 	c := New(fake)
-	qs, err := c.Poll(context.Background(), 0)
+	qs, err := c.Poll(context.Background(), 0, 16)
 	if err != nil || len(qs) != 0 {
 		t.Fatalf("Poll() = %v, %v; want empty, nil", qs, err)
 	}

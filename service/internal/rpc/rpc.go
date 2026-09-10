@@ -9,6 +9,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -38,6 +39,11 @@ const (
 	CodeBadResult     = "bad_result"
 	CodeTooLarge      = "too_large"
 	CodeNoQuestion    = "no_question"
+	// CodeBadArtifact is the companion refusing an answer it cannot render:
+	// an unknown shape, or a field of the wrong type (review-fix contract 5).
+	// Sending the same artifact again would fail the same way, so a caller
+	// must not retry it.
+	CodeBadArtifact = "bad_artifact"
 )
 
 // RCON is the minimal executor Client needs: one blocking command/response round trip.
@@ -58,6 +64,13 @@ func (e *Error) Error() string {
 		return "aab-rpc: " + e.Code
 	}
 	return fmt.Sprintf("aab-rpc: %s: %s", e.Code, e.Message)
+}
+
+// HasCode reports whether err is a protocol error carrying code, so callers can
+// tell one refusal from another without unwrapping by hand.
+func HasCode(err error, code string) bool {
+	var protocol *Error
+	return errors.As(err, &protocol) && protocol.Code == code
 }
 
 // Client sends aab-rpc-v1 requests over an RCON connection.

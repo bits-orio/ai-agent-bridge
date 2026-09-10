@@ -7,6 +7,7 @@
 
 local force_lookup = require("scripts.tools.force_lookup")
 local flow         = require("scripts.tools.flow")
+local bounded      = require("scripts.tools.bounded")
 
 local MAX_TOP_N = 50
 
@@ -50,9 +51,7 @@ local function top_items(a)
   local force = force_lookup.require_force(a.force)
   local surface = flow.require_surface(a.surface)
   local window = flow.require_window(a.window)
-  local n = math.floor(tonumber(a.n) or 10)
-  if n < 1 then n = 1 end
-  if n > MAX_TOP_N then n = MAX_TOP_N end
+  local n = bounded.limit(a.n, 10, MAX_TOP_N)
 
   local stats = force.get_item_production_statistics(surface)
   local seen = {}
@@ -68,8 +67,7 @@ local function top_items(a)
   end
   table.sort(rows, function(x, y) return x.produced_per_min > y.produced_per_min end)
 
-  local top = {}
-  for i = 1, math.min(n, #rows) do top[i] = rows[i] end
+  local top = bounded.cut(rows, n)
   return { force = force.name, surface = surface, window = a.window, items = top }
 end
 

@@ -1,7 +1,7 @@
 -- Shared "resolve a force by name" helper for engine tools. Every engine
 -- tool except list_forces requires `force` and should error() on an unknown
 -- one, so scripts/probe.lua's call() maps it to a plain provider_error reply
--- for the caller -- tools never write storage or return partial data for a
+-- for the caller. Tools never write storage or return partial data for a
 -- bad name.
 
 local M = {}

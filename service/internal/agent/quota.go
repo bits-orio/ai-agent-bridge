@@ -22,6 +22,29 @@ func newQuota(limit int) *quota {
 	return &quota{limit: limit, window: quotaWindow, asked: map[string][]time.Time{}}
 }
 
+// refund gives back the slot take granted, for a question that never reached
+// an answer. Only the newest slot is dropped, so a question refunded after a
+// later one was allowed still leaves that later one counted.
+func (q *quota) refund(key string, now time.Time) {
+	if q.limit <= 0 {
+		return
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	asked := q.asked[key]
+	for i := len(asked) - 1; i >= 0; i-- {
+		if asked[i].After(now) {
+			continue // a question that started later keeps its slot
+		}
+		q.asked[key] = append(asked[:i], asked[i+1:]...)
+		if len(q.asked[key]) == 0 {
+			delete(q.asked, key)
+		}
+		return
+	}
+}
+
 // take records one question against key and reports whether it is allowed. A
 // limit of zero or less means no quota at all.
 func (q *quota) take(key string, now time.Time) bool {

@@ -1,13 +1,33 @@
 -- Scans remote.interfaces for every provider's agent_tools_v1 probe
 -- (CONTEXT.md "Probe", "Catalog") and routes the aab-rpc `call` op to one
--- tool on one provider. Nothing here is ever stored -- the catalog is
+-- tool on one provider. Nothing here is ever stored: the catalog is
 -- rebuilt from scratch on every use, sorted by interface name so its JSON
 -- stays byte-stable, and a removed provider just vanishes (CONTEXT.md
 -- invariant 3).
 
+local manifest_check = require("scripts.probe_manifest")
+
 local PROBE_FN = "agent_tools_v1"
 
 local M = {}
+
+local function complain(message)
+  log("[ai-agent-bridge] probe: " .. message)
+end
+
+--- Reads one provider's manifest. Returns the manifest's version and its
+--- usable tools, or nil and the reason it was unusable. `report` takes one
+--- sentence per dropped tool.
+local function read_manifest(iface_name, report)
+  local answered, manifest = pcall(remote.call, iface_name, PROBE_FN)
+  if not answered then
+    return nil, PROBE_FN .. "() errored: " .. tostring(manifest):match("^[^\n]*")
+  end
+  if type(manifest) ~= "table" or type(manifest.tools) ~= "table" then
+    return nil, PROBE_FN .. "() did not return a manifest with a tools table"
+  end
+  return { v = manifest.v or 1, tools = manifest_check.clean_tools(manifest.tools, report) }
+end
 
 --- Sorted list of {iface, v, tools} for every provider found right now.
 function M.catalog()
@@ -20,13 +40,16 @@ function M.catalog()
   local providers = {}
   for _, iface_name in ipairs(names) do
     if remote.interfaces[iface_name][PROBE_FN] then
-      local ok, manifest = pcall(remote.call, iface_name, PROBE_FN)
-      if ok and type(manifest) == "table" and type(manifest.tools) == "table" then
-        providers[#providers + 1] = { iface = iface_name, v = manifest.v or 1, tools = manifest.tools }
-      elseif not ok then
-        log("[ai-agent-bridge] probe: " .. iface_name .. "." .. PROBE_FN .. "() errored: " .. tostring(manifest))
+      local manifest, unusable = read_manifest(iface_name, function(dropped)
+        complain("dropped tool " .. iface_name .. "." .. dropped)
+      end)
+      if manifest then
+        providers[#providers + 1] = { iface = iface_name, v = manifest.v, tools = manifest.tools }
+      else
+        -- One line, and on with the scan: one mod's broken probe must not cost
+        -- the agent every other mod's tools.
+        complain("dropped provider " .. iface_name .. ": " .. unusable)
       end
-      -- ok but no `tools` table: not a valid manifest, silently skipped.
     end
   end
   return providers
@@ -49,8 +72,10 @@ function M.call(iface_name, fn_name, args)
     return { ok = false, e = "no_provider", m = "no such provider: " .. iface_name }
   end
 
-  local probed, manifest = pcall(remote.call, iface_name, PROBE_FN)
-  if not probed or type(manifest) ~= "table" or type(manifest.tools) ~= "table" then
+  -- Re-read and re-clean, quietly: the catalog already logged whatever it
+  -- dropped, and a call must never reach a tool the catalog refused to list.
+  local manifest = read_manifest(iface_name, nil)
+  if not manifest then
     return { ok = false, e = "no_provider", m = "provider manifest invalid: " .. iface_name }
   end
   if not manifest.tools[fn_name] then

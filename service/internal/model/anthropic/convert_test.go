@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/anthropics/anthropic-sdk-go"
+
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -98,5 +100,60 @@ func TestDecodeInputAlwaysBuildsAnObject(t *testing.T) {
 	}
 	if got := decodeInput(json.RawMessage(`{"a":1}`)); got["a"] != float64(1) {
 		t.Errorf("decoded %v", got)
+	}
+}
+
+// Extended thinking survives a round trip. A thinking block is signed, so the
+// loop has to hand back exactly what it got, in the position it got it in,
+// when the next round replays the assistant turn.
+func TestThinkingBlocksRoundTrip(t *testing.T) {
+	var msg sdk.Message
+	body := `{"id":"msg_1","type":"message","role":"assistant","model":"claude-opus-5",
+		"content":[
+			{"type":"thinking","thinking":"Count the forces first.","signature":"sig-abc"},
+			{"type":"redacted_thinking","data":"enc-xyz"},
+			{"type":"text","text":"Checking."},
+			{"type":"tool_use","id":"toolu_1","name":"tools__list_forces","input":{"force":"player"}}],
+		"stop_reason":"tool_use","usage":{"input_tokens":5,"output_tokens":7}}`
+	if err := json.Unmarshal([]byte(body), &msg); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	blocks := fromContentBlocks(msg.Content)
+	want := []model.Block{
+		{Type: model.BlockThinking, Thinking: "Count the forces first.", Signature: "sig-abc"},
+		{Type: model.BlockRedactedThinking, Data: "enc-xyz"},
+		{Type: model.BlockText, Text: "Checking."},
+		{Type: model.BlockToolUse, ID: "toolu_1", Name: "tools__list_forces"},
+	}
+	if len(blocks) != len(want) {
+		t.Fatalf("decoded %d blocks, want %d: %+v", len(blocks), len(want), blocks)
+	}
+	for i, w := range want {
+		got := blocks[i]
+		if got.Type != w.Type || got.Thinking != w.Thinking || got.Signature != w.Signature ||
+			got.Data != w.Data || got.Text != w.Text || got.ID != w.ID || got.Name != w.Name {
+			t.Errorf("block %d = %+v, want %+v", i, got, w)
+		}
+	}
+
+	out, err := json.Marshal(toMessageParams([]model.Message{{Role: model.RoleAssistant, Blocks: blocks}}))
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	request := string(out)
+	for _, want := range []string{
+		`"type":"thinking"`, `"thinking":"Count the forces first."`, `"signature":"sig-abc"`,
+		`"type":"redacted_thinking"`, `"data":"enc-xyz"`,
+	} {
+		if !strings.Contains(request, want) {
+			t.Errorf("request body is missing %s:\n%s", want, request)
+		}
+	}
+	order := []string{`"type":"thinking"`, `"type":"redacted_thinking"`, `"type":"text"`, `"type":"tool_use"`}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(request, order[i-1]) > strings.Index(request, order[i]) {
+			t.Fatalf("%s came after %s, so the blocks were reordered:\n%s", order[i-1], order[i], request)
+		}
 	}
 }

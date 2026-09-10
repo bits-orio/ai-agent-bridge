@@ -93,6 +93,12 @@ Notes:
   intact, and a value that can't be serialised to JSON breaks the caller.
 - Keep each tool bounded. A result over the size cap the service enforces is
   refused, never truncated.
+- Your manifest is checked before it reaches the agent. An entry whose `desc`
+  is not a string, or whose `params` is not a map of strings, is dropped with
+  one line in the log, and a probe that errors or returns no `tools` table
+  costs you every tool but nobody else theirs. A dropped tool cannot be
+  called either, so a typo in a manifest shows up as `no_tool` rather than as
+  a broken catalog.
 
 ### 2. Questions by interface, `ai-agent-bridge-v1`
 
@@ -113,6 +119,12 @@ end
 |---|---|---|
 | `ask` | `{ text, player_index?, force? }` | the new question's id, or `nil` if `text` was missing |
 | `get_event_id` | `"on_answer"` | this session's event id for `on_answer`, or `nil` |
+
+`text` must be a non-empty string. `force` must be the force's *name*, a
+string, and `player_index` a number; pass a `LuaForce` or a name where an index
+belongs and that field is dropped rather than stored, because one unencodable
+question would break every later poll for everybody. Nothing here errors: a
+mistake in your spec costs you the question, never a crash.
 
 ### 3. Answers by event, `on_answer`
 
@@ -154,15 +166,36 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 
 | op | request | reply `r` | writes storage |
 |---|---|---|---|
-| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, which `/ask` command name is live | no |
-| `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider, manifests verbatim | no |
+| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, which `/ask` command name is live | no |
+| `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
-| `poll` | `{after}` | questions with id greater than `after`, oldest first | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after`, oldest first, each `{id, text, player_index, player_name, force, tick}` | no |
 | `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders it, raises `on_answer` |
-| `answers` | `{after}` | answered questions with id greater than `after`, oldest first, each `{id, shape, lines, player_index}` | no |
+| `answers` | `{after?, limit?}` | answered questions with id greater than `after`, oldest first, each `{id, shape, lines, player_index}` | no |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
-`provider_error`, `bad_result`, `too_large`, `no_question`.
+`provider_error`, `bad_artifact`, `bad_result`, `too_large`, `no_question`.
+
+`after` defaults to 0 and `limit` to 16, with 64 the most any one reply
+carries. Page by sending the id of the last row you saw as the next `after`.
+
+`poll` returns questions nobody has answered yet, so `after` 0 means
+"everything still waiting" and a client that restarts and forgets its cursor
+re-answers nothing. `last_id` on `status` is the highest id the game has
+issued, which is the cursor a client wants for "tell me about questions from
+here on". Nothing about a cursor is stored in the save.
+
+`player_name` is the asker's name as it was when they asked, kept on the row
+even after they leave, because history is keyed by player name rather than by
+index. It is absent for a question another mod asked with no player.
+
+`answer` validates the artifact before it touches anything: a shape it does
+not know, or a field of the wrong type, comes back as `bad_artifact` and the
+question stays pending and answerable. Rendering happens before the question
+is marked answered, so an artifact that cannot be drawn never leaves a
+question marked done with nothing behind it. Answering a question that is
+already answered succeeds and changes nothing, so a client whose reply went
+missing can safely send the same answer again.
 
 `lines` on an `answers` row is exactly what the asker saw, title first when
 the artifact had one, already clipped to the shape's caps and stripped of
@@ -180,7 +213,7 @@ the frozen v1 surface above.
 | op | request | reply `r` |
 |---|---|---|
 | `ping` | `{}` | `{player_index, tick, has_player}` as received by the command |
-| `big` | `{kb}` | a JSON string of roughly `kb` kilobytes, to find where RCON truncates a reply |
+| `big` | `{kb}` | a JSON string of roughly `kb` kilobytes, to find where RCON truncates a reply, `kb` clamped to 4096 |
 | `write` | `{}` | increments a counter in storage, raises `on_answer` with a test payload, returns the new counter |
 | `pcall_test` | `{}` | calls a self-test provider that always errors, returns whether `pcall` caught it |
 
@@ -196,10 +229,12 @@ chat line or the popup's window caption.
 - `table`, up to five columns, up to eight rows.
 - `notice`, one line, a warning or confirmation.
 
-Every string is clipped to 160 bytes on a UTF-8 boundary and has its control
-characters replaced by spaces, so a player name echoed back into an answer
-cannot forge an extra line. Factorio rich text such as `[item=iron-plate]`
-passes through untouched.
+Every string has its control characters replaced by spaces, so a player name
+echoed back into an answer cannot forge an extra line, and is clipped to 640
+bytes on a UTF-8 boundary. That clip is a backstop for a client that sends
+something silly: the service clips every cell to 160 characters first, and 160
+characters of Japanese or emoji is up to 640 bytes. Factorio rich text such as
+`[item=iron-plate]` passes through untouched.
 
 In a popup, the `table` shape becomes a real GUI table with a bold header row.
 Every other shape becomes a column of labels. The window centres itself, its
@@ -213,13 +248,21 @@ service.
 
 | tool | arguments | returns |
 |---|---|---|
-| `list_forces` | force only | every force: name, player count, connected player count |
-| `list_players` | force only | that force's players: name, connected, admin |
+| `list_forces` | `limit` | the forces: name, player count, connected player count, with `total` and `shown` |
+| `list_players` | `connected`, `limit` | that force's players: name, connected, admin, with `known`, `total` and `shown` |
 | `current_research` | force only | what that force is researching, and its progress |
-| `list_surfaces` | force only | every surface: name, index, planet if it has one, how many of that force's players stand on it |
+| `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it, with `total` and `shown` |
 | `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute |
 | `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked |
 | `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
+
+Every tool that lists things is bounded, because a reply over the byte cap is
+refused whole rather than cut short. `list_players` shows connected players
+only unless you pass `connected = false`, and returns 20 rows by default, 50 at
+most. `list_surfaces` returns 20 by default and 50 at most; `list_forces` 50 by
+default and 100 at most. All three sort by name before they cut and report
+`total` beside `shown`, so an agent can say "12 online of 214 known" instead of
+believing it saw everyone.
 
 `window` is one of the engine's own precisions: `five_seconds`, `one_minute`,
 `ten_minutes`, `one_hour`, `ten_hours`, `fifty_hours`,
@@ -261,3 +304,5 @@ A question a player asked with the chat prefix appears twice, once as the
 See the [GitHub repo](https://github.com/bits-orio/ai-agent-bridge) for the
 full design (`CONTEXT.md`, `PLAN.md`) and the service that drives this
 protocol.
+
+Question text is kept to 400 bytes, cut on a UTF-8 boundary, so a full poll page of sixteen questions always fits one reply. The service halves its page size if a reply is still refused as too large.

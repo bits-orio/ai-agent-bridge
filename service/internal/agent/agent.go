@@ -3,14 +3,16 @@
 // The shape of a round is fixed. The model gets the system prompt, the
 // conversation so far and every tool the server exposes. It calls tools, all
 // of a round's calls run at once and come back in one user message, and it
-// ends by calling submit_answer. Anything else that can end a question, a
-// model that stops talking, a round cap, a token budget, a quota, ends it
-// with an artifact too, so a player always gets an answer.
+// ends by calling submit_answer in a round of its own: an answer written
+// beside a read it has not seen yet is refused. Anything else that can end a
+// question, a model that stops talking, a round cap, a token budget, a quota,
+// ends it with an artifact too, so a player always gets an answer.
 package agent
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -32,13 +34,23 @@ const (
 	stalledNotice = "The model stopped without answering. Try asking again."
 )
 
+// What the model is told when a round submits an answer it cannot mean yet. A
+// submission beside a read would have been written before the read came back,
+// so it is refused rather than delivered.
+const (
+	besideReadsRefusal = "submit_answer cannot run in the same round as other tools: you would be answering " +
+		"before their results reach you. Call the reads now, look at what they return, then call submit_answer on its own."
+	secondSubmitRefusal = "only the first submit_answer of a round is used. This one was ignored."
+)
+
 // Question is one thing to answer, as the companion handed it over.
 type Question struct {
 	ID          int64
 	Text        string
 	PlayerIndex *int
+	PlayerName  string // empty when the asker is not a connected player
 	Force       string
-	Asker       string // human label for the prompt and the log
+	Asker       string // a label the caller chose, used when no player name came with the question
 }
 
 func (q Question) force() string {
@@ -48,14 +60,23 @@ func (q Question) force() string {
 	return q.Force
 }
 
-func (q Question) askerLabel() string {
+// AskerLabel is how the asker is named to the model and in the log. The name
+// leads when the companion sent one: history rows are keyed by player name, so
+// a model that knows the name can ask history about this player by name.
+func (q Question) AskerLabel() string {
+	if q.PlayerName != "" {
+		if q.PlayerIndex != nil {
+			return fmt.Sprintf("%s (player %d, force %s)", q.PlayerName, *q.PlayerIndex, q.force())
+		}
+		return fmt.Sprintf("%s (force %s)", q.PlayerName, q.force())
+	}
 	if q.Asker != "" {
 		return q.Asker
 	}
 	if q.PlayerIndex != nil {
-		return fmt.Sprintf("player %d", *q.PlayerIndex)
+		return fmt.Sprintf("player %d (force %s)", *q.PlayerIndex, q.force())
 	}
-	return "another mod"
+	return fmt.Sprintf("another mod (force %s)", q.force())
 }
 
 // key is what memory and quota are counted against: the player when there is
@@ -136,6 +157,9 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	for round := 1; round <= a.caps.maxRounds(); round++ {
 		step, err := a.mdl.Step(ctx, system, msgs, defs)
 		if err != nil {
+			// The asker got no answer, so the slot goes back: a model
+			// outage must not spend anyone's hourly allowance.
+			a.quota.refund(q.key(), now)
 			return Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage)}, err
 		}
 		usage.Add(step.Usage)
@@ -146,7 +170,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			return a.finish(q, fromText(step), round, usage), nil
 		}
 
-		results, artifact, submitted := a.runCalls(ctx, calls, byName)
+		results, artifact, submitted := runCalls(ctx, calls, byName, q.force())
 		if submitted {
 			return a.finish(q, artifact, round, usage), nil
 		}
@@ -159,53 +183,82 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage), nil
 }
 
-// runCalls executes one round's tool calls at once and returns their results
-// in the order the model asked for them. A submitted artifact ends the round
-// there and then; the results are only needed if it did not.
-func (a *Agent) runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool) ([]model.Block, Artifact, bool) {
+// runCalls executes one round's tool calls and reports whether the round
+// answered. submit_answer is handled here rather than as a tool, because it
+// ends the loop: a round that mixes it with reads is refused, and a round that
+// submits twice keeps the first submission in block order, so which answer
+// reaches the player never depends on which goroutine finished first.
+func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string) ([]model.Block, Artifact, bool) {
 	results := make([]model.Block, len(calls))
-	var (
-		mu        sync.Mutex
-		submitted *Artifact
-		wg        sync.WaitGroup
-	)
+	submits, reads := partition(calls)
+
+	if len(reads) > 0 {
+		for _, i := range submits {
+			results[i] = failed(calls[i].ID, errors.New(besideReadsRefusal))
+		}
+		runReads(ctx, calls, reads, results, byName, force)
+		return results, Artifact{}, false
+	}
+
+	for n, i := range submits {
+		artifact, err := parseSubmission(calls[i].Input)
+		if err != nil {
+			results[i] = failed(calls[i].ID, err)
+			continue
+		}
+		results[i] = model.Block{Type: model.BlockToolResult, ID: calls[i].ID, Content: "sent"}
+		for _, later := range submits[n+1:] {
+			results[later] = failed(calls[later].ID, errors.New(secondSubmitRefusal))
+		}
+		return results, artifact, true
+	}
+	return results, Artifact{}, false
+}
+
+// partition splits one round's calls into submissions and reads, keeping the
+// order the model produced them in.
+func partition(calls []model.Block) (submits, reads []int) {
 	for i, call := range calls {
+		if call.Name == SubmitTool {
+			submits = append(submits, i)
+			continue
+		}
+		reads = append(reads, i)
+	}
+	return submits, reads
+}
+
+// runReads runs a round's reads at once and writes each result into its own
+// slot, so the results come back in the order the model asked for them.
+func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string) {
+	var wg sync.WaitGroup
+	for _, i := range reads {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if call.Name == SubmitTool {
-				artifact, err := parseSubmission(call.Input)
-				if err != nil {
-					results[i] = failed(call.ID, err)
-					return
-				}
-				mu.Lock()
-				if submitted == nil {
-					submitted = &artifact
-				}
-				mu.Unlock()
-				results[i] = model.Block{Type: model.BlockToolResult, ID: call.ID, Content: "sent"}
-				return
-			}
-			t, known := byName[call.Name]
-			if !known {
-				results[i] = failed(call.ID, fmt.Errorf("there is no tool named %q", call.Name))
-				return
-			}
-			out, err := t.Call(ctx, call.Input)
-			if err != nil {
-				results[i] = failed(call.ID, err)
-				return
-			}
-			results[i] = model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out)}
+			results[i] = read(ctx, calls[i], byName, force)
 		}()
 	}
 	wg.Wait()
+}
 
-	if submitted != nil {
-		return results, *submitted, true
+// read runs one tool. Every tool that declares force gets the asker's force
+// filled in when the model left it out, game tools and history tools alike,
+// which is what the system prompt promises the model.
+func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string) model.Block {
+	t, known := byName[call.Name]
+	if !known {
+		return failed(call.ID, fmt.Errorf("there is no tool named %q", call.Name))
 	}
-	return results, Artifact{}, false
+	args := call.Input
+	if tools.Declares(t.Schema, catalog.ForceParam) {
+		args = tools.FillString(args, catalog.ForceParam, force)
+	}
+	out, err := t.Call(ctx, args)
+	if err != nil {
+		return failed(call.ID, err)
+	}
+	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out)}
 }
 
 // finish clips the artifact, remembers the exchange and prices the question.
@@ -227,12 +280,27 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 // that finished talking gets its text wrapped as a summary; one that stopped
 // for any other reason gets a notice, because its text is likely a fragment.
 func fromText(step model.Step) Artifact {
-	text := model.TextOf(step.Blocks)
-	if step.StopReason != model.StopEndTurn || strings.TrimSpace(text) == "" {
+	if step.StopReason != model.StopEndTurn {
 		return Notice(LevelWarning, stalledNotice)
 	}
-	lines := strings.Split(text, "\n")
+	// Blank lines go before the clip, or a model that opened with a newline
+	// would spend the three summary lines on nothing.
+	lines := written(strings.Split(model.TextOf(step.Blocks), "\n"))
+	if len(lines) == 0 {
+		return Notice(LevelWarning, stalledNotice)
+	}
 	return Summary(lines...)
+}
+
+// written keeps the lines that have something on them.
+func written(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func parseSubmission(input json.RawMessage) (Artifact, error) {

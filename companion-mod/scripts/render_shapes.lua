@@ -4,13 +4,19 @@
 -- presentation, not protocol validation.
 --
 -- Every string value passes through line(), which strips control characters
--- (mainly newlines) and clips to MAX_CHARS bytes. Tool results and question
--- text are player-typed data the model may echo back into an artifact;
--- without this, a value like "a\nSomeone: fake line" could forge an extra chat
--- line (PLAN.md open question 6, prompt injection). Factorio rich-text tags
--- are left alone, a supported feature of player.print and of a label caption.
+-- (mainly newlines) and clips to MAX_BYTES. Tool results and question text are
+-- player-typed data the model may echo back into an artifact; without this, a
+-- value like "a\nSomeone: fake line" could forge an extra chat line (PLAN.md
+-- open question 6, prompt injection). Factorio rich-text tags are left alone,
+-- a supported feature of player.print and of a label caption.
+--
+-- MAX_BYTES is a safety net, not the cap a reader sees. The service clips
+-- every cell to 160 characters before it sends the artifact, and 160
+-- characters of Japanese or emoji take up to 640 bytes, so clipping at 160
+-- bytes here would cut a legal answer to a third of its length. A client that
+-- drives the protocol without the service meets the net instead.
 
-local MAX_CHARS = 160
+local MAX_BYTES = 640
 
 -- Cut to n bytes without leaving half a UTF-8 sequence behind. Player names
 -- and team names carry non-ASCII often enough to matter. Walks back to the
@@ -36,9 +42,17 @@ local function clip_bytes(s, n)
   return s:sub(1, cut)
 end
 
+-- Scalars render as themselves; anything else says so. A table reaching
+-- tostring would print its heap address, which differs on every peer, and
+-- that string is stored on the question: mod storage would stop matching
+-- between the server and its clients and the next checksum would desync them.
 local function line(v)
   if v == nil then return "" end
-  return clip_bytes((tostring(v):gsub("%c+", " ")), MAX_CHARS)
+  local kind = type(v)
+  if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
+    return "(unrenderable value)"
+  end
+  return clip_bytes((tostring(v):gsub("%c+", " ")), MAX_BYTES)
 end
 
 local function clip(t, n)

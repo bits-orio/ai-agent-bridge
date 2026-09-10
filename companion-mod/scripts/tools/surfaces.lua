@@ -7,12 +7,19 @@
 -- LuaPlanet::name, LuaControl::surface.
 
 local force_lookup = require("scripts.tools.force_lookup")
+local bounded      = require("scripts.tools.bounded")
+
+local DEFAULT_SURFACES = 20
+local MAX_SURFACES = 50
 
 local M = {}
 
 M.manifest = {
   list_surfaces = {
-    desc = "Every surface in the game: name, index, the planet it belongs to if it has one, and how many of this force's players are standing on it. Call this first when a question is about a place, then pass one of these names as the surface argument of another tool.",
+    desc = "Surfaces in the game: name, index, the planet it belongs to if it has one, and how many of this force's players are standing on it. Sorted by name. Call this first when a question is about a place, then pass one of these names as the surface argument of another tool. The reply reports total beside shown, so raise limit when there are more surfaces than came back.",
+    params = {
+      limit = "integer how many rows to return, default " .. DEFAULT_SURFACES .. ", at most " .. MAX_SURFACES,
+    },
   },
 }
 
@@ -33,6 +40,8 @@ local function list_surfaces(a)
     end
   end
 
+  -- Every space platform is a surface of its own, so a long-running save can
+  -- hold a hundred of them. Sorted, then cut.
   local rows = {}
   for _, surface in pairs(game.surfaces) do
     rows[#rows + 1] = {
@@ -42,8 +51,9 @@ local function list_surfaces(a)
       force_players = players_on[surface.index] or 0,
     }
   end
-  table.sort(rows, function(x, y) return x.name < y.name end)
-  return { force = force.name, surfaces = rows }
+  bounded.by_name(rows)
+  local shown = bounded.cut(rows, bounded.limit(a.limit, DEFAULT_SURFACES, MAX_SURFACES))
+  return { force = force.name, total = #rows, shown = #shown, surfaces = shown }
 end
 
 M.functions = { list_surfaces = list_surfaces }

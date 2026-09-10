@@ -67,7 +67,7 @@ def _read_info_json(info_path: Path) -> Optional[ModLink]:
 
 def companion_mod() -> ModLink:
     """The mod this harness always links in. Raises if companion-mod/info.json
-    is missing -- there is no meaningful e2e run without it."""
+    is missing: there is no meaningful e2e run without it."""
     link = _read_info_json(REPO_ROOT / "companion-mod" / "info.json")
     if link is None:
         raise FileNotFoundError("companion-mod/info.json not found; is this repo checked out at REPO_ROOT?")
@@ -249,8 +249,15 @@ class LogError(RuntimeError):
 
 def _wait_for_log(log_path: Path, needle: str, timeout: float, proc: Optional[subprocess.Popen] = None) -> None:
     """Polls log_path for `needle`, mirroring start-server.sh's own wait loop.
-    Also fails fast if the process exited, or an " Error " line appears
-    first (the pattern start-server.sh greps for)."""
+    Also fails fast if the process exited, or a line containing " Error "
+    appears first (the pattern start-server.sh greps for), with one
+    exception: the "InterruptibleStdioStream ... Got EOF on stdin; closing"
+    line headless Factorio writes on every non-interactive start (stdin not
+    a tty), which is benign and unrelated to whether the server actually
+    came up. Treating it as fatal aborted runs that would otherwise have
+    passed (review-fix contract item 13). Callers also pass stdin=DEVNULL
+    explicitly so this holds the same way whether or not the caller's own
+    stdin is a tty."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc is not None and proc.poll() is not None:
@@ -260,8 +267,12 @@ def _wait_for_log(log_path: Path, needle: str, timeout: float, proc: Optional[su
             text = log_path.read_text(encoding="utf-8", errors="replace")
             if needle in text:
                 return
-            if " Error " in text:
-                raise LogError("error in %s:\n%s" % (log_path, text[-2000:]))
+            error_lines = [
+                line for line in text.splitlines()
+                if " Error " in line and "InterruptibleStdioStream" not in line
+            ]
+            if error_lines:
+                raise LogError("error in %s:\n%s" % (log_path, "\n".join(error_lines[-20:])))
         time.sleep(1)
     raise LogTimeout("timed out after %ss waiting for %r in %s" % (timeout, needle, log_path))
 
@@ -405,7 +416,12 @@ class Server:
             "--map-gen-settings", str(map_gen),
         ]
         self._log_file = open(self.log_path, "w", encoding="utf-8")
-        self.proc = subprocess.Popen(cmd, stdout=self._log_file, stderr=subprocess.STDOUT)
+        # stdin=DEVNULL: a plain inherited stdin is a tty in an interactive
+        # shell and closed (or not a tty) under a test runner/CI, and headless
+        # Factorio's own reaction to that difference is exactly the log line
+        # _wait_for_log now has to tolerate. Pinning it to DEVNULL makes the
+        # startup log the same regardless of how this harness itself was run.
+        self.proc = subprocess.Popen(cmd, stdout=self._log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         _wait_for_log(self.log_path, "Starting RCON", timeout=timeout, proc=self.proc)
 
     def stop(self, timeout: float = 20) -> None:
@@ -460,7 +476,7 @@ class Client:
             "--mp-connect", "127.0.0.1:%d" % self.server.game_port,
         ]
         self._log_file = open(self.log_path, "w", encoding="utf-8")
-        self.proc = subprocess.Popen(cmd, stdout=self._log_file, stderr=subprocess.STDOUT)
+        self.proc = subprocess.Popen(cmd, stdout=self._log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         # "to(InGame)" is the client's own multiplayer state-machine reaching
         # the playable state (verified against a real client-vs-rig log).
         _wait_for_log(self.log_path, "to(InGame)", timeout=timeout, proc=self.proc)

@@ -38,6 +38,20 @@ import (
 // time a call reports an unknown provider, whichever comes first.
 const catalogTTL = 10 * time.Minute
 
+// pollLimit is how many questions one poll asks for. The companion serves the
+// oldest unanswered ones, so a page at a time is all the service ever needs and
+// a backlog can never encode past the companion's reply cap.
+const pollLimit = 16
+
+// maxDeliveries is how many times one answer is offered to the companion before
+// the service stops trying (review-fix contract 3). The artifact is already paid
+// for, so it is worth a retry; it is not worth retrying forever.
+const maxDeliveries = 3
+
+// heartbeatEvery is how often a service with nothing to do says so, which is how
+// an operator tells "idle" from "wedged" in the log.
+const heartbeatEvery = 5 * time.Minute
+
 const modelFailedNotice = "I could not reach the model just now. Try again in a moment."
 
 func runService(cfg *config.Config, client *rpc.Client) {
@@ -55,11 +69,12 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	defer store.Close()
 
 	r := &runner{
-		cfg:    cfg,
-		rpc:    client,
-		caller: &toolCaller{client: client},
-		store:  store,
-		stats:  controlapi.NewStats(mdl.Name(), time.Now()),
+		cfg:      cfg,
+		rpc:      client,
+		caller:   &toolCaller{client: client},
+		store:    store,
+		stats:    controlapi.NewStats(mdl.Name(), time.Now()),
+		inFlight: map[int64]*delivery{},
 		agent: agent.New(mdl, agent.Caps{
 			MaxRounds:                 cfg.Agent.MaxRounds,
 			MaxTokensPerQuestion:      cfg.Agent.MaxTokensPerQuestion,
@@ -96,8 +111,33 @@ type runner struct {
 
 	tools   []tools.Tool
 	builtAt time.Time
-	cursor  int64
-	lastErr string
+
+	// inFlight is one entry per question the service has picked up, kept until
+	// the companion stops offering it. No cursor is kept anywhere, in memory or
+	// on disk (review-fix contract 3): the companion decides what is still
+	// unanswered, so a restart resumes instead of re-answering everything its
+	// ring still holds.
+	inFlight map[int64]*delivery
+
+	answered     int
+	lastActivity time.Time
+	pollFailing  bool
+
+	// page is the poll page size in use. It starts at pollLimit, halves each
+	// time the companion refuses a poll reply as too_large (sixteen long
+	// questions can outgrow the reply cap) and goes back to pollLimit once a
+	// page comes back short, which means the backlog has drained.
+	page int
+}
+
+// delivery is what the service knows about one question: the artifact the model
+// produced, how many times it has been offered to the companion, and whether the
+// question is finished with. A finished question may keep coming back in the poll
+// reply (the companion never rendered it), and must not be answered twice.
+type delivery struct {
+	result   agent.Result
+	attempts int
+	done     bool
 }
 
 // greet says hello to the companion once, so an operator sees straight away
@@ -111,50 +151,71 @@ func (r *runner) greet(ctx context.Context) {
 	}
 	r.stats.SetConnected(true)
 	r.stats.SetModVersion(st.ModVersion)
-	log.Printf("run: companion %s on protocol %d, %d player(s), %d question(s) pending, ask command %s",
-		st.ModVersion, st.ProtocolVersion, st.PlayerCount, st.PendingCount, st.AskCommand)
+	log.Printf("run: companion %s on protocol %d, %d player(s), %d question(s) pending, %d asked so far, ask command %s",
+		st.ModVersion, st.ProtocolVersion, st.PlayerCount, st.PendingCount, st.LastID, st.AskCommand)
 }
 
 func (r *runner) loop(ctx context.Context) {
 	ticker := time.NewTicker(r.cfg.Interval())
 	defer ticker.Stop()
+	heartbeat := time.NewTicker(heartbeatEvery)
+	defer heartbeat.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			r.tick(ctx)
+		case <-heartbeat.C:
+			r.heartbeat()
 		}
 	}
 }
 
 func (r *runner) tick(ctx context.Context) {
-	questions, err := r.rpc.Poll(ctx, r.cursor)
+	limit := r.pageSize()
+	questions, err := r.rpc.Poll(ctx, 0, limit)
 	if err != nil {
+		if rpc.HasCode(err, rpc.CodeTooLarge) && limit > 1 {
+			r.page = limit / 2
+			log.Printf("poll reply too large at %d questions, trying %d", limit, r.page)
+			return
+		}
 		r.stats.SetConnected(false)
-		r.logOnce(fmt.Sprintf("run: poll failed: %v", err))
+		r.pollFailed(err)
 		return
 	}
+	if len(questions) < limit {
+		r.page = pollLimit
+	}
 	r.stats.SetConnected(true)
-	r.lastErr = ""
+	r.pollRecovered()
+	r.forgetGone(questions, limit)
 	for _, q := range questions {
-		r.answer(ctx, q)
-		r.cursor = q.ID
+		r.handle(ctx, q)
 	}
 }
 
-// answer runs one question and sends the artifact back. Every ending delivers
-// something: a model that fails still gets a notice printed in the game
-// rather than leaving the asker waiting.
-func (r *runner) answer(ctx context.Context, q rpc.Question) {
-	question := agent.Question{
-		ID:          q.ID,
-		Text:        q.Text,
-		PlayerIndex: q.PlayerIndex,
-		Force:       q.Force,
-		Asker:       askerLabel(q),
+// handle takes one polled question as far as it can go this tick: run it if it
+// is new, deliver it, and leave it alone once it is finished with.
+func (r *runner) handle(ctx context.Context, q rpc.Question) {
+	state := r.inFlight[q.ID]
+	if state == nil {
+		state = &delivery{result: r.run(ctx, q)}
+		r.inFlight[q.ID] = state
 	}
-	log.Printf("question %d from %s (force %s): %s", q.ID, question.Asker, q.Force, q.Text)
+	if state.done {
+		return
+	}
+	r.deliver(ctx, q, state)
+}
+
+// run is the part the operator pays for: the agent loop. Every ending produces
+// an artifact, so a model that fails still has a notice to deliver rather than
+// leaving the asker waiting.
+func (r *runner) run(ctx context.Context, q rpc.Question) agent.Result {
+	question := agentQuestion(q)
+	log.Printf("question %d from %s: %s", q.ID, question.AskerLabel(), q.Text)
 
 	result, err := r.agent.Answer(ctx, question, r.toolsFor(ctx))
 	if err != nil {
@@ -162,12 +223,101 @@ func (r *runner) answer(ctx context.Context, q rpc.Question) {
 		result.Artifact = agent.Notice(agent.LevelWarning, modelFailedNotice)
 	}
 	r.stats.RecordAnswer(result.Usage, result.CostUSD)
-	log.Printf("answer %d shape=%s rounds=%d tokens_in=%d tokens_out=%d cost_usd=%.4f",
-		q.ID, result.Artifact.Shape, result.Rounds, result.Usage.InputTokens, result.Usage.OutputTokens, result.CostUSD)
+	r.answered++
+	r.lastActivity = time.Now()
+	return result
+}
 
-	if _, err := r.rpc.Answer(ctx, q.ID, result.Artifact); err != nil {
-		log.Printf("answer %d: could not deliver it: %v", q.ID, err)
+// deliver offers one artifact to the companion. A delivery that failed on the
+// wire is tried again on the next tick with the artifact already in hand: the
+// model is never asked the same question twice. Three failures and the service
+// stops trying, with a line saying so.
+func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
+	state.attempts++
+	delivered, err := r.rpc.Answer(ctx, q.ID, state.result.Artifact)
+	if err == nil && !delivered {
+		// The companion replied without confirming. Treated as a failed
+		// delivery, so the three-attempt budget applies instead of the answer
+		// being dropped on the floor.
+		err = errors.New("the companion did not confirm it")
 	}
+	switch {
+	case err == nil:
+		state.done = true
+		log.Printf("answer %d shape=%s rounds=%d tokens=%d/%d cost=$%.4f",
+			q.ID, state.result.Artifact.Shape, state.result.Rounds,
+			state.result.Usage.InputTokens, state.result.Usage.OutputTokens, state.result.CostUSD)
+	case rpc.HasCode(err, rpc.CodeBadArtifact):
+		// The companion cannot render this artifact, so sending it again would
+		// fail the same way (review-fix contract 5).
+		state.done = true
+		log.Printf("answer %d: the companion refused the artifact, not retrying: %v", q.ID, err)
+	case state.attempts >= maxDeliveries:
+		state.done = true
+		log.Printf("answer %d: giving up after %d failed deliveries: %v", q.ID, state.attempts, err)
+	default:
+		log.Printf("answer %d: could not deliver it, trying again next tick: %v", q.ID, err)
+	}
+}
+
+// forgetGone drops what the service remembers about questions the companion no
+// longer offers: answered and rendered, or aged out of its ring. A full page may
+// be hiding newer questions, so an id above it is kept until the service has
+// been shown everything pending.
+// pageSize is the poll page in use, pollLimit until a reply proves too large.
+func (r *runner) pageSize() int {
+	if r.page <= 0 {
+		return pollLimit
+	}
+	return r.page
+}
+
+func (r *runner) forgetGone(offered rpc.PollReply, limit int) {
+	if len(r.inFlight) == 0 {
+		return
+	}
+	live := make(map[int64]bool, len(offered))
+	var highest int64
+	for _, q := range offered {
+		live[q.ID] = true
+		if q.ID > highest {
+			highest = q.ID
+		}
+	}
+	full := len(offered) >= limit
+	for id := range r.inFlight {
+		if live[id] || (full && id > highest) {
+			continue
+		}
+		delete(r.inFlight, id)
+	}
+}
+
+// heartbeat says the service is alive with nothing to do. It keeps quiet while
+// questions are arriving: the per-question lines already say that.
+func (r *runner) heartbeat() {
+	if time.Since(r.lastActivity) < heartbeatEvery {
+		return
+	}
+	r.lastActivity = time.Now()
+	log.Printf("idle, %d questions answered", r.answered)
+}
+
+// pollFailed logs once per failure streak: a server that is down costs one line,
+// not one line per poll.
+func (r *runner) pollFailed(err error) {
+	if r.pollFailing {
+		return
+	}
+	r.pollFailing = true
+	log.Printf("poll failed: %v", err)
+}
+
+func (r *runner) pollRecovered() {
+	if r.pollFailing {
+		log.Print("poll recovered, the companion is answering again")
+	}
+	r.pollFailing = false
 }
 
 // toolsFor returns the catalog to run a question against, rebuilding it when
@@ -198,16 +348,6 @@ func (r *runner) rebuild(ctx context.Context) {
 	log.Printf("catalog: %d tool(s) from %d provider(s), %d history tool(s)", len(game), len(providers), len(stored))
 }
 
-// logOnce keeps a repeating failure, a server that is down for instance, to
-// one line instead of one line per poll.
-func (r *runner) logOnce(msg string) {
-	if msg == r.lastErr {
-		return
-	}
-	r.lastErr = msg
-	log.Print(msg)
-}
-
 // toolCaller is the rpc client with a flag on it: a call that reports an
 // unknown provider or an unknown tool means the catalog no longer matches the
 // server, so the next question rebuilds it.
@@ -218,8 +358,7 @@ type toolCaller struct {
 
 func (t *toolCaller) CallTool(ctx context.Context, iface, fn string, args any) (json.RawMessage, error) {
 	out, err := t.client.CallTool(ctx, iface, fn, args)
-	var protocol *rpc.Error
-	if errors.As(err, &protocol) && (protocol.Code == rpc.CodeNoProvider || protocol.Code == rpc.CodeNoTool) {
+	if rpc.HasCode(err, rpc.CodeNoProvider) || rpc.HasCode(err, rpc.CodeNoTool) {
 		t.stale.Store(true)
 	}
 	return out, err
@@ -260,9 +399,18 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 	return anthropic.New(cfg.Anthropic.APIKey, cfg.Anthropic.Model), nil
 }
 
-func askerLabel(q rpc.Question) string {
-	if q.PlayerIndex != nil {
-		return fmt.Sprintf("player %d", *q.PlayerIndex)
+// agentQuestion maps one polled question onto the agent's question type. The
+// asker's name travels with it, which is what lets the label name a player:
+// history rows are keyed by player name, so "when did I last die" can only be
+// scoped to the person who asked when the prompt carries their name (review-fix
+// contract 9). The label itself is built in one place, agent.Question.AskerLabel,
+// so the log line and the system prompt always name the asker the same way.
+func agentQuestion(q rpc.Question) agent.Question {
+	return agent.Question{
+		ID:          q.ID,
+		Text:        q.Text,
+		PlayerIndex: q.PlayerIndex,
+		PlayerName:  q.PlayerName,
+		Force:       q.Force,
 	}
-	return "another mod"
 }

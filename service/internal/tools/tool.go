@@ -39,3 +39,55 @@ func ObjectSchema(props map[string]any, required ...string) map[string]any {
 		"additionalProperties": false,
 	}
 }
+
+// Declares reports whether a tool's schema has a property of this name. The
+// agent uses it to find the tools that take the reserved force argument,
+// whichever package built them: a game tool out of the catalog and a history
+// tool out of SQLite are the same shape here.
+func Declares(schema map[string]any, prop string) bool {
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, found := props[prop]
+	return found
+}
+
+// FillString sets one string argument the caller left out and returns the
+// arguments as a JSON object, so a tool called with nothing at all still gets
+// a table it can index. An argument already carrying a non-empty string wins,
+// and arguments that are not a JSON object are passed through untouched for
+// the tool itself to refuse.
+func FillString(args json.RawMessage, name, value string) json.RawMessage {
+	if value == "" {
+		return args
+	}
+	fields := map[string]json.RawMessage{}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &fields); err != nil {
+			return args
+		}
+	}
+	if isString(fields[name]) {
+		return args
+	}
+	filled, err := json.Marshal(value)
+	if err != nil {
+		return args
+	}
+	fields[name] = filled
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return args
+	}
+	return out
+}
+
+// isString reports whether raw is a non-empty JSON string.
+func isString(raw json.RawMessage) bool {
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return false
+	}
+	return s != ""
+}

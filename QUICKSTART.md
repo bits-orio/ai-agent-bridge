@@ -87,10 +87,25 @@ in its `status` reply.
 
 ## Troubleshooting
 
-- **Nothing happens after `/ask`.** Check the service log; it should show a
-  poll every second or two. If it never sees your question, confirm
-  `factorio.rcon.address` and `FACTORIO_RCON_PASSWORD` actually match the
-  server.
+- **Nothing happens after `/ask`.** The service does not log every poll
+  (that would be a line every second or two for nothing); it logs one line
+  the moment it actually picks a question up:
+
+  ```
+  question 3 from Alice (player 1, force player): what forces are there?
+  answer 3 shape=summary rounds=1 tokens=100/20 cost=$0.0004
+  ```
+
+  With nothing to do it says so every five minutes, `idle, 7 questions
+  answered`, so a quiet log still tells you the service is alive.
+
+  If you never see a `question N from ...` line for what you typed, the
+  service isn't seeing your question at all: confirm `factorio.rcon.address`
+  and `FACTORIO_RCON_PASSWORD` actually match the server. A poll that can't
+  reach the server logs `run: poll failed: <error>` once (not on every
+  retry) and names the real cause. If the `question` line shows up but the
+  `answer` line, or the reply in game, doesn't, look for `answer N: could not
+  deliver it: <error>` right after it.
 - **The service refuses to start.** It writes `aab.effective.yaml` next to
   itself on every run: the fully-resolved config with each secret marked
   `SET (n chars)` or `MISSING`. Read that before re-reading the YAML.

@@ -134,7 +134,7 @@ func runPoll(ctx context.Context, c *rpc.Client, args []string) {
 		}
 		after = n
 	}
-	qs, err := c.Poll(ctx, after)
+	qs, err := c.Poll(ctx, after, 0)
 	fatalOnRPCError("poll", err)
 	printJSON(qs)
 }

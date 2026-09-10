@@ -7,7 +7,7 @@ Every scenario talks to the companion the way the real service does: the
 aab-rpc-v1 protocol over RCON (see companion-mod/README.md), plus raw /sc
 for the handful of things only a mod itself can do (raising on_console_chat,
 killing a character, reading settings.global). Nothing here talks to the Go
-service directly -- these are black-box checks of the two halves working
+service directly. These are black-box checks of the two halves working
 together, driven the same way an operator's server would be.
 
 Several scenarios exercise surface that does not exist yet as this file is
@@ -32,6 +32,15 @@ from typing import Callable, List, Optional, Tuple
 Status = str  # "PASS" | "FAIL" | "SKIP"
 
 
+class RpcError(RuntimeError):
+    """An aab-rpc-v1 call replied ok=false while a scenario was polling for
+    something else to appear. Distinct from TimeoutError so a scenario can
+    fail on the spot with the real error code instead of retrying an
+    ok=false reply until the timeout, which reads exactly like "not answered
+    yet" (review-fix contract item 13: "poll_for_answer ... fails fast on
+    ok: false")."""
+
+
 @dataclass
 class Result:
     name: str
@@ -50,6 +59,14 @@ class Ctx:
     answer_timeout: float = 25.0
     question_timeout: float = 10.0
     poll_interval: float = 0.5
+    events_file: Optional[object] = None  # pathlib.Path to the companion's
+    # events.jsonl for this run (rig.Server.events_file), or None if the
+    # caller never set one; scenario_last_death falls back to a fixed settle
+    # window when it's absent.
+    tailer_settle_seconds: float = 0.9  # see scenario_last_death: how long
+    # to wait, once events.jsonl carries the death, for the file tailer and
+    # the poll loop (independent tickers, both on poll_interval) to both
+    # catch up. run.py sets this from the interval it actually configured.
 
 
 # ---------------------------------------------------------------------------
@@ -99,49 +116,93 @@ def ask_via_remote(conn, text: str, player_index: Optional[int] = None, force: O
 
 
 def latest_known_qid(conn) -> int:
-    env = aab_rpc(conn, "poll", after=0)
-    entries = as_list(env.get("r")) if env.get("ok") else []
-    return max((e.get("id", 0) for e in entries), default=0)
+    """The highest question id the companion has issued so far, read from
+    status.last_id (review-fix contract item 4). Deriving it from a `poll`
+    reply instead is wrong now that poll serves only unanswered questions and
+    at most a page of them: every question already answered is missing from
+    that reply, so the highest id in it is below the real one and a scenario
+    using it as a baseline can match a question older than the one it just
+    created."""
+    env = aab_rpc(conn, "status")
+    if not env.get("ok"):
+        raise RpcError("status op returned ok=false while reading last_id: %r" % (env,))
+    return int((env.get("r") or {}).get("last_id") or 0)
 
 
 def wait_for_new_question(conn, after: int, timeout: float, interval: float) -> dict:
     """Polls the pure-read `poll` op (never `answers`) for the first question
-    with id > after -- used by scenarios that create a question by some path
-    other than ask_via_remote, so they don't already know its id."""
+    with id > after. Scenarios that create a question by some path other
+    than ask_via_remote use it, since they don't know its id. Fails fast
+    on an ok=false reply instead of retrying it until the timeout (see
+    poll_for_answer; the same reasoning applies to `poll`)."""
     deadline = time.monotonic() + timeout
     last_env = None
     while time.monotonic() < deadline:
         env = aab_rpc(conn, "poll", after=after)
         last_env = env
-        if env.get("ok"):
-            entries = as_list(env.get("r"))
-            if entries:
-                return entries[0]
+        if not env.get("ok"):
+            raise RpcError("poll op returned ok=false while waiting for a new question after id=%d: %r" % (after, env))
+        entries = as_list(env.get("r"))
+        if entries:
+            return entries[0]
         time.sleep(interval)
     raise TimeoutError("no question appeared after id=%d within %ss (last poll reply: %r)" % (after, timeout, last_env))
 
 
-def poll_for_answer(conn, qid: int, timeout: float, interval: float) -> dict:
+def poll_for_answer(conn, qid: int, timeout: float, interval: float, after: Optional[int] = None) -> dict:
     """Polls the `answers` op (docs/design/phase1-2-spec.md: new pure-read op
     `answers {after}` -> `[{id, shape, lines, player_index}]`) until qid is
-    answered."""
+    answered.
+
+    `after` is the cursor passed to `answers`; it defaults to qid - 1, i.e.
+    "only entries at or after the question this call is waiting for". Every
+    caller used to pass `after=0` unconditionally, which asks the companion
+    to re-encode every answered question still in its 64-slot ring on every
+    single poll. Once enough answers accumulate in one run (the quota
+    scenario alone answers 21) that reply crosses the companion's 8000-byte
+    cap and comes back {"ok":false,"e":"too_large"} for the rest of the run
+    (review-fix contract item 13). Defaulting the cursor to qid - 1 keeps
+    the reply to "this question and whatever was answered around the same
+    time" regardless of how much history the ring is holding, with no change
+    needed at any call site.
+
+    Fails fast (RpcError) on an ok=false reply rather than looping on it
+    until timeout, where it would look identical to "not answered yet"."""
+    if after is None:
+        after = qid - 1
     deadline = time.monotonic() + timeout
     last_env = None
     while time.monotonic() < deadline:
-        env = aab_rpc(conn, "answers", after=0)
+        env = aab_rpc(conn, "answers", after=after)
         last_env = env
-        if env.get("ok"):
-            for entry in as_list(env.get("r")):
-                if entry.get("id") == qid:
-                    return entry
+        if not env.get("ok"):
+            raise RpcError("answers op returned ok=false while waiting for qid=%d: %r" % (qid, env))
+        for entry in as_list(env.get("r")):
+            if entry.get("id") == qid:
+                return entry
         time.sleep(interval)
     raise TimeoutError("no answer for qid=%d within %ss (last `answers` reply: %r)" % (qid, timeout, last_env))
 
 
+def wait_for_needle_in_file(path, needle: str, timeout: float, interval: float = 0.05) -> bool:
+    """Polls a plain text file (events.jsonl) for a substring, without
+    assuming it exists yet. Used to confirm the companion actually wrote an
+    event before a scenario relies on the service having ingested it; see
+    scenario_last_death."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path is not None and path.exists():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if needle in text:
+                return True
+        time.sleep(interval)
+    return False
+
+
 def find_provider_iface(conn) -> Optional[str]:
     """Scans the live tools catalog (the `tools` op) for a provider exposing
-    both `hello` and `boom` -- tests/provider-mod/aab-test-provider's shape
-    per docs/design/phase1-2-spec.md -- without hardcoding its interface
+    both `hello` and `boom`, the shape tests/provider-mod/aab-test-provider
+    has per docs/design/phase1-2-spec.md, without hardcoding its interface
     name, since that mod is owned and built outside this harness."""
     env = aab_rpc(conn, "tools")
     if not env.get("ok"):
@@ -165,8 +226,11 @@ def scenario_status(ctx: Ctx) -> Tuple[Status, str]:
     if r.get("protocol") != 1:
         return "FAIL", "expected protocol=1, got reply %r" % (r,)
     return "PASS", (
-        "protocol=%r mod_version=%r tick=%r player_count=%r pending=%r ask_command=%r"
-        % (r.get("protocol"), r.get("mod_version"), r.get("tick"), r.get("player_count"), r.get("pending"), r.get("ask_command"))
+        "protocol=%r mod_version=%r tick=%r player_count=%r pending=%r last_id=%r ask_command=%r"
+        % (
+            r.get("protocol"), r.get("mod_version"), r.get("tick"), r.get("player_count"),
+            r.get("pending"), r.get("last_id"), r.get("ask_command"),
+        )
     )
 
 
@@ -174,7 +238,7 @@ def scenario_ask_forces(ctx: Ctx) -> Tuple[Status, str]:
     qid = ask_via_remote(ctx.server_rcon, "What forces are there?", force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
     lines = " | ".join(entry.get("lines") or [])
     if "player" in lines.lower():
@@ -216,7 +280,7 @@ def scenario_ask_hello(ctx: Ctx) -> Tuple[Status, str]:
     qid = ask_via_remote(ctx.server_rcon, "hello", force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
     lines = " | ".join(entry.get("lines") or [])
     if marker in lines:
@@ -228,7 +292,7 @@ def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
     qid = ask_via_remote(ctx.server_rcon, "table of players", force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
     if entry.get("shape") == "table":
         return "PASS", "qid=%d shape=table lines=%r" % (qid, entry.get("lines"))
@@ -247,7 +311,13 @@ def scenario_chat_prefix(ctx: Ctx) -> Tuple[Status, str]:
     # mod-settings.dat before the map is made; this reads back what took.
     prefix = sc(ctx.server_rcon, 'rcon.print(settings.global["aab-chat-prefix"].value)').rstrip("\n")
     if not prefix:
-        return "SKIP", "aab-chat-prefix is empty; the chat trigger is off for this run"
+        # run.py seeds aab-chat-prefix into mod-settings.dat before the map
+        # exists on every run this scenario actually executes (needs_client
+        # gates entry on --client already), so an empty read-back here means
+        # the seed did not take, not that the trigger is deliberately off.
+        # SKIP would hide a real regression in the seeding step (review-fix
+        # contract item 13).
+        return "FAIL", "aab-chat-prefix read back empty; run.py always seeds it before the map exists, so empty means the seed did not take"
 
     baseline = latest_known_qid(ctx.server_rcon)
     # on_console_chat is one of the handful of events LuaBootstrap::raise_event
@@ -261,14 +331,14 @@ def scenario_chat_prefix(ctx: Ctx) -> Tuple[Status, str]:
 
     try:
         q = wait_for_new_question(ctx.server_rcon, baseline, ctx.question_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", "chat message with the prefix did not create a question: %s" % e
     if q.get("text") != question_text:
         return "FAIL", "expected question text %r (prefix stripped), got %r" % (question_text, q.get("text"))
 
     try:
         entry = poll_for_answer(ctx.server_rcon, q["id"], ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
     return "PASS", "chat prefix %r from player_index=%d created qid=%d, answered shape=%s" % (
         prefix, ctx.client_player_index, q["id"], entry.get("shape"),
@@ -291,10 +361,23 @@ def scenario_last_death(ctx: Ctx) -> Tuple[Status, str]:
     if reply.strip() != "true":
         return "FAIL", "player_index=%d had no character to kill (reply=%r)" % (idx, reply)
 
+    # The death only reaches history once two independent tickers both fire:
+    # the service's file tailer (events.jsonl -> SQLite) and its poll loop
+    # (RCON -> the question this scenario is about to ask). Asking right away
+    # races them. Confirm the companion actually wrote the event first (that
+    # part is synchronous, inside the /sc call above, so it should already be
+    # there), then give both tickers one full interval to catch up before
+    # asking, rather than relying on their fixed startup offset happening to
+    # land in the right order (review-fix contract item 13).
+    if ctx.events_file is not None:
+        if not wait_for_needle_in_file(ctx.events_file, '"player_died"', timeout=5.0):
+            return "FAIL", "player.character.die() did not produce a player_died line in events.jsonl within 5s (%s)" % ctx.events_file
+    time.sleep(ctx.tailer_settle_seconds)
+
     qid = ask_via_remote(ctx.server_rcon, "when did I last die", player_index=idx, force="player")
     try:
         entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
+    except (TimeoutError, RpcError) as e:
         return "FAIL", str(e)
     lines = " | ".join(entry.get("lines") or [])
     if "player_died" in lines:
@@ -312,34 +395,112 @@ def scenario_quota(ctx: Ctx) -> Tuple[Status, str]:
     for i in range(21):
         qids.append(ask_via_remote(ctx.server_rcon, "quota probe %d" % i, player_index=synthetic_index, force="player"))
 
+    # Check the 1st question too, not only the 21st: a quota implementation
+    # that refuses every question (not just the ones past the cutoff) would
+    # otherwise still satisfy "the 21st came back as a notice" (review-fix
+    # contract item 13 / the finding this guards against).
     try:
-        entry = poll_for_answer(ctx.server_rcon, qids[-1], ctx.answer_timeout, ctx.poll_interval)
-    except TimeoutError as e:
-        return "FAIL", str(e)
-    if entry.get("shape") == "notice":
-        return "PASS", "21st question in an hour for one player (qid=%d) was refused with shape=notice: %r" % (
-            qids[-1], entry.get("lines"),
+        first = poll_for_answer(ctx.server_rcon, qids[0], ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", "1st of 21 questions (qid=%d): %s" % (qids[0], e)
+    if first.get("shape") != "summary":
+        return "FAIL", (
+            "expected the 1st of 21 questions (qid=%d, within the hourly cap) to be answered normally "
+            "(shape=summary) before checking that the 21st is refused, got %r"
+        ) % (qids[0], first)
+
+    try:
+        last = poll_for_answer(ctx.server_rcon, qids[-1], ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", "21st of 21 questions (qid=%d): %s" % (qids[-1], e)
+    if last.get("shape") == "notice":
+        return "PASS", "1st question (qid=%d) got shape=summary; 21st in an hour for one player (qid=%d) was refused with shape=notice: %r" % (
+            qids[0], qids[-1], last.get("lines"),
         )
-    return "FAIL", "expected the 21st question (qid=%d) to be refused with shape=notice, got %r" % (qids[-1], entry)
+    return "FAIL", "expected the 21st question (qid=%d) to be refused with shape=notice, got %r" % (qids[-1], last)
 
 
 def scenario_provider_error(ctx: Ctx) -> Tuple[Status, str]:
     iface = ctx.provider_iface
-    fallback = iface is None
-    if fallback:
-        # Ships with the companion today (Phase 0 selftest interface,
-        # companion-mod/scripts/rpc_selftest.lua) -- exercises the same
-        # pcall(remote.call, ...) error path tests/provider-mod's `boom`
-        # would, just against a provider that already exists.
-        iface = "ai-agent-bridge-selftest"
+    if iface is not None:
+        env = aab_rpc(ctx.server_rcon, "call", i=iface, f="boom", a={})
+        if env.get("ok"):
+            return "FAIL", "expected %s.boom to fail with provider_error, got an ok reply: %r" % (iface, env)
+        if env.get("e") != "provider_error":
+            return "FAIL", "expected error code provider_error from %s.boom, got %r (message=%r)" % (iface, env.get("e"), env.get("m"))
+        return "PASS", "call %s.boom -> e=provider_error m=%r" % (iface, env.get("m"))
 
-    env = aab_rpc(ctx.server_rcon, "call", i=iface, f="boom", a={})
+    # tests/provider-mod not present yet. The companion's own Phase 0
+    # selftest interface (companion-mod/scripts/rpc_selftest.lua) has a
+    # `boom` function but no agent_tools_v1 probe, so it is not a real
+    # provider: routing through the `call` op the way the branch above does
+    # hits probe.lua's "no agent_tools_v1" check and comes back no_provider,
+    # never provider_error. That is a different check than this scenario
+    # exists for, so it always failed here regardless of whether pcall
+    # actually caught the error. Drive the same pcall(remote.call, ...) path
+    # directly through the selftest's own `pcall_test` diagnostic op
+    # instead, which exists for exactly this
+    # (companion-mod/scripts/rpc_selftest.lua).
+    env = aab_rpc(ctx.server_rcon, "pcall_test")
+    if not env.get("ok"):
+        return "FAIL", "pcall_test op returned not-ok: %r" % (env,)
+    r = env.get("r") or {}
+    if not r.get("caught"):
+        return "FAIL", "pcall_test reported caught=%r (expected true): %r" % (r.get("caught"), r)
+    if "boom" not in str(r.get("message", "")):
+        return "FAIL", "pcall_test caught an error but its message did not mention 'boom': %r" % (r,)
+    return "PASS", "pcall_test caught the selftest provider's error (tests/provider-mod not found yet): %r" % (r,)
+
+
+def scenario_answer_bad_artifact(ctx: Ctx) -> Tuple[Status, str]:
+    """Submits a deliberately malformed artifact directly through the answer
+    op and requires bad_artifact (review-fix contract item 5). CONTEXT.md
+    says "any client that speaks [aab-rpc-v1] can drive the companion", and
+    the reference service can never produce this shape itself
+    (service/internal/agent/validate.go only ever emits comparison rows as
+    []Pair, never bare numbers). So this scenario is the harness standing
+    in for a non-reference client, the case the two findings this guards
+    against (a table leaf reaching tostring(), and a render error stranding
+    the question as answered-with-nothing) were both found through."""
+    qid = ask_via_remote(ctx.server_rcon, "bad artifact probe (answered directly, not by the model)", force="player")
+    # A known shape (comparison) whose rows are bare numbers instead of
+    # {label, a, b} objects: the exact reproduction the two findings above
+    # were filed against.
+    artifact = {"shape": "comparison", "columns": ["a", "b"], "rows": [1, 2]}
+    env = aab_rpc(ctx.server_rcon, "answer", qid=qid, artifact=artifact)
     if env.get("ok"):
-        return "FAIL", "expected %s.boom to fail with provider_error, got an ok reply: %r" % (iface, env)
-    if env.get("e") != "provider_error":
-        return "FAIL", "expected error code provider_error from %s.boom, got %r (message=%r)" % (iface, env.get("e"), env.get("m"))
-    note = " (tests/provider-mod not found yet; used the companion's own selftest interface instead)" if fallback else ""
-    return "PASS", "call %s.boom -> e=provider_error m=%r%s" % (iface, env.get("m"), note)
+        return "FAIL", "expected a malformed comparison artifact (rows of bare numbers, not {label,a,b} objects) to be refused, got an ok reply: %r" % (env,)
+    if env.get("e") != "bad_artifact":
+        return "FAIL", "expected error code bad_artifact for a malformed artifact, got %r (message=%r)" % (env.get("e"), env.get("m"))
+    return "PASS", "answer op refused the malformed artifact with e=bad_artifact m=%r" % (env.get("m"),)
+
+
+def scenario_answer_large_table(ctx: Ctx) -> Tuple[Status, str]:
+    """Submits a table artifact at roughly the shape caps (5 columns x 8 rows
+    x 150-char cells) directly through the answer op for a fresh question,
+    and requires ok=true. TESTING.md 1.5 measured Factorio's RCON carrying
+    commands well past 1,000,000 bytes intact, and finding 1 measured the
+    shape caps alone producing a ~7.4 KB table artifact. The 1000-byte
+    ceiling several findings ran into (review-fix contract item 1) turned
+    out to be gorcon's own MaxCommandLen, not the engine's or the
+    companion's. This proves the transport this harness actually speaks
+    (its own RCON client, and the companion's command handling) carries an
+    artifact well past 1000 bytes with nothing special-cased on either
+    side."""
+    qid = ask_via_remote(ctx.server_rcon, "size probe (answered directly, not by the model)", force="player")
+    columns = ["col-%d" % i for i in range(5)]
+    cell = "x" * 150
+    rows = [[cell] * 5 for _ in range(8)]
+    artifact = {"shape": "table", "title": "size probe", "columns": columns, "rows": rows}
+    req = {"v": 1, "op": "answer"}
+    req.update({"qid": qid, "artifact": artifact})
+    command_len = len("/aab-rpc " + json.dumps(req))
+    if command_len <= 1000:
+        return "FAIL", "test bug: constructed only a %d-byte command, too small to prove anything past the 1000-byte figure" % command_len
+    env = aab_rpc(ctx.server_rcon, "answer", qid=qid, artifact=artifact)
+    if not env.get("ok"):
+        return "FAIL", "a %d-byte answer command (well past 1000 bytes) was refused: %r" % (command_len, env)
+    return "PASS", "answer op accepted a %d-byte command (qid=%d), past the 1000-byte figure that turned out to be gorcon's limit, not the transport's" % (command_len, qid)
 
 
 @dataclass
@@ -354,6 +515,8 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask via remote interface: what forces are there", scenario_ask_forces),
     Scenario("ask hello: provider greeting", scenario_ask_hello),
     Scenario("ask: table of players", scenario_ask_table_of_players),
+    Scenario("answer op: malformed artifact -> bad_artifact", scenario_answer_bad_artifact),
+    Scenario("answer op: large table artifact accepted", scenario_answer_large_table),
     Scenario("chat prefix creates a question", scenario_chat_prefix, needs_client=True),
     Scenario("history: last death", scenario_last_death, needs_client=True),
     Scenario("per-player quota", scenario_quota),

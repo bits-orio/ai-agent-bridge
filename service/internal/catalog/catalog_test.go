@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
@@ -79,6 +80,65 @@ func TestToolNameIsClippedToTheAPILimit(t *testing.T) {
 	}
 	if got := ToolName(long, "fn"); len(got) != maxNameLen {
 		t.Errorf("name is %d characters, want it clipped to %d", len(got), maxNameLen)
+	}
+}
+
+// The interface prefix gives way, never the function name. Cutting the tail
+// instead made two functions on a long interface the same name, and the
+// collision check then dropped one of them (review-fix contract 11).
+func TestToolNameTruncatesTheInterfaceNotTheFunction(t *testing.T) {
+	iface := "some-long-multiplayer-teams-provider-interface-name-v1" // 54 characters
+	since := ToolName(iface, "production_since")
+	rate := ToolName(iface, "production_rate")
+
+	if since == rate {
+		t.Fatalf("both functions map to %q", since)
+	}
+	for _, tc := range []struct{ name, fn string }{{since, "production_since"}, {rate, "production_rate"}} {
+		if len(tc.name) > maxNameLen {
+			t.Errorf("%q is %d characters, over the %d limit", tc.name, len(tc.name), maxNameLen)
+		}
+		if !strings.HasSuffix(tc.name, sep+tc.fn) {
+			t.Errorf("%q does not end in the whole function name %q", tc.name, tc.fn)
+		}
+	}
+}
+
+// Both functions survive the build, so neither vanishes from the catalog.
+func TestBuildKeepsEveryFunctionOnALongInterface(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "some-long-multiplayer-teams-provider-interface-name-v1",
+		Tools: map[string]rpc.ToolManifest{
+			"production_since": {Desc: "Since a tick."},
+			"production_rate":  {Desc: "Per minute."},
+		},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	if len(c.Tools()) != 2 {
+		t.Fatalf("built %d tool(s), want 2: %+v", len(c.Tools()), c.Tools())
+	}
+	for _, tool := range c.Tools() {
+		target, ok := c.Target(tool.Name)
+		if !ok {
+			t.Fatalf("%q does not map back to a provider function", tool.Name)
+		}
+		if !strings.HasSuffix(tool.Name, sep+target.Fn) {
+			t.Errorf("%q names a different function than %q", tool.Name, target.Fn)
+		}
+	}
+}
+
+// A function name long enough to fill the budget on its own is the one case
+// where it has to give way, and the result is still a legal, unique-per-function
+// name.
+func TestToolNameWithAnAbsurdlyLongFunctionName(t *testing.T) {
+	fn := strings.Repeat("f", 200)
+	got := ToolName("iface", fn)
+	if len(got) != maxNameLen {
+		t.Errorf("name is %d characters, want %d", len(got), maxNameLen)
+	}
+	if !strings.Contains(got, sep) {
+		t.Errorf("%q lost the separator", got)
 	}
 }
 

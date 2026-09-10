@@ -17,8 +17,8 @@ implements.
    `base/freeplay` every time, with a mod directory linking in
    `companion-mod` and, if it exists yet, `tests/provider-mod/aab-test-provider`.
 3. Writes `tests/e2e/.run/aab.e2e.yaml` (model `fake`, the scripted
-   deterministic model -- there is no Anthropic API key in this harness and
-   never should be) and starts the service against it as a subprocess:
+   deterministic model, and there is no Anthropic API key in this harness
+   and never should be) and starts the service against it as a subprocess:
    `aab run -config tests/e2e/.run/aab.e2e.yaml`.
 4. Runs every scenario in `scenarios.py` against the live pair over RCON,
    the same protocol a real operator's service speaks
@@ -55,7 +55,12 @@ Game port `34210`, RCON port `27110`, RCON password `rig`. These are fixed
 own long-running dev rig on different ports. Everything the harness writes
 lives under `tests/e2e/.run/` (git-ignored): per-instance write-data dirs
 (`w-server/`, `w-client/`), logs, the generated mods dir, mod-list and
-`mod-settings.dat`, the generated service config, and `history.sqlite`.
+`mod-settings.dat`, the generated service config, `history.sqlite`, and (only
+while a `--keep` run is still up) `pids`. `history.sqlite` is deleted, along
+with any `-journal`/`-wal`/`-shm` siblings, at the start of every run before
+the service opens it. `history.Open` never truncates an existing file, so
+without this the last-death scenario could pass on a row a *previous* run
+left behind rather than the one it just created.
 
 `mod-settings.dat` is written before the server starts because a
 runtime-global mod setting cannot be set any other way from here: the engine
@@ -65,15 +70,17 @@ and the console exemption in the Lua docs covers player settings only. The
 harness uses it to turn the chat trigger on, `aab-chat-prefix = "!ask "`.
 
 `--keep` leaves the server, client and service running after the scenarios
-finish, for poking at by hand (`python3 tests/e2e/rig.py` state stays live,
-RCON still open on `27110`, control API at `http://127.0.0.1:8090`). Stop
-it yourself afterwards, e.g.:
+finish, for poking at by hand (state stays live under `tests/e2e/.run/`,
+RCON still open on `27110`, control API at `http://127.0.0.1:8090`). It
+prints the PIDs it left running and writes them to `tests/e2e/.run/pids`.
+Stop them with:
 
 ```sh
-python3 -c "import rig; rig.Server(name='server').stop()"
+make e2e-stop
 ```
 
-or just kill the printed PIDs.
+which reads that file and signals whichever of those PIDs are still alive;
+safe to run even if there's nothing left to stop.
 
 If a previous run was killed hard enough to skip cleanup (a crash, a second
 Ctrl+C), Factorio's write-data lock can outlive it. If the next `run.py`
@@ -102,14 +109,16 @@ hangs waiting for `Starting RCON`, check
 | ask "what forces are there" | no | no | service `run` loop, `answers` op |
 | ask "hello" -> provider greeting | no | yes (skips otherwise) | the probe seam, a second provider mod |
 | ask "table of players" | no | no | the `table` artifact shape |
+| answer op: malformed artifact -> `bad_artifact` | no | no | artifact validation ahead of rendering (review-fix contract item 5) |
+| answer op: large table artifact accepted | no | no | the transport carrying an artifact past 1000 bytes (review-fix contract item 1) |
 | chat prefix creates a question | yes | no | `aab-chat-prefix` seeded into `mod-settings.dat` |
 | last death via history | yes | no | `events.jsonl` + the history tools |
-| per-player quota | no | no | `questions_per_player_per_hour` |
-| provider error -> `provider_error` | no | falls back to the companion's own Phase 0 selftest interface | `pcall`-wrapped `call` |
+| per-player quota | no | no | `questions_per_player_per_hour` (asserts both the 1st question, within budget, and the 21st, refused) |
+| provider error -> `provider_error` | no | falls back to the companion's own `pcall_test` selftest op | `pcall`-wrapped `remote.call` |
 
 Everything not marked "companion only" also needs the service's `run`
 subcommand and the fake model to exist and be wired up. As of this writing
 (alongside `docs/design/phase1-2-spec.md`) several of these are being built
-in parallel with this harness -- that is expected, not a bug in the harness:
+in parallel with this harness. That is expected, not a bug in the harness:
 a scenario prints `FAIL` with the observed reply until its dependency lands,
 then starts passing with no change needed here.

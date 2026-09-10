@@ -8,7 +8,7 @@ SERVICE_DIR := service
 GO_IMAGE := golang:1.25-alpine
 GO_DOCKER := docker run --rm -v "$(CURDIR)/$(SERVICE_DIR)":/src -w /src -e GOFLAGS=-mod=mod -e CGO_ENABLED=0 -v aab-gomod:/go/pkg/mod $(GO_IMAGE)
 
-.PHONY: service test e2e e2e-client lua-check
+.PHONY: service test e2e e2e-client e2e-stop lua-check
 
 ## Build service/aab through Docker.
 service:
@@ -25,6 +25,12 @@ e2e:
 ## Full e2e harness with a standalone client, for the player-only scenarios.
 e2e-client:
 	python3 tests/e2e/run.py --client
+
+## Kill the server/client/service a `python3 tests/e2e/run.py --keep` run
+## left behind, reading their PIDs from tests/e2e/.run/pids. Safe to run
+## with nothing to stop.
+e2e-stop:
+	python3 tests/e2e/run.py --stop
 
 ## Lua syntax check, mirrors .github/workflows/ci.yml's companion-mod job.
 lua-check:

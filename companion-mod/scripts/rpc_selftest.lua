@@ -12,12 +12,14 @@ remote.add_interface("ai-agent-bridge-selftest", {
   boom = function() error("boom") end,
 })
 
+local MAX_KB = 4096
+
 local function ok_reply(r) return { ok = true, r = r } end
 
 local M = { ops = {} }
 
 --- Is player_index nil for RCON-invoked commands? (Documented only for the
---- server console -- verified here rather than assumed.)
+--- server console, so it is verified here rather than assumed.)
 function M.ops.ping(_req, cmd)
   return ok_reply({
     player_index = cmd.player_index,
@@ -28,10 +30,14 @@ end
 
 --- Prints a JSON string of req.kb kilobytes so the reply size at which RCON
 --- truncates can be measured from outside. Deliberately NOT subject to
---- rpc.lua's MAX_RESULT_BYTES cap -- see the is_big check there.
+--- rpc.lua's MAX_RESULT_BYTES cap, see the is_big check there, so it carries
+--- its own ceiling: a command runs on every peer, and a mistyped kb would ask
+--- the server and every client to allocate the same absurd string at once.
+--- MAX_KB is 4096, the 4 MB reply that measurement reached (TESTING.md 1.5).
 function M.ops.big(req, _cmd)
   local kb = tonumber(req.kb) or 1
   if kb < 0 then kb = 0 end
+  if kb > MAX_KB then kb = MAX_KB end
   local payload = string.rep("x", math.floor(kb * 1024))
   return ok_reply({ kb = kb, bytes = #payload, payload = payload })
 end

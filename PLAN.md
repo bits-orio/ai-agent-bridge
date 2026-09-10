@@ -18,8 +18,10 @@ Each decision has a fuller record in `docs/adr/`.
 **1. Pull, over RCON. Nothing runs in the game until a question arrives.**
 - The companion registers no periodic handler. Every read happens inside the
   console command the service invokes, on an already-slow RCON round trip.
-- The service is the only party that polls: questions after a cursor, at a
-  short interval, against a pure-read operation.
+- The service is the only party that polls: the questions still unanswered, a
+  page at a time, at a short interval, against a pure-read operation. The
+  companion decides what is still pending, so the service keeps no cursor and a
+  restart resumes instead of replaying.
 - Works against a hosted server with no shell on the box, because RCON is the
   only path in and out that every host exposes.
 - Removes the whole `on_load` and registry problem: nothing is discovered or
@@ -76,14 +78,17 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 
 | op | request | reply `r` | writes storage |
 |---|---|---|---|
-| `status` | `{}` | protocol version, mod version, tick, player count, pending question count | no |
+| `status` | `{}` | protocol version, mod version, tick, player count, pending question count, highest question id issued (`last_id`) | no |
 | `tools` | `{}` | sorted list of `{iface, v, tools}` per provider, manifests verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
-| `poll` | `{after}` | questions with id greater than `after`, oldest first | no |
-| `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders, raises `on_answer` |
+| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64) | no |
+| `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
+| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer` |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
-`provider_error`, `bad_result`, `too_large`, `no_question`.
+`provider_error`, `bad_result`, `too_large`, `no_question`, `bad_artifact`.
+`bad_artifact` is the one refusal a client must not retry: the artifact itself
+is wrong, so the question stays pending and re-answerable with a better one.
 
 `call` checks that the manifest lists `f` and that `remote.interfaces[i][f]`
 exists before `pcall(remote.call, i, f, a)`. A result above the byte cap is

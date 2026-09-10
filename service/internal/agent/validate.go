@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// validate clips an artifact to the caps and returns the clipped copy, or an
-// error the model can act on.
+// validate clips an artifact to the caps and to the byte budget, and returns
+// the clipped copy or an error the model can act on.
 func validate(a Artifact) (Artifact, error) {
 	out := Artifact{Shape: a.Shape, Title: cell(a.Title)}
 	switch a.Shape {
@@ -54,7 +54,7 @@ func validate(a Artifact) (Artifact, error) {
 	default:
 		return Artifact{}, fmt.Errorf("shape %q is not a shape, use summary, notice, list, table or comparison", a.Shape)
 	}
-	return out, nil
+	return fit(out), nil
 }
 
 // tableRows clips to the row cap and squares every row off against the
@@ -99,12 +99,9 @@ func cells(in []string, max int) []string {
 }
 
 // cell trims one string to the per-cell cap, counted in runes so a clip never
-// splits a character, and flattens any newline a model wrote into a space.
+// splits a character, and flattens any newline a model wrote into a space. The
+// companion clips again at 640 bytes on a UTF-8 boundary, which is the same
+// 160 cells' worth at four bytes a rune.
 func cell(s string) string {
-	s = strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " ")
-	r := []rune(s)
-	if len(r) > MaxCellChars {
-		return string(r[:MaxCellChars])
-	}
-	return s
+	return clipRunes(strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " "), MaxCellChars)
 }

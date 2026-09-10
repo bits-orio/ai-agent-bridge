@@ -9,7 +9,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 )
+
+// MaxPollLimit is the largest page of questions the companion serves in one
+// poll reply (review-fix contract 3). Asking for more is not an error; the
+// companion clamps, and so does Poll, so the request says what will happen.
+const MaxPollLimit = 64
 
 // unmarshalList decodes a JSON array reply into out, treating "{}" as an empty
 // list. The companion's JSON encoder cannot tell an empty Lua array from an
@@ -31,6 +37,11 @@ type StatusReply struct {
 	PlayerCount     int    `json:"player_count"`
 	PendingCount    int    `json:"pending"`
 	AskCommand      string `json:"ask_command"`
+	// LastID is the highest question id the companion has issued so far
+	// (review-fix contract 4). The service polls from 0 and needs no cursor, so
+	// this is for the operator and the harness: how many questions a save has
+	// seen, and whether new ones are arriving at all.
+	LastID int64 `json:"last_id"`
 }
 
 // Status calls the status op ({}) and returns the parsed reply.
@@ -65,17 +76,47 @@ type Provider struct {
 // ToolsReply is the "r" of a tools call: the sorted list of providers (PLAN.md).
 type ToolsReply []Provider
 
-// Tools calls the tools op ({}) and returns the parsed catalog.
+// Tools calls the tools op ({}) and returns the parsed catalog, one provider at
+// a time.
+//
+// Each entry is decoded on its own so a third mod that writes a plausible but
+// wrong manifest costs itself its tools and nobody else's (review-fix contract
+// 6). Decoding the whole array in one pass meant a list of tool names where a
+// map belonged, a nested params table, or a localised desc took every tool on
+// the server down with it, the companion's own included, and the agent then
+// answered every question from the prompt alone.
 func (c *Client) Tools(ctx context.Context) (ToolsReply, error) {
 	raw, err := c.Call(ctx, "tools", nil)
 	if err != nil {
 		return nil, err
 	}
-	var out ToolsReply
-	if err := unmarshalList(raw, &out); err != nil {
+	var entries []json.RawMessage
+	if err := unmarshalList(raw, &entries); err != nil {
 		return nil, fmt.Errorf("aab-rpc: tools: bad reply: %w", err)
 	}
+
+	out := make(ToolsReply, 0, len(entries))
+	for _, entry := range entries {
+		var provider Provider
+		if err := json.Unmarshal(entry, &provider); err != nil {
+			log.Printf("tools: skipping provider %s, its manifest did not decode: %v", ifaceName(entry), err)
+			continue
+		}
+		out = append(out, provider)
+	}
 	return out, nil
+}
+
+// ifaceName digs the iface field out of a provider entry that failed to decode,
+// so the log line names the mod whose manifest needs fixing.
+func ifaceName(entry json.RawMessage) string {
+	var named struct {
+		Iface string `json:"iface"`
+	}
+	if err := json.Unmarshal(entry, &named); err == nil && named.Iface != "" {
+		return named.Iface
+	}
+	return "(unnamed)"
 }
 
 // callRequest is the payload of a call op: {i, f, a}, provider interface, function name,
@@ -100,23 +141,37 @@ type Question struct {
 	ID          int64  `json:"id"`
 	Text        string `json:"text"`
 	PlayerIndex *int   `json:"player_index,omitempty"`
-	Force       string `json:"force,omitempty"`
-	Tick        uint64 `json:"tick"`
+	// PlayerName is the asker's name when the companion could resolve one
+	// (review-fix contract 3). History rows are keyed by player name, so without
+	// it "when did I last die" cannot be scoped to the person who asked.
+	PlayerName string `json:"player_name,omitempty"`
+	Force      string `json:"force,omitempty"`
+	Tick       uint64 `json:"tick"`
 }
 
-// PollReply is the "r" of a poll call: questions with id greater than after, oldest
-// first (PLAN.md).
+// PollReply is the "r" of a poll call: unanswered questions with id greater than
+// after, oldest first, at most limit of them (PLAN.md, review-fix contract 3).
 type PollReply []Question
 
-// pollRequest is the payload of a poll op: {after}, the cursor (PLAN.md).
+// pollRequest is the payload of a poll op: {after, limit}. Limit is what keeps a
+// backlog from encoding past the companion's reply cap, which used to wedge the
+// service permanently: the whole reply came back as one too_large error, so
+// nothing was ever answered and nothing ever shrank the backlog.
 type pollRequest struct {
 	After int64 `json:"after"`
+	Limit int   `json:"limit,omitempty"`
 }
 
-// Poll fetches every question with id greater than after, oldest first. Pass 0 on first
-// use to fetch everything still pending.
-func (c *Client) Poll(ctx context.Context, after int64) (PollReply, error) {
-	raw, err := c.Call(ctx, "poll", pollRequest{After: after})
+// Poll fetches unanswered questions with id greater than after, oldest first, at
+// most limit of them. Pass limit 0 to take the companion's own default page size.
+func (c *Client) Poll(ctx context.Context, after int64, limit int) (PollReply, error) {
+	if limit > MaxPollLimit {
+		limit = MaxPollLimit
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	raw, err := c.Call(ctx, "poll", pollRequest{After: after, Limit: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -136,9 +191,13 @@ type answerRequest struct {
 }
 
 // Answer submits the artifact for question qid. This is the one op that writes storage
-// (CONTEXT.md invariant 2): the companion marks the question answered, renders the
-// artifact to the asker, and raises on_answer. A lost RCON reply costs nothing: the
-// caller re-polls the same cursor and never resubmits an answer.
+// (CONTEXT.md invariant 2): the companion renders the artifact to the asker, marks the
+// question answered once rendering succeeded, and raises on_answer.
+//
+// A lost RCON reply costs nothing. The companion keeps offering an unanswered question
+// on every poll, so the caller delivers the same artifact again on the next tick without
+// paying the model a second time. The one refusal not worth retrying is CodeBadArtifact:
+// the artifact itself is wrong (review-fix contract 5).
 func (c *Client) Answer(ctx context.Context, qid int64, artifact any) (bool, error) {
 	raw, err := c.Call(ctx, "answer", answerRequest{QID: qid, Artifact: artifact})
 	if err != nil {

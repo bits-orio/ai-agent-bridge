@@ -1,15 +1,18 @@
 -- The aab-rpc-v1 protocol command (CONTEXT.md "Protocol", PLAN.md's op
--- table). One JSON object in, one JSON object out via rcon.print -- always
+-- table). One JSON object in, one JSON object out via rcon.print, always
 -- exactly one reply, {ok=true,r=...} or {ok=false,e=...,m=...}. Phase 1 ops
 -- live here; Phase 0 diagnostic ops live in scripts/rpc_selftest.lua and are
 -- merged into the same dispatch table below.
 --
 -- Invariant (CONTEXT.md): this command never writes storage except the
--- `answer` op (via questions.mark_answered and questions.record_render) and
--- the Phase 0 `write` op. `answers` reads back what `answer` stored.
+-- `answer` op (via questions.record_answer, and only once rendering has
+-- succeeded) and the Phase 0 `write` op. `answers` reads back what `answer`
+-- stored.
 
 local probe          = require("scripts.probe")
 local questions      = require("scripts.questions")
+local question_reads = require("scripts.question_reads")
+local artifact_check = require("scripts.artifact_check")
 local ask_command    = require("scripts.ask_command")
 local remote_iface   = require("scripts.remote")
 local render         = require("scripts.render")
@@ -31,6 +34,7 @@ function OPS.status(_req, _cmd)
     tick         = game.tick,
     player_count = #game.connected_players,
     pending      = questions.pending_count(),
+    last_id      = questions.last_id(),
     ask_command  = ask_command.active_name(),
   })
 end
@@ -44,19 +48,41 @@ function OPS.call(req, _cmd)
 end
 
 function OPS.poll(req, _cmd)
-  return ok_reply(questions.poll(req.after))
+  return ok_reply(question_reads.poll(req.after, req.limit))
 end
 
+-- The one op that writes storage, and the order matters: validate, render,
+-- and only then mark the question answered. A rejected or unrenderable
+-- artifact leaves the question pending, so the service can answer it again
+-- rather than the asker being told nothing forever.
 function OPS.answer(req, _cmd)
   if type(req.qid) ~= "number" or type(req.artifact) ~= "table" then
     return err_reply("bad_json", "answer requires qid (number) and artifact (object)")
   end
-  local question = questions.mark_answered(req.qid)
+  local wrong = artifact_check.problem(req.artifact)
+  if wrong then
+    return err_reply("bad_artifact", wrong)
+  end
+  local question = questions.find(req.qid)
   if not question then
     return err_reply("no_question", "no question with id " .. tostring(req.qid))
   end
-  local rendered = render.render(question, req.artifact)
-  questions.record_render(question, rendered)
+  -- Already answered: the reply to the first answer was lost in transit. Say
+  -- yes again without rendering a second time, so a retry costs the asker
+  -- nothing (CONTEXT.md invariant 2).
+  if question.answered then
+    return ok_reply(true)
+  end
+
+  local drawn, rendered = pcall(render.render, question, req.artifact)
+  if not drawn then
+    -- First line of the error only: the rest is a Lua traceback, and this
+    -- reply has a byte cap.
+    local why = tostring(rendered):match("^[^\n]*")
+    return err_reply("bad_artifact", "the artifact could not be rendered: " .. why)
+  end
+
+  questions.record_answer(question, rendered)
   events.write("answer", { qid = req.qid, shape = rendered.shape })
   remote_iface.raise_answer({
     qid = req.qid, question = question.text, artifact = req.artifact,
@@ -69,7 +95,7 @@ end
 -- service uses it to confirm an answer reached the game, and the end-to-end
 -- harness asserts on the lines a player would have seen.
 function OPS.answers(req, _cmd)
-  return ok_reply(questions.answers(req.after))
+  return ok_reply(question_reads.answers(req.after, req.limit))
 end
 
 for name, fn in pairs(selftest.ops) do
