@@ -22,7 +22,7 @@ port and whose password is always `rig`:
 python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
 ```
 
-- [ ] **1.1 `rcon.print` returns to the caller**
+- [x] **1.1 `rcon.print` returns to the caller**
 
   ```sh
   python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '/sc rcon.print("aab-test-1 ok")'
@@ -30,9 +30,9 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
 
   Expected: the reply body is exactly `aab-test-1 ok`.
 
-  Result:
+  Result: PASS 2026-09-10 on 2.0.77 headless (rig `aab-p0`): reply body was exactly `aab-test-1 ok`.
 
-- [ ] **1.2 `player_index` is nil for RCON-invoked commands**
+- [x] **1.2 `player_index` is nil for RCON-invoked commands**
 
   ```sh
   python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig \
@@ -44,9 +44,9 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   document this for the server console only; this confirms it also holds for a command
   invoked directly by name over RCON, which is how the `aab-rpc` command will be called.
 
-  Result:
+  Result: PASS 2026-09-10 on 2.0.77: reply was `player_index=nil name=aab_test_pi tick=62`; `name` and `tick` are populated, `player_index` is nil.
 
-- [ ] **1.3 a storage write and `raise_event` inside an RCON command replicate to a second client**
+- [x] **1.3 a storage write and `raise_event` inside an RCON command replicate to a second client**
 
   Connect two Factorio clients to the rig server first (`--mp-connect 127.0.0.1:34199`
   or Play > Multiplayer > Connect to address), then run:
@@ -60,9 +60,11 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   chat, not only the one nearest the server, and the RCON reply reads
   `raised, counter=1`. Re-running the same command should show `counter=2` on both.
 
-  Result:
+  Result: PASS 2026-09-10 on 2.0.77 with one standalone client connected (player_count 1): the /sc command above ran twice (counter 1, then 2) and the companion's own `write` op ran twice (counter 1, then 2), all four raising an event from inside an RCON command. Fifteen seconds later the client log had no Desync line, the client was still InGame and the server still reported it connected. A state that did not replicate would have produced a desync report. Still to see with human eyes: the `aab-test-3 replicated` chat line on a second client while it runs.
 
-- [ ] **1.4 `pcall(remote.call, ...)` catches a provider error**
+  Procedure finding: editing any companion Lua file while a server or client is up makes the next join fail with `multiplayer.script-mismatch` (the control.lua checksum differs). After any edit, restart the server and every client.
+
+- [x] **1.4 `pcall(remote.call, ...)` catches a provider error**
 
   ```sh
   python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig \
@@ -73,9 +75,9 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   and the RCON connection and the server both stay up (a provider's error must not
   crash the `call` operation).
 
-  Result:
+  Result: PASS 2026-09-10 on 2.0.77: `pcall(remote.call, "aab_t4", "boom")` returned false with the message `Error when running interface function aab_t4.boom: ... boom from provider` followed by a Lua traceback. The message carries a full traceback, so the rpc layer should keep only its first line for the `m` field.
 
-- [ ] **1.5 the reply size at which RCON truncates**
+- [x] **1.5 the reply size at which RCON truncates**
 
   Run with increasing `N` until the reply comes back shorter than requested, start
   with 4096, then double each time (8192, 16384, 32768, 65536, 131072):
@@ -91,7 +93,19 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
   whether it's silently truncated, dropped entirely, or the connection errors. PLAN.md
   sets the RCON cap at half whatever this measures.
 
-  Result:
+  Result: PASS 2026-09-10 on 2.0.77: replies of 4,000, 16,384, 65,536, 262,144, 1,048,576 and 4,194,304 bytes all arrived complete in a single RCON packet, byte-exact. No ceiling found up to 4 MB, so the companion's byte cap is a token-budget choice, not a transport limit.
+
+- [x] **1.7 the companion's own rpc command, first load**
+
+  Server: rig `aab-p0` on 2.0.77 with `mods-aab` (base + ai-agent-bridge 0.1.0).
+
+  Result: PASS 2026-09-10. The mod loaded on the headless server and on the Steam
+  client with the same checksum (4053880571). `status`, `ping`, `pcall_test`, `write`,
+  `poll`, `tools`, `call` (list_forces, current_research), `no_provider`, `bad_version`
+  and `bad_json` all replied as PLAN.md specifies. `big` with kb=100 returned 102,455
+  bytes intact. Two findings: an empty `poll` list encodes as `{}` (Lua cannot tell an
+  empty array from an empty object), so the service must accept `{}` as empty; and
+  `provider_error` messages carried a full traceback, now trimmed to the first line.
 
 - [ ] **1.6 single-player RCON access**
 

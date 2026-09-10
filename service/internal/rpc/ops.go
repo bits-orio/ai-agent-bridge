@@ -5,10 +5,21 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 )
+
+// unmarshalList decodes a JSON array reply into out, treating "{}" as an empty
+// list. The companion's JSON encoder cannot tell an empty Lua array from an
+// empty object and emits {} for both (verified against the live mod, 2026-09-10).
+func unmarshalList(raw json.RawMessage, out any) error {
+	if b := bytes.TrimSpace(raw); len(b) == 2 && b[0] == '{' && b[1] == '}' {
+		return nil
+	}
+	return json.Unmarshal(raw, out)
+}
 
 // StatusReply is the "r" of a status call: protocol version, mod version, tick, player
 // count, pending question count and which player command is live (PLAN.md).
@@ -61,7 +72,7 @@ func (c *Client) Tools(ctx context.Context) (ToolsReply, error) {
 		return nil, err
 	}
 	var out ToolsReply
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := unmarshalList(raw, &out); err != nil {
 		return nil, fmt.Errorf("aab-rpc: tools: bad reply: %w", err)
 	}
 	return out, nil
@@ -110,7 +121,7 @@ func (c *Client) Poll(ctx context.Context, after int64) (PollReply, error) {
 		return nil, err
 	}
 	var out PollReply
-	if err := json.Unmarshal(raw, &out); err != nil {
+	if err := unmarshalList(raw, &out); err != nil {
 		return nil, fmt.Errorf("aab-rpc: poll: bad reply: %w", err)
 	}
 	return out, nil

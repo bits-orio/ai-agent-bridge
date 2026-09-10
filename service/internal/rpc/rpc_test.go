@@ -209,3 +209,17 @@ func TestAnswerNoQuestionError(t *testing.T) {
 		}
 	}
 }
+
+func TestEmptyObjectDecodesAsEmptyList(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":true,"r":{}}`}
+	c := New(fake)
+	qs, err := c.Poll(context.Background(), 0)
+	if err != nil || len(qs) != 0 {
+		t.Fatalf("Poll() = %v, %v; want empty, nil", qs, err)
+	}
+	fake.resp = `{"ok":true,"r":{}}`
+	ps, err := c.Tools(context.Background())
+	if err != nil || len(ps) != 0 {
+		t.Fatalf("Tools() = %v, %v; want empty, nil", ps, err)
+	}
+}

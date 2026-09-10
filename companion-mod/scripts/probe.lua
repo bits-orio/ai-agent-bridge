@@ -62,7 +62,9 @@ function M.call(iface_name, fn_name, args)
 
   local called, result = pcall(remote.call, iface_name, fn_name, args)
   if not called then
-    return { ok = false, e = "provider_error", m = tostring(result) }
+    -- The engine appends a Lua traceback to the message; keep the first line,
+    -- which already names the interface, the function and the error.
+    return { ok = false, e = "provider_error", m = (tostring(result):match("^[^\n]*")) }
   end
   return { ok = true, r = result }
 end
