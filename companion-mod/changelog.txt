@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.1
+Date: 2026-09-11
+  Changes:
+    - Compare teams on their own clocks: on a Multi-Team Support server the agent now reads
+      each team's online and elapsed hours from the team mod, and the game clock is named as
+      the server's clock, so "how am I doing compared to Team Ace" compares fairly.
+  Bugfixes:
+    - Fractions (rates, progress, evolution, hours) reached the model as fifty-digit numbers,
+      because the game's JSON writer prints a non-integer double at full precision. They now
+      leave as short decimals, "1.79", and whole numbers stay numbers.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.0
 Date: 2026-09-11
   Features:
