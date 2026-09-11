@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rcon"
 )
@@ -117,7 +118,9 @@ func (c *Client) Call(ctx context.Context, op string, payload any) (json.RawMess
 
 	var env envelope
 	if err := json.Unmarshal([]byte(resp), &env); err != nil {
-		return nil, fmt.Errorf("aab-rpc: %s: bad reply JSON: %w", op, err)
+		// The server spoke, but not the companion: "Unknown command" is what
+		// a server without the mod says, and the operator should read it.
+		return nil, fmt.Errorf("aab-rpc: %s: the server answered with text, not the companion's JSON: %q", op, snippet(resp))
 	}
 	if !env.OK {
 		return nil, &Error{Code: env.E, Message: env.M}
@@ -157,4 +160,13 @@ func mergeOp(op string, payload any) ([]byte, error) {
 	fields["op"] = opJSON
 	fields["v"] = json.RawMessage(strconv.Itoa(protocolVersion))
 	return json.Marshal(fields)
+}
+
+// snippet is the start of a reply, one line, for an error message.
+func snippet(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 80 {
+		return s[:80] + "..."
+	}
+	return s
 }

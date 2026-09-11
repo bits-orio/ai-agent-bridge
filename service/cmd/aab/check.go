@@ -34,7 +34,11 @@ func runCheck(ctx context.Context, cfg *config.Config, client *rpc.Client) {
 	status, err := client.Status(rctx)
 	cancel()
 	if err != nil {
-		say(false, "rcon", fmt.Sprintf("%s: %v", cfg.Factorio.RCON.Address, err))
+		detail := fmt.Sprintf("%s: %v", cfg.Factorio.RCON.Address, err)
+		if strings.Contains(err.Error(), "answered with text") {
+			detail += "; RCON itself works, so the companion mod is not running on that server: install ai-agent-bridge there and start the server"
+		}
+		say(false, "rcon", detail)
 	} else {
 		say(true, "rcon", fmt.Sprintf("%s answers; companion %s, protocol %d, %d player(s) on, %d question(s) pending",
 			cfg.Factorio.RCON.Address, status.ModVersion, status.ProtocolVersion, status.PlayerCount, status.PendingCount))
