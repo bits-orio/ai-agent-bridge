@@ -169,7 +169,26 @@ function F.install(opts)
   local stats = {
     input_counts  = { ["iron-plate"] = 1000, ["copper-plate"] = 500 },
     output_counts = { ["iron-plate"] = 400 },
-    get_flow_count = function(a)
+  }
+  -- LuaFlowStatistics::get_input_count / get_output_count take a
+  -- FlowStatisticsID, bare name or {name, quality}, and answer the lifetime
+  -- count. Only nauvis has ever produced anything here, so the all-surfaces
+  -- read can be seen to skip the platform.
+  local function lifetime_count(counts)
+    return function(id)
+      local item, quality = id, "normal"
+      if type(id) == "table" then item, quality = id.name, id.quality or "normal" end
+      assert(type(item) == "string", "get_*_count wants an item prototype name")
+      assert(S.quality_share[quality], "no quality prototype named " .. tostring(quality))
+      if S.last_stats_surface ~= "nauvis" then return 0 end
+      return (counts[item] or 0) * S.quality_share[quality]
+    end
+  end
+  stats.get_input_count = lifetime_count(stats.input_counts)
+  stats.get_output_count = lifetime_count(stats.output_counts)
+  do
+    local s_ = stats
+    s_.get_flow_count = function(a)
       assert(type(a) == "table", "get_flow_count wants one table")
       assert(a.name and a.category and a.precision_index, "get_flow_count is missing a field")
       assert(a.category == "input" or a.category == "output" or a.category == "storage", a.category)
@@ -190,8 +209,8 @@ function F.install(opts)
         return (a.category == "input" and 2 or 1) * share
       end
       return (a.category == "input" and 60 or 20) * share
-    end,
-  }
+    end
+  end
   S.stats = stats
 
   local nauvis = { name = "nauvis", index = 1, valid = true, planet = { name = "nauvis", valid = true } }

@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.2
+Date: 2026-09-11
+  Changes:
+    - A force's total production no longer depends on guessing its surface: production_since
+      takes the surface as optional and, without one, counts every surface the force has made
+      the item on, with a per-surface breakdown. Since tick 0 the count is exact, from the
+      game's own lifetime counters.
+    - The production tools say plainly which is a rate and which is a total, so "how much has
+      team 2 made" is answered with a total and "how fast" with a rate.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.1
 Date: 2026-09-11
   Changes:

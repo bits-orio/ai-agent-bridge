@@ -102,12 +102,32 @@ check("production_since sums produced over both qualities", since.ok and since.r
       since.ok and since.r.produced)
 check("production_since sums consumed over both qualities, rounded",
       since.ok and since.r.consumed == 75 and since.r.net == 75, since.ok and F.encode(since.r))
+
+-- since_tick 0 is the whole game: exact from the engine's lifetime counters,
+-- one lookup per quality, no samples.
+local whole = call("ai-agent-bridge-tools", "production_since",
+  { force = "player", surface = "nauvis", item = "iron-plate", since_tick = 0 })
+check("production_since since 0 is exact and summed over qualities", whole.ok and whole.r.produced == 1500
+      and whole.r.consumed == 600 and whole.r.net == 900 and whole.r.method == "lifetime counters, exact"
+      and whole.r.window == nil, F.encode(whole))
+-- No surface: every surface the force has made the item on, with a breakdown;
+-- the platform has never made any and is left out.
+local everywhere = call("ai-agent-bridge-tools", "production_since",
+  { force = "player", item = "iron-plate", since_tick = 0 })
+check("production_since with no surface counts every producing surface", everywhere.ok and everywhere.r.surface == "all"
+      and everywhere.r.produced == 1500 and everywhere.r.surfaces_counted == 1
+      and everywhere.r.surfaces[1].surface == "nauvis" and everywhere.r.surfaces[1].produced == 1500, F.encode(everywhere))
+local everywhere_sampled = call("ai-agent-bridge-tools", "production_since",
+  { force = "player", item = "iron-plate", since_tick = S.tick - 600 })
+check("production_since with no surface and a recent tick samples the producing surfaces only",
+      everywhere_sampled.ok and everywhere_sampled.r.produced == 150 and everywhere_sampled.r.surfaces_counted == 1
+      and everywhere_sampled.r.method == "flow samples" and everywhere_sampled.r.samples == 50, F.encode(everywhere_sampled))
 check("production_since reports full coverage", since.ok and since.r.covers_full_period == true)
 check("production_since covered_ticks >= elapsed", since.ok and since.r.covered_ticks >= since.r.elapsed_ticks)
 
 local far = call("ai-agent-bridge-tools", "production_since",
-  { force = "player", surface = "nauvis", item = "iron-plate", since_tick = 0 })
-check("production_since clamps a very old tick", far.ok and far.r.samples <= 300, F.encode(far))
+  { force = "player", surface = "nauvis", item = "iron-plate", since_tick = 1 })
+check("production_since clamps a very old tick", far.ok and far.r.samples <= 300 and far.r.method == "flow samples", F.encode(far))
 
 local future = call("ai-agent-bridge-tools", "production_since",
   { force = "player", surface = "nauvis", item = "iron-plate", since_tick = S.tick + 10 })

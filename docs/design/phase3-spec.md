@@ -389,7 +389,14 @@ the two tools' descriptions say the same. The same session compared two
 teams by produced-per-minute over the server's last hour, which counts the
 time a team was offline as nothing; the prompt now says a comparison on
 anything cumulative is each force's total since its own start tick divided
-by its own online hours from the clock tool, both figures shown.
+by its own online hours from the clock tool, both figures shown. The
+retry then compared 100 plates to 0 for a team that had made 100 on its
+own surface: the model had to guess a surface for the other team, and
+guessed wrong. `production_since` now takes the surface as optional and,
+without one, counts every surface the force has made the item on, exact
+from the engine's cumulative counters when `since_tick` is 0 and from the
+flow samples otherwise, with a per-surface breakdown; the prompt says a
+force's total is the no-surface call.
 
 ## Safety review (2026-09-11)
 
