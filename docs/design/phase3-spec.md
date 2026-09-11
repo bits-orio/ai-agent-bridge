@@ -353,9 +353,14 @@ Three things the first team-vs-team session showed, all built:
   say and the force stands on more than one; the session carries the
   follow-up. The first live where question searched the wrong surface
   before locating the asker, so the companion now fixes the asker's surface
-  on the question row (poll rows carry `surface`) and the prompt says where
-  the asker stands and to search there unless the question names another
-  place or force.
+  on the question row (poll rows carry `surface`, the controller's, which
+  in remote view is the one being looked at, and `physical_surface` when
+  the character stands elsewhere) and the prompt says where the asker is
+  looking and to search there unless the question names another place or
+  force. `locate_player` answers with the character's place and names the
+  viewed surface beside it when it differs. An unnamed team's label is its
+  force name, so slot numbers work unchanged; "team 3" typed with a space
+  is swapped too.
 
 ## Build order
 

@@ -39,6 +39,11 @@ func substituteLabels(text string, labels []ForceLabel) string {
 		if rest, ok := teamRemainder(l.Label); ok {
 			rules = append(rules, rule{rest, l.Name})
 		}
+		// A label players type with spaces where it has hyphens: an unnamed
+		// team's label is its force name, "team-3", and a player says team 3.
+		if spaced := strings.ReplaceAll(l.Label, "-", " "); spaced != l.Label {
+			rules = append(rules, rule{spaced, l.Name})
+		}
 	}
 	sort.SliceStable(rules, func(i, j int) bool { return len(rules[i].from) > len(rules[j].from) })
 	for _, r := range rules {

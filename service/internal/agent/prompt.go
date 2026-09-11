@@ -19,7 +19,10 @@ func systemPrompt(q Question) string {
 	b.WriteString("You answer one question from one player by reading live game state with the tools you are given.\n\n")
 
 	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
-	if q.Surface != "" {
+	switch {
+	case q.Surface != "" && q.PhysicalSurface != "":
+		fmt.Fprintf(&b, ", standing on surface %q and looking at surface %q", q.PhysicalSurface, q.Surface)
+	case q.Surface != "":
 		fmt.Fprintf(&b, ", standing on surface %q", q.Surface)
 	}
 	b.WriteString(". ")
@@ -46,7 +49,7 @@ func systemPrompt(q Question) string {
 	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
-	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker stands on unless the question names another place or another force; ")
+	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")
 	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
 	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer.\n\n")
 

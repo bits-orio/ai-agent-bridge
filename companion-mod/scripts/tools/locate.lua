@@ -42,7 +42,7 @@ M.manifest = {
     },
   },
   locate_player = {
-    desc = "Where one player is: surface and position with a ready [gps=...] tag, and whether they are connected. Unknown player: found=false.",
+    desc = "Where one player's character is: surface and position with a ready [gps=...] tag, whether they are connected, and the surface they are looking at when it differs (remote view). Unknown player: found=false.",
     params = {
       player = "string! player name",
     },
@@ -159,12 +159,20 @@ local function locate_player(a)
   if not (player and player.valid) then
     return { found = false, player = a.player, reason = "no player by that name" }
   end
-  local surface_name = player.surface and player.surface.name or "?"
-  local x, y, tag = gps(player.position, surface_name)
-  return {
+  -- The character's place is the answer to "where is Bob"; the controller's
+  -- surface (remote view) is reported beside it when it differs, since that
+  -- is what Bob is looking at right now.
+  local physical = player.physical_surface and player.physical_surface.valid and player.physical_surface or player.surface
+  local surface_name = physical and physical.name or "?"
+  local position = player.physical_position or player.position
+  local x, y, tag = gps(position, surface_name)
+  local out = {
     found = true, player = player.name, connected = player.connected == true,
     surface = surface_name, x = x, y = y, gps = tag,
   }
+  local viewing = player.surface and player.surface.valid and player.surface.name or nil
+  if viewing and viewing ~= surface_name then out.viewing = viewing end
+  return out
 end
 
 M.functions = { find_entities = find_entities, locate_player = locate_player }

@@ -55,9 +55,15 @@ function M.ask(spec)
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
   local player_name = player and player.name or nil
-  -- Where the asker stands, fixed now: a "where is my X" question is about
-  -- this surface far more often than not, and the model is told so.
+  -- Where the asker is, fixed now: a "where is my X" question is about the
+  -- surface they are looking at far more often than not, and the model is
+  -- told so. LuaControl::surface follows the controller, so in remote view
+  -- it is the viewed surface; LuaPlayer::physical_surface is where the
+  -- character stands, kept when it differs.
   local player_surface = player and player.surface and player.surface.valid and player.surface.name or nil
+  local physical = player and player.physical_surface and player.physical_surface.valid
+    and player.physical_surface.name or nil
+  if physical == player_surface then physical = nil end
   -- The chat scope, fixed here (docs/design/phase3-spec.md part 2). A caller
   -- may hand one in (a mod asking for a channel of its own); a player's is
   -- resolved from the providers; anything else is global.
@@ -74,6 +80,7 @@ function M.ask(spec)
     player_index = player_index,
     player_name = player_name,
     surface = player_surface,
+    physical_surface = physical,
     force = force,
     tick = game.tick,
     answered = false,

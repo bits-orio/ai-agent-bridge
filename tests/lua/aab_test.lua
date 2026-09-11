@@ -227,7 +227,8 @@ local qid7 = ask_cmd("who is online")
 local poll7 = rpc({ op = "poll", after = qid7 - 1, limit = 1 })
 check("a global question polls with scope global and no private flag",
       poll7.ok and poll7.r[1].scope == "global" and poll7.r[1].private == nil, F.encode(poll7))
-check("a player's question polls with the surface they stand on", poll7.r[1].surface == "nauvis", F.encode(poll7))
+check("a player's question polls with the surface they are looking at, and the physical one when it differs",
+      poll7.r[1].surface == "nauvis" and poll7.r[1].physical_surface == "platform-1", F.encode(poll7))
 rpc({ op = "answer", qid = qid7, artifact = { shape = "notice", text = "Bob" } })
 check("the global tag sits after the name (the first provider by name supplies it)",
       S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Bob$") ~= nil,
@@ -339,8 +340,9 @@ check("no filter at all is an error in the tool's own words", not no_filter.ok a
 local elsewhere = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "platform-1", name = "lab" } })
 check("another surface has none", elsewhere.ok and elsewhere.r.total == 0 and elsewhere.r.found == true, F.encode(elsewhere))
 local where_bob = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob" } })
-check("locate_player finds Bob with a gps tag", where_bob.ok and where_bob.r.found == true and where_bob.r.gps == "[gps=10,-4,nauvis]"
-      and where_bob.r.connected == true, F.encode(where_bob))
+check("locate_player finds Bob's character with a gps tag, and says what he is looking at",
+      where_bob.ok and where_bob.r.found == true and where_bob.r.gps == "[gps=2,3,platform-1]"
+      and where_bob.r.surface == "platform-1" and where_bob.r.viewing == "nauvis" and where_bob.r.connected == true, F.encode(where_bob))
 local where_nobody = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Zed" } })
 check("locate_player on an unknown name is found=false", where_nobody.ok and where_nobody.r.found == false, F.encode(where_nobody))
 

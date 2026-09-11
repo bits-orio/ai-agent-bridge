@@ -115,6 +115,9 @@ type Question struct {
 	// Surface is where the asker stood when they asked, when they are a
 	// player; a where question is about that surface more often than not.
 	Surface string `json:"surface,omitempty"`
+	// PhysicalSurface is where the asker's character stood when Surface is
+	// the one they were looking at in remote view; empty when the same.
+	PhysicalSurface string `json:"physical_surface,omitempty"`
 }
 
 // PollReply is the "r" of a poll call: unanswered questions with id greater than

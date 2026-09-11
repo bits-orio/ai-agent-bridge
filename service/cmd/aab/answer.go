@@ -134,14 +134,15 @@ func (r *runner) refused(ctx context.Context, q rpc.Question, state *delivery, c
 // so the log line and the system prompt always name the asker the same way.
 func agentQuestion(q rpc.Question) agent.Question {
 	return agent.Question{
-		ID:          q.ID,
-		Text:        q.Text,
-		PlayerIndex: q.PlayerIndex,
-		PlayerName:  q.PlayerName,
-		Force:       q.Force,
-		Scope:       q.Scope,
-		Private:     q.Private,
-		Surface:     q.Surface,
+		ID:              q.ID,
+		Text:            q.Text,
+		PlayerIndex:     q.PlayerIndex,
+		PlayerName:      q.PlayerName,
+		Force:           q.Force,
+		Scope:           q.Scope,
+		Private:         q.Private,
+		Surface:         q.Surface,
+		PhysicalSurface: q.PhysicalSurface,
 	}
 }
 

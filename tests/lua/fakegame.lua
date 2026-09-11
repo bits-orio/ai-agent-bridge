@@ -249,6 +249,8 @@ function F.install(opts)
   local bob = {
     index = 1, name = "Bob", valid = true, connected = true, admin = true,
     surface = nauvis, opened = nil, position = { x = 10.4, y = -3.6 },
+    -- Remote view: the controller is on nauvis, the character on the platform.
+    physical_surface = orbit, physical_position = { x = 2.2, y = 2.8 },
     print = function(text) S.printed[#S.printed + 1] = { who = "Bob", text = text } end,
   }
   bob.gui = { screen = element({ type = "empty-widget" }, nil) }

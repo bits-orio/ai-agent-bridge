@@ -11,6 +11,7 @@ func TestSubstituteLabels(t *testing.T) {
 		{Name: "team-2", Label: "Team losers"},
 		{Name: "team-10", Label: "Team Ace Two"},
 		{Name: "player", Label: "The Engineers"},
+		{Name: "team-3", Label: "team-3"},
 	}
 	for in, want := range map[string]string{
 		"how is Team Ace doing":                "how is team-1 doing",
@@ -20,6 +21,8 @@ func TestSubstituteLabels(t *testing.T) {
 		"who are the players of The Engineers": "who are the players of The Engineers",
 		"space ace and acer are not teams":     "space team-1 and acer are not teams",
 		"nothing here":                         "nothing here",
+		// An unnamed team\'s label is its force name; a player types it with a space.
+		"how is team 3 doing": "how is team-3 doing",
 	} {
 		if got := substituteLabels(in, labels); got != want {
 			t.Errorf("substituteLabels(%q) = %q, want %q", in, got, want)

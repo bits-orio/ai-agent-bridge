@@ -46,16 +46,17 @@ const (
 
 // Question is one thing to answer, as the companion handed it over.
 type Question struct {
-	ID          int64
-	Text        string
-	PlayerIndex *int
-	PlayerName  string // empty when the asker is not a connected player
-	Force       string
-	Asker       string       // a label the caller chose, used when no player name came with the question
-	Scope       string       // the chat scope key the companion resolved; "" means global
-	Private     bool         // true when the scope is private to an audience
-	Labels      []ForceLabel // names players use for forces, from the companion's labels op
-	Surface     string       // the surface the asker stood on, "" when unknown
+	ID              int64
+	Text            string
+	PlayerIndex     *int
+	PlayerName      string // empty when the asker is not a connected player
+	Force           string
+	Asker           string       // a label the caller chose, used when no player name came with the question
+	Scope           string       // the chat scope key the companion resolved; "" means global
+	Private         bool         // true when the scope is private to an audience
+	Labels          []ForceLabel // names players use for forces, from the companion's labels op
+	Surface         string       // the surface the asker was looking at, "" when unknown
+	PhysicalSurface string       // where their character stood, when that differs
 }
 
 // ForceLabel is a force name and what players call it.
