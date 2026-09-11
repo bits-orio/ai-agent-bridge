@@ -20,12 +20,14 @@ The service needs two things from you, and a model key:
    default, which buys every model it lists; or an Anthropic key with
    `model.provider: anthropic`.
 
-Build it once (Docker, no Go install needed), then configure and run:
+Get the binary from the [releases page](https://github.com/bits-orio/ai-agent-bridge/releases),
+Linux, Windows and macOS builds are attached to every release, or build it
+once with Docker, no Go install needed. Then configure and run:
 
 ```sh
 git clone https://github.com/bits-orio/ai-agent-bridge
 cd ai-agent-bridge
-make service                    # -> service/aab
+make service                    # -> service/aab, or use the downloaded binary
 cd service
 cp aab.yaml.example aab.yaml    # the settings
 cp ../.env.example .env         # the secrets

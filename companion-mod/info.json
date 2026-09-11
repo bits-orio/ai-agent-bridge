@@ -7,5 +7,5 @@
   "dependencies": [
     "base >= 2.0"
   ],
-  "description": "Ask your running game a question in chat and get the answer in-game from an AI agent. The agent pulls only what each question needs over RCON, works for every force on a multiplayer server, and other mods can add tools to it. Needs the AI Agent Bridge service running beside the server (see source)."
+  "description": "AI chatbot and chat assistant for your Factorio server: ask a question in game chat and the AI answers in chat from your live save. Where things are, production rates, research, what changed since you died. Multiplayer, every team and force, follow-up questions. Bring your own key: Claude, GPT, DeepSeek, Gemini or any LLM on OpenRouter. Runs with a small agent program beside the server."
 }

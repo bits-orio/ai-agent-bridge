@@ -23,7 +23,10 @@ password is blank.
 
 ## 3. Build the service
 
-No prebuilt binary yet. Docker builds it, no Go install needed:
+Download `aab` for your system from the
+[releases page](https://github.com/bits-orio/ai-agent-bridge/releases)
+(Linux, Windows and macOS builds are attached to every release), or build
+it with Docker, no Go install needed:
 
 ```sh
 git clone https://github.com/bits-orio/ai-agent-bridge
@@ -31,6 +34,9 @@ cd ai-agent-bridge
 make service      # -> service/aab
 cd service
 ```
+
+Either way, put `aab.yaml` and `.env` (from `service/aab.yaml.example` and
+`.env.example` in the repository) next to the binary.
 
 ## 4. Tell it the two things it needs
 

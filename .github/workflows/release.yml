@@ -14,6 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FACTORIO_API_KEY: ${{ secrets.FACTORIO_API_KEY }}
+      # Two optional Discord webhook URLs: the full changelog goes to the first,
+      # a short "live on the portal" ping to the second. Either may be unset.
+      DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      DISCORD_ANNOUNCEMENTS_WEBHOOK: ${{ secrets.DISCORD_ANNOUNCEMENTS_WEBHOOK }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,8 +32,10 @@ jobs:
         run: |
           NAME=$(jq -r .name companion-mod/info.json)
           VERSION=$(jq -r .version companion-mod/info.json)
+          FACTORIO_VERSION=$(jq -r .factorio_version companion-mod/info.json)
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "factorio_version=${FACTORIO_VERSION}" >> "$GITHUB_OUTPUT"
           echo "folder=${NAME}_${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Sanity-check tag matches info.json
@@ -146,6 +152,28 @@ jobs:
           # Curated notes from changelog.txt (canonical for this project).
           body: ${{ steps.notes.outputs.notes }}
 
+      # The changelog to Discord. Values go through the environment, not
+      # template substitution, so a quote in the notes cannot break the script.
+      - name: Post release changelog to Discord
+        if: ${{ env.DISCORD_WEBHOOK != '' }}
+        env:
+          RELEASE_VERSION: ${{ steps.info.outputs.version }}
+          FACTORIO_VERSION: ${{ steps.info.outputs.factorio_version }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg title "AI Agent Bridge v${RELEASE_VERSION} for Factorio ${FACTORIO_VERSION} released" \
+            --arg desc  "${RELEASE_NOTES:0:4000}" \
+            --arg url   "$RELEASE_URL" \
+            '{ embeds: [{ title: $title, description: $desc, url: $url, color: 10181046 }] }')
+          HTTP_CODE=$(curl -sS -w "%{http_code}" -o /tmp/discord_response.txt \
+            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK") || true
+          echo "Discord HTTP ${HTTP_CODE}"; cat /tmp/discord_response.txt || true; echo
+          if [ "${HTTP_CODE:-0}" -lt 200 ] || [ "${HTTP_CODE:-0}" -ge 300 ]; then
+            echo "::error::Discord webhook returned ${HTTP_CODE}"; exit 1
+          fi
+
       # Upload the companion mod to the Factorio mod portal. Skipped if no API
       # key is set. Idempotent, safe to re-run. Recover a failed upload via the
       # manual "Upload to Mod Portal" workflow.
@@ -168,3 +196,23 @@ jobs:
         if: ${{ steps.upload.outcome == 'success' && env.FACTORIO_API_KEY != '' }}
         continue-on-error: true
         run: ./tools/sync_portal_details.sh
+
+      # A short "go play it" ping, only once the portal really has the release.
+      - name: Post mod-portal release to the announcements channel
+        if: ${{ steps.upload.outcome == 'success' && env.DISCORD_ANNOUNCEMENTS_WEBHOOK != '' }}
+        env:
+          RELEASE_VERSION: ${{ steps.info.outputs.version }}
+          FACTORIO_VERSION: ${{ steps.info.outputs.factorio_version }}
+          MOD_NAME: ${{ steps.info.outputs.name }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg title "AI Agent Bridge v${RELEASE_VERSION} for Factorio ${FACTORIO_VERSION} is live on the mod portal" \
+            --arg desc  "Ask your server a question in chat and read the AI answer in chat. Update or install from the mods menu." \
+            --arg url   "https://mods.factorio.com/mod/${MOD_NAME}" \
+            '{ embeds: [{ title: $title, description: $desc, url: $url, color: 5763719 }] }')
+          HTTP_CODE=$(curl -sS -w "%{http_code}" -o /tmp/announce_response.txt \
+            -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_ANNOUNCEMENTS_WEBHOOK") || true
+          echo "Announcements HTTP ${HTTP_CODE}"; cat /tmp/announce_response.txt || true; echo
+          if [ "${HTTP_CODE:-0}" -lt 200 ] || [ "${HTTP_CODE:-0}" -ge 300 ]; then
+            echo "::error::Announcements webhook returned ${HTTP_CODE}"; exit 1
+          fi

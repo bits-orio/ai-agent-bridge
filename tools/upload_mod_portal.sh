@@ -3,9 +3,10 @@
 # Idempotent: skips upload (exit 0) if the version is already published.
 #
 # Usage: tools/upload_mod_portal.sh <mod_name> <version> <zip_path>
-# Env:   FACTORIO_API_KEY (required), token with "ModPortal: Upload Mods" scope
+# Env:   FACTORIO_API_KEY (required), a key with "ModPortal: Upload Mods", and
+#        "ModPortal: Publish Mods" for a mod's very first release
 #
-# API: https://wiki.factorio.com/Mod_upload_API
+# API: https://wiki.factorio.com/Mod_upload_API and Mod_publish_API
 set -euo pipefail
 
 MOD="${1:?mod name required}"
@@ -21,8 +22,10 @@ echo "::group::Idempotency check"
 # every published version. If our version is already there, this is a re-run
 # and we should noop.
 PORTAL_INFO=$(curl -fsSL "https://mods.factorio.com/api/mods/${MOD}/full" || echo "")
+FIRST_PUBLISH=0
 if [[ -z "$PORTAL_INFO" ]]; then
-    echo "warning: mod '${MOD}' not found on portal yet (first release?)"
+    echo "mod '${MOD}' is not on the portal yet: this is its first publish"
+    FIRST_PUBLISH=1
 else
     EXISTING=$(echo "$PORTAL_INFO" \
         | jq -r --arg v "$VERSION" '.releases[]? | select(.version == $v) | .version')
@@ -34,12 +37,20 @@ else
 fi
 echo "::endgroup::"
 
-echo "::group::Step 1, init_upload"
+# A mod that is not on the portal yet goes through the publish API
+# (https://wiki.factorio.com/Mod_publish_API, key scope "Publish Mods");
+# every later release through the upload API (scope "Upload Mods").
+if [[ "$FIRST_PUBLISH" == 1 ]]; then
+    INIT_URL="https://mods.factorio.com/api/v2/mods/init_publish"
+else
+    INIT_URL="https://mods.factorio.com/api/v2/mods/releases/init_upload"
+fi
+echo "::group::Step 1, ${INIT_URL##*/}"
 INIT_RESPONSE=$(curl -sS \
     -w "\nHTTP_CODE:%{http_code}" \
     -H "Authorization: Bearer ${FACTORIO_API_KEY}" \
     -F "mod=${MOD}" \
-    "https://mods.factorio.com/api/v2/mods/releases/init_upload")
+    "$INIT_URL")
 
 INIT_HTTP=$(echo "$INIT_RESPONSE" | tail -n1 | cut -d: -f2)
 INIT_BODY=$(echo "$INIT_RESPONSE" | sed '$d')
@@ -64,9 +75,24 @@ echo "got upload_url"
 echo "::endgroup::"
 
 echo "::group::Step 2, upload zip"
+UPLOAD_ARGS=( -F "file=@${ZIP}" )
+if [[ "$FIRST_PUBLISH" == 1 ]]; then
+    # The publish upload takes the page fields too, so a brand-new mod is
+    # never listed without a category or a licence; the sync step that
+    # follows sets the rest (title, summary, homepage, tags).
+    META="$(dirname "$0")/portal_meta.json"
+    DESC="$(dirname "$0")/../docs/portal.md"
+    if [[ -f "$META" ]]; then
+        for field in category license source_url; do
+            value=$(jq -r --arg f "$field" '.[$f] // empty' "$META")
+            [[ -n "$value" ]] && UPLOAD_ARGS+=( --form-string "${field}=${value}" )
+        done
+    fi
+    [[ -f "$DESC" ]] && UPLOAD_ARGS+=( -F "description=<${DESC}" )
+fi
 UPLOAD_RESPONSE=$(curl -sS \
     -w "\nHTTP_CODE:%{http_code}" \
-    -F "file=@${ZIP}" \
+    "${UPLOAD_ARGS[@]}" \
     "$UPLOAD_URL")
 
 UPLOAD_HTTP=$(echo "$UPLOAD_RESPONSE" | tail -n1 | cut -d: -f2)

@@ -1,6 +1,21 @@
 ---------------------------------------------------------------------------------------------------
 Version: 0.1.0
-Date: 2026-09-10
+Date: 2026-09-11
   Features:
-    - Initial skeleton: the aab-rpc console command, the agent_tools_v1 probe,
-      the /ask question ring, and the append-only events file.
+    - Ask the AI in chat: /ask a question, or a chat prefix of your choice, and the answer prints
+      back in chat a few seconds later, pulled from the live save at that moment.
+    - Follow-up questions share a session. /ask new starts over, /ask #name opens a named session
+      others can join, /ask sessions lists what is open.
+    - Any player may ask about any force. Team chat privacy and team names come from mods that
+      have them (Multi-Team Support), so a team in team-only chat gets private answers.
+    - Answers with item icons, clickable item and recipe tags when you ask about a thing itself,
+      and map pings you can click for "where" questions, ghosts included.
+    - Seventeen lookups on the live game: forces, players, surfaces, research and the queue,
+      production rates and totals since a tick, logistic networks, entity counts, evolution,
+      pollution, rockets, game time, where entities are, where a player is; plus history
+      (deaths, joins, chat, research, rockets) from the event log.
+    - Other mods add their own lookups by exposing one function; the mod never needs to know them.
+    - Safety: the rpc command runs for RCON only, asking is rate limited per player and per
+      server, refusals are private, every lookup is a bounded read.
+    - The mod is the game side of an open protocol over RCON. The agent program on GitHub uses
+      your own OpenRouter or Anthropic key and any model you pick; anyone can write another.
