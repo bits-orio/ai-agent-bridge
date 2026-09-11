@@ -44,7 +44,7 @@ Factorio 2.0, Space Age or not. Works on a plain vanilla server. Needs RCON on t
 
 ## Works with
 
-- [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support): private answers in team chat, teams by name.
+- [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support): private answers in team chat, teams by name, and each team's own clock so "how am I doing compared to them" compares fairly.
 - [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge): both use RCON on the same server, neither needs the other.
 
 Part of the MTS family: [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support), [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge).

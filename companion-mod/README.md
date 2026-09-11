@@ -342,6 +342,10 @@ the channel has changed since, and a team leaving private mode never sees
 its private session continue in the open. [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support)
 answers this from its team chat mode.
 
+Multi-Team Support also uses seam 1: it publishes each team's own clock as
+tools, so "how am I doing compared to Team Ace" is answered on the teams'
+clocks rather than the server's.
+
 ### 5. Force labels by probe, `force_labels_v1`
 
 A mod that names forces adds a zero-argument `force_labels_v1` to any

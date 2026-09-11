@@ -28,7 +28,7 @@ local M = {}
 
 M.manifest = {
   game_time = {
-    desc = "Game age and who is on: tick, ticks and hours played since the map was made, connected players on the server and this force. Quote hours, not ticks.",
+    desc = "The server's clock: tick, ticks and hours since the map was made, connected players on the server and this force. Quote hours, not ticks. A force with a clock of its own (a team mod's tool) is compared by that, not this.",
   },
 }
 

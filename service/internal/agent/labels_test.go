@@ -46,7 +46,7 @@ func TestSystemPromptRules(t *testing.T) {
 	if strings.Contains(got, "standing on surface") {
 		t.Errorf("a question without a surface must not claim one:\n%s", got)
 	}
-	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice"} {
+	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, got)
 		}
