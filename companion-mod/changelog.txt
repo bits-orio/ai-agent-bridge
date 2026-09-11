@@ -8,6 +8,10 @@ Date: 2026-09-11
       game's own lifetime counters.
     - The production tools say plainly which is a rate and which is a total, so "how much has
       team 2 made" is answered with a total and "how fast" with a rate.
+    - Every lookup accepts a force's display name where it expects a force name, "Team 02" for
+      team-2, resolved through the team mod's labels, so an agent that read a name in a tool
+      result and passed it back still reaches the right force.
+    - A comparison with a blank column name prints a letter in its place rather than nothing.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.1
 Date: 2026-09-11
