@@ -20,11 +20,13 @@ type price struct {
 }
 
 // Cache prices are the published multiples of the input price: writing a
-// prefix into the cache costs a quarter more than sending it, reading it
-// back costs a tenth. Every model on the list uses the same multiples.
+// prefix into the cache costs a quarter more than sending it for the
+// five-minute lifetime and twice as much for the one-hour lifetime; reading
+// it back costs a tenth. Every model on the list uses the same multiples.
 const (
-	cacheWriteMultiple = 1.25
-	cacheReadMultiple  = 0.1
+	cacheWriteMultiple     = 1.25
+	cacheWriteHourMultiple = 2.0
+	cacheReadMultiple      = 0.1
 )
 
 var prices = map[string]price{
@@ -45,7 +47,14 @@ func CostUSD(name string, u model.Usage) float64 {
 	}
 	in := float64(u.InputTokens) * p.in
 	out := float64(u.OutputTokens) * p.out
-	cached := float64(u.CacheReadTokens)*p.in*cacheReadMultiple + float64(u.CacheWriteTokens)*p.in*cacheWriteMultiple
+	hour := u.CacheWriteHourTokens
+	if hour > u.CacheWriteTokens {
+		hour = u.CacheWriteTokens
+	}
+	fiveMin := u.CacheWriteTokens - hour
+	cached := float64(u.CacheReadTokens)*p.in*cacheReadMultiple +
+		float64(fiveMin)*p.in*cacheWriteMultiple +
+		float64(hour)*p.in*cacheWriteHourMultiple
 	return (in + out + cached) / 1e6
 }
 

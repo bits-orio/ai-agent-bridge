@@ -25,6 +25,8 @@ import (
 // Defaults applied whenever a field is left unset, in both config modes.
 const (
 	defaultModel                = "claude-sonnet-5"
+	defaultThinking             = "off"
+	defaultCacheTTL             = "1h"
 	defaultMaxRounds            = 6
 	defaultMaxTokensPerQuestion = 20000
 	defaultMaxOutputTokens      = 4096
@@ -127,7 +129,10 @@ type RCONConfig struct {
 // itself before running.
 type AnthropicConfig struct {
 	APIKeyEnv string `yaml:"api_key_env"`
-	APIKey    string `yaml:"-"` // resolved from env at load time
+	APIKey    string `yaml:"-"`         // resolved from env at load time
+	Thinking  string `yaml:"thinking"`  // off (default), adaptive, or model for the model's own default
+	Effort    string `yaml:"effort"`    // empty (default) leaves it to the model; low, medium, high where the model accepts it
+	CacheTTL  string `yaml:"cache_ttl"` // 1h (default) or 5m: how long the cached rules and tools live between questions
 	Model     string `yaml:"model"`
 }
 
@@ -166,6 +171,15 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Anthropic.Model == "" {
 		c.Anthropic.Model = defaultModel
+	}
+	if c.Anthropic.Thinking == "" {
+		c.Anthropic.Thinking = defaultThinking
+	}
+	if c.Anthropic.CacheTTL == "" {
+		c.Anthropic.CacheTTL = defaultCacheTTL
+	}
+	if err := c.Anthropic.check(); err != nil {
+		return nil, err
 	}
 	c.applyAgentDefaults()
 	c.History.Path = resolveHistoryPath(c.History.Path, path)
@@ -245,6 +259,9 @@ func loadFromEnv(m Meta) (*Config, error) {
 			APIKeyEnv: "ANTHROPIC_API_KEY",
 			APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 			Model:     getenvDefault("AAB_MODEL", defaultModel),
+			Thinking:  getenvDefault("AAB_THINKING", defaultThinking),
+			Effort:    os.Getenv("AAB_EFFORT"),
+			CacheTTL:  getenvDefault("AAB_CACHE_TTL", defaultCacheTTL),
 		},
 		History: HistoryConfig{Path: expandPath(os.Getenv("AAB_HISTORY_PATH"))},
 		ControlAPI: ControlAPIConfig{
@@ -383,4 +400,25 @@ func expandPath(p string) string {
 		}
 	}
 	return p
+}
+
+// check refuses a value the API would refuse later, so a typo in aab.yaml
+// fails at start and not on the first question.
+func (a AnthropicConfig) check() error {
+	switch a.Thinking {
+	case "off", "adaptive", "model":
+	default:
+		return fmt.Errorf("anthropic.thinking: %q is not off, adaptive or model", a.Thinking)
+	}
+	switch a.Effort {
+	case "", "low", "medium", "high", "xhigh", "max":
+	default:
+		return fmt.Errorf("anthropic.effort: %q is not low, medium, high, xhigh or max", a.Effort)
+	}
+	switch a.CacheTTL {
+	case "5m", "1h":
+	default:
+		return fmt.Errorf("anthropic.cache_ttl: %q is not 5m or 1h", a.CacheTTL)
+	}
+	return nil
 }

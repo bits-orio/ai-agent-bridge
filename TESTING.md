@@ -184,7 +184,13 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
   tools have rates and totals since a tick, not a lifetime total, and the model said so.
   Also seen: the client must join the headless server for the service to see a question;
   a locally hosted game holds the question in its own ring with nothing polling it.
-- [ ] Re-measure after the cost contract (spec, "Cost contract"): same four questions
-  on claude-sonnet-5 with caching. Expected from the token counts above: question 1
-  near one cent, question 4 under half a cent, `cached=` non-zero from the second
-  request on.
+- [x] 2026-09-10, after the cost contract, claude-sonnet-5, one question ("Can you
+  summarize my production so far?"): `rounds=2 tokens=4/621 cached=5103/5719
+  cost=$0.0215`. Caching worked (only 4 fresh input tokens) but this was the cold
+  question that wrote the cache, 67% of the cost, and the 621 output tokens for a
+  two-round question were adaptive thinking, 29%. Both addressed in the spec's second
+  cost addendum: thinking off by default, effort low in the example, 1h cache entry.
+- [ ] Re-measure with thinking off: ask twice within an hour. Expected on Sonnet 5:
+  the first question about $0.02 (the hour-long cache write), the second about $0.003
+  with `cached=5000/0` or so and `out` under 200. Switch `anthropic.model` to
+  `claude-haiku-4-5` (and remove `effort`) for about half of that.

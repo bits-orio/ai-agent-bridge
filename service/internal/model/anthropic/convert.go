@@ -175,9 +175,10 @@ func fromContentBlocks(content []sdk.ContentBlockUnion) []model.Block {
 
 func fromUsage(u sdk.Usage) model.Usage {
 	return model.Usage{
-		InputTokens:      int(u.InputTokens),
-		OutputTokens:     int(u.OutputTokens),
-		CacheReadTokens:  int(u.CacheReadInputTokens),
-		CacheWriteTokens: int(u.CacheCreationInputTokens),
+		InputTokens:          int(u.InputTokens),
+		OutputTokens:         int(u.OutputTokens),
+		CacheReadTokens:      int(u.CacheReadInputTokens),
+		CacheWriteTokens:     int(u.CacheCreationInputTokens),
+		CacheWriteHourTokens: int(u.CacheCreation.Ephemeral1hInputTokens),
 	}
 }

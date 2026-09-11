@@ -13,10 +13,9 @@ import (
 // SubmitTool is the name the model calls to answer.
 const SubmitTool = "submit_answer"
 
-const submitDescription = "Send the answer to the player and end your turn. Call this exactly once, as your last action. " +
-	"Pick the shape that fits the answer: summary for prose, notice for a single warning or confirmation, " +
-	"list for one line per thing, table for rows of values, comparison for two forces or two items side by side. " +
-	"Fill only the fields that shape uses. The game renders it, so send plain values and no formatting of your own."
+const submitDescription = "Send the answer and end your turn; call it once, last, alone. Shapes: summary (prose), " +
+	"notice (one warning or confirmation), list (one line per thing), table (rows of values), " +
+	"comparison (two forces or items side by side). Fill only that shape's fields. Plain values, no formatting."
 
 // submitDef is the tool definition the model sees. Rows carries two different
 // shapes, so it is described rather than typed: an array of arrays of strings
@@ -30,7 +29,7 @@ func submitDef() model.ToolDef {
 		},
 		"title": map[string]any{
 			"type":        "string",
-			"description": "Optional heading for summary, list, table and comparison.",
+			"description": "Optional heading.",
 		},
 		"lines": map[string]any{
 			"type":        "array",
@@ -44,7 +43,7 @@ func submitDef() model.ToolDef {
 		"level": map[string]any{
 			"type":        "string",
 			"enum":        []string{LevelWarning, LevelConfirmation},
-			"description": "notice: what kind of notice this is.",
+			"description": "notice: its kind.",
 		},
 		"items": map[string]any{
 			"type":        "array",

@@ -21,66 +21,91 @@ import (
 )
 
 // DefaultMaxOutputTokens caps one assistant turn when the operator sets no
-// cap. An artifact is a few hundred tokens; the rest is headroom for adaptive
-// thinking, which counts against the same number. Output is the expensive
-// direction, so the cap is deliberately low and the per-question budget in
-// the config is the wider one.
+// cap. An artifact is a few hundred tokens; the rest is headroom for a
+// model that thinks, which counts against the same number. Output is the
+// expensive direction, so the cap is deliberately low and the per-question
+// budget in the config is the wider one.
 const DefaultMaxOutputTokens = 4096
+
+// Options is what the operator chose for the model, beyond the key.
+type Options struct {
+	Model     string
+	MaxOutput int    // output tokens per turn; zero or less means DefaultMaxOutputTokens
+	Thinking  string // "off" sends thinking disabled, "adaptive" sends adaptive, "model" or "" sends nothing
+	Effort    string // "" sends nothing; otherwise output_config.effort as given
+	CacheTTL  string // "1h" or "5m" for the rules-and-tools cache entry; "" means 5m
+}
 
 // Client answers one agent round through the Anthropic Messages API.
 type Client struct {
-	api       sdk.Client
-	model     string
-	maxOutput int64
+	api  sdk.Client
+	opts Options
 }
 
 // New builds a client for one model id. The id is a plain string from the
 // config (sdk.Model is an alias for string), so a model released after this
-// binary was built still works without a code change. maxOutput caps one
-// turn's output tokens; zero or less means DefaultMaxOutputTokens.
-func New(apiKey, modelID string, maxOutput int) *Client {
-	if maxOutput <= 0 {
-		maxOutput = DefaultMaxOutputTokens
+// binary was built still works without a code change.
+func New(apiKey string, opts Options) *Client {
+	if opts.MaxOutput <= 0 {
+		opts.MaxOutput = DefaultMaxOutputTokens
 	}
-	return &Client{
-		api:       sdk.NewClient(option.WithAPIKey(apiKey)),
-		model:     modelID,
-		maxOutput: int64(maxOutput),
-	}
+	return &Client{api: sdk.NewClient(option.WithAPIKey(apiKey)), opts: opts}
 }
 
-func (c *Client) Name() string { return c.model }
+func (c *Client) Name() string { return c.opts.Model }
 
 // Step sends the whole conversation and returns the next assistant turn.
-// Thinking is left unset: on Claude Opus 5 that runs adaptive thinking, which
-// is the recommended mode, and on older models it means no thinking.
-//
-// Two cache breakpoints ride on every request. The system prompt carries
-// one, and the API caches everything before a breakpoint, so the tool
-// definitions in front of it are cached with it: that is the fixed six
-// thousand tokens every round used to pay for in full. The last user block
-// carries the other, so round three reads rounds one and two from the cache
-// instead of re-sending them. A cached read costs a tenth of a fresh token.
 func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef) (model.Step, error) {
-	params := sdk.MessageNewParams{
-		Model:     c.model,
-		MaxTokens: c.maxOutput,
-		Messages:  cacheLastUserBlock(toMessageParams(msgs)),
-	}
-	if system != "" {
-		params.System = []sdk.TextBlockParam{{Text: system, CacheControl: sdk.NewCacheControlEphemeralParam()}}
-	}
-	if len(defs) > 0 {
-		params.Tools = toToolParams(defs)
-	}
-
-	resp, err := c.api.Messages.New(ctx, params)
+	resp, err := c.api.Messages.New(ctx, c.params(system, msgs, defs))
 	if err != nil {
-		return model.Step{}, fmt.Errorf("anthropic: %s: %w", c.model, err)
+		return model.Step{}, fmt.Errorf("anthropic: %s: %w", c.opts.Model, err)
 	}
 	return model.Step{
 		Blocks:     fromContentBlocks(resp.Content),
 		StopReason: string(resp.StopReason),
 		Usage:      fromUsage(resp.Usage),
 	}, nil
+}
+
+// params is the whole request for one round.
+//
+// Thinking is off unless the operator turned it on: a Claude 5 model runs
+// adaptive thinking when the field is left out, and on a question like "what
+// forces are there" that thinking is most of the output bill. Effort rides
+// along only when set, since not every model accepts it.
+//
+// Two cache breakpoints ride on every request. The system prompt carries
+// one with the operator's TTL, and the API caches everything before a
+// breakpoint, so the tool definitions ahead of it are cached with it: that
+// is the fixed few thousand tokens every round used to pay for in full. The
+// last user block carries the other, on the five-minute lifetime, so round
+// three reads rounds one and two from the cache instead of re-sending them.
+// The longer-lived entry has to come first in the prompt, which the order
+// system then messages already guarantees.
+func (c *Client) params(system string, msgs []model.Message, defs []model.ToolDef) sdk.MessageNewParams {
+	params := sdk.MessageNewParams{
+		Model:     c.opts.Model,
+		MaxTokens: int64(c.opts.MaxOutput),
+		Messages:  cacheLastUserBlock(toMessageParams(msgs)),
+	}
+	switch c.opts.Thinking {
+	case "off":
+		params.Thinking = sdk.ThinkingConfigParamUnion{OfDisabled: &sdk.ThinkingConfigDisabledParam{}}
+	case "adaptive":
+		params.Thinking = sdk.ThinkingConfigParamUnion{OfAdaptive: &sdk.ThinkingConfigAdaptiveParam{}}
+	}
+	if c.opts.Effort != "" {
+		params.OutputConfig = sdk.OutputConfigParam{Effort: sdk.OutputConfigEffort(c.opts.Effort)}
+	}
+	if system != "" {
+		cache := sdk.NewCacheControlEphemeralParam()
+		if c.opts.CacheTTL == "1h" {
+			cache.TTL = sdk.CacheControlEphemeralTTLTTL1h
+		}
+		params.System = []sdk.TextBlockParam{{Text: system, CacheControl: cache}}
+	}
+	if len(defs) > 0 {
+		params.Tools = toToolParams(defs)
+	}
+	return params
 }

@@ -53,6 +53,9 @@ configuration from `AAB_*` environment variables instead:
 | `transport` | `AAB_TRANSPORT` | `local` |
 | `poll_interval` | `AAB_POLL_INTERVAL` | `1s` |
 | `anthropic.model` | `AAB_MODEL` | `claude-sonnet-5` |
+| `anthropic.thinking` | `AAB_THINKING` | `off` |
+| `anthropic.effort` | `AAB_EFFORT` | (unset, the model's default) |
+| `anthropic.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
 | `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
 | `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
@@ -173,7 +176,18 @@ back at a tenth of the input price, and a second breakpoint on the newest user b
 does the same for earlier rounds of the same question. Two caps keep the rest small:
 `max_output_tokens` bounds one turn's output, thinking included, and
 `max_tool_result_bytes` cuts a long tool result before the model reads it, with a note
-telling it to ask for fewer rows.
+telling it to ask for fewer rows. Thinking is off unless `anthropic.thinking` turns it on:
+a Claude 5 model thinks by default, and on a one-tool question that thinking was most of
+the output tokens. The run log also prints one line per model round:
+
+```
+question 3 round 1: stop=tool_use in=4 out=96 cached=5103/0 thinking=0c text=0c calls=top_produced
+question 3 round 2: stop=tool_use in=612 out=88 cached=5103/0 thinking=0c text=0c calls=submit_answer
+```
+
+`thinking` and `text` are characters the model produced that no player sees; `calls`
+is what it asked for. A round whose `out` is large with no calls to show for it is the
+line to look at when a question cost more than expected.
 
 ## The RCON client
 

@@ -28,6 +28,12 @@ func TestCostUSD(t *testing.T) {
 		// quarter more than it.
 		{"claude-opus-5", model.Usage{CacheReadTokens: 1_000_000}, 0.5},
 		{"claude-opus-5", model.Usage{CacheWriteTokens: 1_000_000}, 6.25},
+		// A one-hour write is twice the input price; the hour counter is a
+		// part of the write total, not an addition to it.
+		{"claude-opus-5", model.Usage{CacheWriteTokens: 1_000_000, CacheWriteHourTokens: 1_000_000}, 10},
+		{"claude-opus-5", model.Usage{CacheWriteTokens: 1_000_000, CacheWriteHourTokens: 400_000}, 7.75},
+		// An hour counter past the total (a malformed reply) is clamped.
+		{"claude-opus-5", model.Usage{CacheWriteTokens: 100, CacheWriteHourTokens: 500}, 0.001},
 		// The everyday cached case: the fixed prompt read back from the
 		// cache, a few hundred fresh tokens, a short answer.
 		{"claude-sonnet-5", model.Usage{InputTokens: 300, CacheReadTokens: 6000, OutputTokens: 200}, 0.0038},

@@ -184,5 +184,8 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    breakpoints on the system prompt and the newest user block, cache tokens
    priced, claude-sonnet-5 as the default, one-line tool descriptions, a cap
    on output tokens per turn and a cut on long tool results
-   (docs/design/phase1-2-spec.md, "Cost contract"). Still to measure: the
-   same questions after the change.
+   (docs/design/phase1-2-spec.md, "Cost contract"). Second measurement
+   showed the rest: the cold cache write and adaptive thinking, so thinking
+   is now off by default, effort is configurable, and the rules-and-tools
+   cache entry lives an hour. Floor for a warm simple question: about
+   $0.003 on Sonnet 5, $0.0015 on Haiku 4.5.

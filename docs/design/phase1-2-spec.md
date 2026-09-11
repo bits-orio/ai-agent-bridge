@@ -347,3 +347,29 @@ round. The contract that brings a simple question under a cent:
   and the history tools match. The breadth suite still requires every
   description to be longer than forty characters.
 - The answer log line gains `cached=read/write`.
+
+Second measurement, same day, one question on claude-sonnet-5 after the
+contract above: `tokens=4/621 cached=5103/5719 cost=$0.0215`. Two thirds of
+that was the one-time cache write (5,719 tokens at 1.25 times input), a
+third was 621 output tokens for a two-round question that needed perhaps
+150, which is adaptive thinking running because a Claude 5 model thinks
+unless told not to. Additions:
+
+- `anthropic.thinking`: `off` (default, sends `thinking: disabled`),
+  `adaptive`, or `model` (field left out; what Claude Fable requires).
+- `anthropic.effort`: unset by default; `low` in the example config for
+  Sonnet 5, sent as `output_config.effort` only when set.
+- `anthropic.cache_ttl`: `1h` (default) or `5m` for the rules-and-tools
+  breakpoint; the per-round breakpoint stays at 5m, and the longer entry
+  comes first in the prompt as the API requires. `model.Usage` carries
+  `CacheWriteHourTokens` (the 1h part of the write total) and the cost table
+  prices it at twice input, 5m writes at 1.25 times.
+- `Agent.Trace`: one log line per round with stop reason, tokens, cache
+  counters, thinking and text characters, and the tool names called.
+- The submit_answer description and the reserved force parameter are cut to
+  the minimum the model needs.
+
+Floor after this, from the same token counts: a warm question (cache
+already holding the rules) on Sonnet 5 is about $0.003, on Haiku 4.5 about
+$0.0015; the first question after an idle hour adds the write, about $0.02
+on Sonnet and $0.01 on Haiku.

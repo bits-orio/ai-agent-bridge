@@ -21,7 +21,7 @@ import (
 // ForceParam is the reserved argument the service injects on every tool.
 const ForceParam = "force"
 
-const forceDesc = "Force name. Omit for the asker's force."
+const forceDesc = "Force name."
 
 var paramTypes = map[string]string{
 	"string":  "string",

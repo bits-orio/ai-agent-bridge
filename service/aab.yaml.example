@@ -42,6 +42,19 @@ anthropic:
   # Set it to "fake" to run the scripted model instead: it needs no key and answers
   # deterministically, which is what the end-to-end tests use.
   model: claude-sonnet-5
+  # A Claude 5 model thinks before it answers unless told not to, and on a question
+  # like "what forces are there" that thinking is most of the output bill. off sends
+  # thinking disabled; adaptive turns it on; model leaves the field out and takes the
+  # model's own default (the only choice Claude Fable accepts).
+  thinking: off
+  # Effort trims tool-call depth and preamble on the models that accept it (Sonnet 5,
+  # Opus 5). Leave it out for a model that does not, such as claude-haiku-4-5.
+  effort: low
+  # How long the cached rules and tool definitions live between questions. 1h costs
+  # twice the input price to write once an hour; 5m costs a quarter more than sending
+  # them, but every question more than five minutes after the last one writes again.
+  # A game server's questions come in bursts with gaps, so 1h is the default.
+  cache_ttl: 1h
 
 # Per-question limits. A question that hits one still answers, with a notice saying why.
 agent:

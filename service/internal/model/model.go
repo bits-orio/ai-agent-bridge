@@ -81,14 +81,17 @@ type ToolDef struct {
 	Schema      map[string]any
 }
 
-// Usage counts the tokens one or more steps cost. Cache counters are carried
-// so an operator can see them; the service sets no cache control, so they
-// stay zero today.
+// Usage counts the tokens one or more steps cost. The four main counters
+// are disjoint, the way the API reports them: a token is fresh input, output,
+// a cache read or a cache write, never two of those. CacheWriteHourTokens is
+// the part of CacheWriteTokens written with the one-hour lifetime, which is
+// priced higher than a five-minute write.
 type Usage struct {
-	InputTokens      int
-	OutputTokens     int
-	CacheReadTokens  int
-	CacheWriteTokens int
+	InputTokens          int
+	OutputTokens         int
+	CacheReadTokens      int
+	CacheWriteTokens     int
+	CacheWriteHourTokens int
 }
 
 // Add folds another step's usage into u.
@@ -97,6 +100,7 @@ func (u *Usage) Add(other Usage) {
 	u.OutputTokens += other.OutputTokens
 	u.CacheReadTokens += other.CacheReadTokens
 	u.CacheWriteTokens += other.CacheWriteTokens
+	u.CacheWriteHourTokens += other.CacheWriteHourTokens
 }
 
 // Total is every token the question has spent so far, which is what the

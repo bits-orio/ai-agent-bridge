@@ -135,6 +135,10 @@ type Agent struct {
 	mem   *memory
 	quota *quota
 	now   func() time.Time
+
+	// Trace, when set, gets one line per model round: what the round cost
+	// and what the model spent its output on. Nil means no per-round lines.
+	Trace func(format string, args ...any)
 }
 
 func New(m model.Model, caps Caps) *Agent {
@@ -178,6 +182,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			return Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage)}, err
 		}
 		usage.Add(step.Usage)
+		a.traceRound(q, round, step)
 		msgs = append(msgs, model.Message{Role: model.RoleAssistant, Blocks: step.Blocks})
 
 		calls := model.ToolUses(step.Blocks)
