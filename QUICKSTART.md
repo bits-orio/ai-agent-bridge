@@ -62,11 +62,15 @@ The default model is DeepSeek V4 Pro; `model.id` in `aab.yaml` picks any
 other model OpenRouter lists that supports tool calling, and the example
 file names a few with their prices.
 
-## 5. Run it
+## 5. Check, then run it
 
 ```sh
+./aab -config aab.yaml check
 ./aab -config aab.yaml run
 ```
+
+The check tries RCON, the events file and the model key one line each and
+says what is wrong, before anything costs money.
 
 It refuses to start until the two things are there and says which is
 missing. Leave it running: a second terminal, a systemd unit or a container

@@ -4,6 +4,7 @@
 /service/aab.yaml
 /service/aab-local.yaml
 /service/aab.sftp.yaml
+/service/aab.*.yaml
 
 # Built binaries
 /service/aab

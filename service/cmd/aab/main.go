@@ -59,6 +59,8 @@ func main() {
 	switch sub {
 	case "run":
 		runService(cfg, client)
+	case "check":
+		runCheck(ctx, cfg, client)
 	case "status":
 		runStatus(ctx, client)
 	case "probe":
@@ -80,6 +82,9 @@ func usage() {
 subcommands:
   run             run the service: poll for questions, answer them with the agent
                   loop, serve the control API. This is the one you leave running
+  check           preflight: can RCON be reached and does the companion answer, is the
+                  events file reachable (local or over SFTP) and there yet, is the model
+                  key set. One line each, exit 1 on any FAIL
   status          print the companion's status op reply (protocol/mod version, tick,
                   player count, pending question count)
   probe           print every provider's manifest, read one provider at a time

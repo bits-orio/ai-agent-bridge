@@ -94,10 +94,25 @@ RCON port for `factorio.rcon.address`, the SFTP host, port and username, and
 `SFTP_PASSWORD`, and the OpenRouter key. Run the service on any machine that
 can reach the server, your own PC included.
 
-The service refuses to start until both pieces are there and says which is
-missing. On every start it writes `aab.effective.yaml` beside itself: the
-fully resolved settings with each secret marked `SET (n chars)` or
-`MISSING`, which is the first thing to read when something is off.
+Before the first run, and whenever something is off, run the preflight:
+
+```sh
+./aab -config aab.yaml check
+```
+
+It tries each of the three things on its own line: RCON and whether the
+companion answers, the events file over the configured transport, and the
+model key. A file that is not there yet is a warning, not a failure, since
+the mod writes it on the first event; the line then lists what the folder
+holds, which is how a wrong SFTP path shows itself. The service also
+refuses to start until both pieces are there and says which is missing,
+and on every start it writes `aab.effective.yaml` beside itself, the fully
+resolved settings with each secret marked `SET (n chars)` or `MISSING`.
+
+To run against two servers from one machine, give each its own config file
+and its own env var names for the secrets, `ALEFORGE_RCON_PASSWORD` and
+`ALEFORGE_SFTP_PASSWORD` for instance, in the one `.env`; and give the
+second config its own `history.path` and `control_api.addr`.
 
 ## The model
 
