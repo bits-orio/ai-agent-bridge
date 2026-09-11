@@ -317,15 +317,17 @@ check("a longer name is not a partial match", labelled:find("team-30 is nobody",
 local labs = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", name = "lab" } })
 check("find_entities by name finds the labs with gps tags", labs.ok and labs.r.total == 2 and labs.r.shown == 2
       and labs.r.entities[1].gps == "[gps=10,-5,nauvis]" and labs.r.entities[2].x == 13, F.encode(labs))
-check("find_entities passes force and the scan cap to the engine",
-      S.last_find_filter.force == "player" and S.last_find_filter.limit == 2000 and S.last_find_filter.name == "lab")
+-- Two engine passes: built first, then ghosts under what is left of the cap.
+check("find_entities passes force and the scan cap to the engine, ghosts second",
+      S.last_find_filter.force == "player" and S.last_find_filter.limit == 2000 - 2 and S.last_find_filter.ghost_name == "lab",
+      F.encode(S.last_find_filter))
 local repair = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-pack" } })
 check("find_entities by recipe keeps only the machine on that recipe", repair.ok and repair.r.total == 1
       and repair.r.entities[1].name == "assembling-machine-2" and repair.r.entities[1].gps == "[gps=-20,33,nauvis]"
       and repair.r.entities[1].recipe == "repair-pack", F.encode(repair))
 local furnaces = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "furnace", limit = 1 } })
-check("find_entities by type works and reports scanned", furnaces.ok and furnaces.r.total == 1 and furnaces.r.scanned == 1
-      and furnaces.r.truncated == false, F.encode(furnaces))
+check("find_entities by type works and reports scanned", furnaces.ok and furnaces.r.total == 2 and furnaces.r.scanned == 2
+      and furnaces.r.shown == 1 and furnaces.r.truncated == false, F.encode(furnaces))
 local no_recipe = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-kit" } })
 check("an unknown recipe is found=false with close names suggested", no_recipe.ok and no_recipe.r.found == false
       and no_recipe.r.suggestions[1] == "repair-pack", F.encode(no_recipe))
@@ -337,6 +339,20 @@ check("an unknown product suggests item names", no_product.ok and no_product.r.f
       and no_product.r.suggestions[1] == "military-science-pack", F.encode(no_product))
 local no_filter = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis" } })
 check("no filter at all is an error in the tool's own words", not no_filter.ok and tostring(no_filter.m):find("at least one", 1, true) ~= nil, F.encode(no_filter))
+local ghosts = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "iron-chest" } })
+check("ghost assemblers match by the recipe set on them, and say they are ghosts", ghosts.ok and ghosts.r.total == 2
+      and ghosts.r.entities[1].ghost == true and ghosts.r.entities[1].name == "assembling-machine-2"
+      and ghosts.r.entities[1].recipe == "iron-chest" and ghosts.r.entities[1].gps == "[gps=-15,-38,nauvis]", F.encode(ghosts))
+local by_type_all = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "assembling-machine" } })
+check("a type filter finds built machines and ghosts of that type", by_type_all.ok and by_type_all.r.total == 4, F.encode(by_type_all))
+local only_ghosts = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "assembling-machine", ghost = true } })
+check("ghost=true keeps only ghosts", only_ghosts.ok and only_ghosts.r.total == 2 and only_ghosts.r.entities[2].ghost == true, F.encode(only_ghosts))
+local only_built = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", name = "assembling-machine-2", ghost = false } })
+check("ghost=false keeps only built entities", only_built.ok and only_built.r.total == 2 and only_built.r.entities[1].ghost == nil, F.encode(only_built))
+local furnace_ghost = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "furnace" } })
+check("a ghost with no recipe still lists, without one, after the built ones", furnace_ghost.ok and furnace_ghost.r.total == 2
+      and furnace_ghost.r.entities[1].ghost == nil and furnace_ghost.r.entities[2].ghost == true
+      and furnace_ghost.r.entities[2].recipe == nil, F.encode(furnace_ghost))
 local elsewhere = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "platform-1", name = "lab" } })
 check("another surface has none", elsewhere.ok and elsewhere.r.total == 0 and elsewhere.r.found == true, F.encode(elsewhere))
 local where_bob = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob" } })

@@ -362,6 +362,16 @@ Three things the first team-vs-team session showed, all built:
   force name, so slot numbers work unchanged; "team 3" typed with a space
   is swapped too.
 
+## Ghosts (2026-09-11)
+
+The first live search for ghost assemblers failed: a ghost is an entity of
+type `entity-ghost` whose real prototype sits in `ghost_name` and
+`ghost_type`, so a name or type filter never matched it and the recipe
+check skipped it. `find_entities` now scans built entities and ghosts as
+two engine passes under one cap, reads a ghost's real name and type, reads
+the recipe set on a crafting-machine ghost the same way as on a built one,
+marks rows `ghost = true`, and takes a `ghost` filter to narrow either way.
+
 ## Safety review (2026-09-11)
 
 The whole tree reviewed for what a player can run, what can lag the game

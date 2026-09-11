@@ -226,7 +226,11 @@ function F.install(opts)
       local out = {}
       if this.name ~= "nauvis" then return out end
       for _, e in ipairs(S.entities) do
-        if (filter.name == nil or e.name == filter.name) and (filter.type == nil or e.type == filter.type) then
+        local by_real = filter.name == nil and filter.type == nil
+        local built = (filter.name and e.name == filter.name) or (filter.type and e.type == filter.type)
+        local ghost = (filter.ghost_name and e.ghost_name == filter.ghost_name) or (filter.ghost_type and e.ghost_type == filter.ghost_type)
+        if by_real and (filter.ghost_name or filter.ghost_type) then by_real = false end
+        if by_real or built or ghost then
           out[#out + 1] = e
           if filter.limit and #out >= filter.limit then break end
         end
@@ -238,7 +242,15 @@ function F.install(opts)
     return { name = name, type = etype, valid = true, position = { x = x, y = y },
              get_recipe = function() return recipe and { name = recipe } or nil end }
   end
+  local function ghost(name, etype, x, y, recipe)
+    return { name = "entity-ghost", type = "entity-ghost", ghost_name = name, ghost_type = etype, valid = true,
+             position = { x = x, y = y },
+             get_recipe = function() return recipe and { name = recipe } or nil end }
+  end
   S.entities = {
+    ghost("assembling-machine-2", "assembling-machine", -15, -38, "iron-chest"),
+    ghost("assembling-machine-2", "assembling-machine", -12, -38, "iron-chest"),
+    ghost("stone-furnace", "furnace", 0, -38),
     entity("lab", "lab", 10.2, -4.7),
     entity("lab", "lab", 12.9, -4.7),
     entity("assembling-machine-2", "assembling-machine", -20.5, 33.1, "repair-pack"),
@@ -403,6 +415,7 @@ function F.install(opts)
     fluid = { ["crude-oil"] = { name = "crude-oil" } },
     technology = { ["logistics-2"] = { name = "logistics-2" } },
     recipe = {
+      ["iron-chest"] = { name = "iron-chest", products = { { type = "item", name = "iron-chest", amount = 1 } } },
       ["repair-pack"] = { name = "repair-pack", products = { { type = "item", name = "repair-pack", amount = 1 } } },
       ["iron-gear-wheel"] = { name = "iron-gear-wheel", products = { { type = "item", name = "iron-gear-wheel", amount = 1 } } },
       ["military-science-pack"] = { name = "military-science-pack", products = { { type = "item", name = "military-science-pack", amount = 2 } } },

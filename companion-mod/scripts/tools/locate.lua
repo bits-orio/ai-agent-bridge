@@ -27,17 +27,35 @@ local MAX_SHOWN     = 10
 -- Entity types that have a recipe to filter on.
 local CRAFTERS = { ["assembling-machine"] = true, furnace = true, ["rocket-silo"] = true }
 
+--- A ghost is an entity of type entity-ghost whose real prototype sits in
+--- ghost_name and ghost_type; everything below asks these two so a ghost
+--- and a built machine read the same way.
+local function is_ghost(entity) return entity.type == "entity-ghost" end
+local function real_name(entity) return is_ghost(entity) and entity.ghost_name or entity.name end
+local function real_type(entity) return is_ghost(entity) and entity.ghost_type or entity.type end
+
+--- The recipe set on a crafting machine or on the ghost of one, or nil.
+--- pcall'd: a ghost of something the engine will not answer for must read
+--- as "no recipe", never as an error that ends the whole search.
+local function recipe_of(entity)
+  if not CRAFTERS[real_type(entity)] then return nil end
+  local ok, recipe = pcall(entity.get_recipe)
+  if ok and recipe and recipe.valid ~= false then return recipe end
+  return nil
+end
+
 local M = {}
 
 M.manifest = {
   find_entities = {
-    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). Give at least one filter. An unknown name comes back found=false with suggestions of close names.",
+    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). Ghosts match too, by what they will become, and rows say ghost=true; ghost=true or false narrows to ghosts or built. Give at least one filter. An unknown name comes back found=false with suggestions of close names.",
     params = {
       surface = "string! surface name or index, e.g. nauvis",
       name    = "string entity prototype name, e.g. lab, assembling-machine-2",
       type    = "string entity type, e.g. assembling-machine, furnace, mining-drill",
       recipe  = "string recipe name a crafting machine is set to, e.g. repair-pack",
       product = "string item or fluid name a crafting machine's recipe makes, e.g. military-science-pack",
+      ghost   = "boolean true for ghosts only, false for built entities only; omit for both",
       limit   = "integer positions to return, default " .. DEFAULT_SHOWN .. ", max " .. MAX_SHOWN,
     },
   },
@@ -101,6 +119,8 @@ local function find_entities(a)
   local etype   = optional_string(a.type, "type")
   local recipe  = optional_string(a.recipe, "recipe")
   local product = optional_string(a.product, "product")
+  local ghost   = a.ghost
+  if ghost ~= nil and type(ghost) ~= "boolean" then error("ghost must be true or false", 0) end
   if not (name or etype or recipe or product) then
     error("give at least one of name, type, recipe or product", 0)
   end
@@ -120,16 +140,28 @@ local function find_entities(a)
              suggestions = suggestions(prototypes.item, product) }
   end
 
-  local filter = { force = force.name, limit = SCAN_CAP }
-  if name then filter.name = name end
-  if etype then filter.type = etype end
-  local scanned = surface.find_entities_filtered(filter)
+  -- Built entities and ghosts are two engine passes, because a name or type
+  -- filter matches the ghost shell ("entity-ghost") rather than what it will
+  -- become; ghost_name and ghost_type are the ghost-side twins. With no name
+  -- or type, one pass over everything covers both.
+  local scanned = {}
+  local function scan(filter)
+    filter.force, filter.limit = force.name, SCAN_CAP - #scanned
+    if filter.limit <= 0 then return end
+    for _, entity in ipairs(surface.find_entities_filtered(filter)) do scanned[#scanned + 1] = entity end
+  end
+  if name or etype then
+    if ghost ~= true then scan({ name = name, type = etype }) end
+    if ghost ~= false then scan({ ghost_name = name, ghost_type = etype }) end
+  else
+    scan({})
+  end
 
   local matches = {}
   for _, entity in ipairs(scanned) do
-    local keep = true
-    if recipe or product then
-      local set = CRAFTERS[entity.type] and entity.get_recipe() or nil
+    local keep = ghost == nil or is_ghost(entity) == ghost
+    if keep and (recipe or product) then
+      local set = recipe_of(entity)
       keep = set ~= nil
         and (not recipe or set.name == recipe)
         and (not product or makes(prototypes.recipe[set.name] or set, product))
@@ -141,13 +173,15 @@ local function find_entities(a)
   local rows = {}
   for i, entity in ipairs(shown) do
     local x, y, tag = gps(entity.position, surface.name)
-    local row = { name = entity.name, x = x, y = y, gps = tag }
-    if recipe or product then row.recipe = entity.get_recipe().name end
+    local row = { name = real_name(entity), x = x, y = y, gps = tag }
+    if is_ghost(entity) then row.ghost = true end
+    local set = recipe_of(entity)
+    if set then row.recipe = set.name end
     rows[i] = row
   end
   return {
     found = true, force = force.name, surface = surface.name,
-    name = name, type = etype, recipe = recipe, product = product,
+    name = name, type = etype, recipe = recipe, product = product, ghost = ghost,
     scanned = #scanned, truncated = #scanned >= SCAN_CAP,
     total = #matches, shown = #rows, entities = rows,
   }

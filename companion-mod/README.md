@@ -354,7 +354,7 @@ service.
 | `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
 | `rockets` | `limit` | rockets launched by that force, and the items it sent up, largest first |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
-| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type, the recipe a crafting machine is set to or the item or fluid that recipe makes, with `scanned`, `truncated`, `total` and `shown`; an unknown name comes back with up to five close names |
+| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`, `ghost`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type, the recipe a crafting machine is set to or the item or fluid that recipe makes; ghosts match by what they will become and rows carry `ghost = true`, `ghost` narrows to ghosts or built; with `scanned`, `truncated`, `total` and `shown`; an unknown name comes back with up to five close names |
 | `locate_player` | `player` | where one player's character is: surface, x, y, a ready `[gps=...]` tag, whether they are connected, and `viewing` when they are looking at another surface in remote view |
 
 Every tool that lists things is bounded, because a reply over the byte cap is
