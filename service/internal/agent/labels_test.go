@@ -46,11 +46,11 @@ func TestSystemPromptRules(t *testing.T) {
 	if strings.Contains(got, "Team Ace") {
 		t.Errorf("labels leaked into the prompt:\n%s", got)
 	}
-	if with := systemPrompt(Question{Text: "x", Force: "team-1", Surface: "mts-nauvis-1"}); !strings.Contains(with, `standing on surface "mts-nauvis-1"`) {
+	if with := prompt(Question{Text: "x", Force: "team-1", Surface: "mts-nauvis-1"}, nil); !strings.Contains(with, `standing on surface "mts-nauvis-1"`) {
 		t.Errorf("the asker's surface is missing:\n%s", with)
 	}
-	if strings.Contains(got, "standing on surface") {
-		t.Errorf("a question without a surface must not claim one:\n%s", got)
+	if without := prompt(Question{Text: "x", Force: "team-1"}, nil); strings.Contains(without, "standing on surface") {
+		t.Errorf("a question without a surface must not claim one:\n%s", without)
 	}
 	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time", "Never answer a total with a rate", "divided by its own online hours", "production_since with no surface, which counts every surface", "Numbers alone are not an answer", "always write the force name", "nobody online is still a force", "write the leader it names"} {
 		if !strings.Contains(got, want) {

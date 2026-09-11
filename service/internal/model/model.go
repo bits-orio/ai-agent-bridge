@@ -124,6 +124,7 @@ type Step struct {
 	Blocks     []Block
 	StopReason string
 	Usage      Usage
+	Provider   string // the host that served the step when the route names one; a prompt cache lives on one host
 }
 
 // Model produces one assistant turn at a time. Implementations must be safe

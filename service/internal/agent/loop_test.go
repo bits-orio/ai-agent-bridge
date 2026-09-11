@@ -316,8 +316,8 @@ func TestAskerLabelPrefersThePlayerName(t *testing.T) {
 		}
 	}
 
-	prompt := systemPrompt(Question{Text: "x", PlayerName: "alice", PlayerIndex: player(3), Force: "enemy"})
-	if !strings.Contains(prompt, "alice (player 3, force enemy)") {
-		t.Errorf("the system prompt does not name the asker:\n%s", prompt)
+	turn := prompt(Question{Text: "x", PlayerName: "alice", PlayerIndex: player(3), Force: "enemy"}, nil)
+	if !strings.Contains(turn, "alice (player 3, force enemy)") {
+		t.Errorf("the user turn does not name the asker:\n%s", turn)
 	}
 }

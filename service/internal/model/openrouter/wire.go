@@ -74,7 +74,8 @@ type routing struct {
 }
 
 type response struct {
-	Choices []struct {
+	Provider string `json:"provider"` // the upstream host OpenRouter routed to, e.g. "DeepSeek"
+	Choices  []struct {
 		Message struct {
 			Content          *string           `json:"content"`
 			ToolCalls        []toolCall        `json:"tool_calls"`
@@ -252,7 +253,7 @@ func toToolDefs(defs []model.ToolDef) []toolDef {
 // fromResponse turns the first choice into a Step. Reasoning entries are
 // kept raw and in order; the loop hands them back untouched next round.
 func fromResponse(r *response) model.Step {
-	var step model.Step
+	step := model.Step{Provider: r.Provider}
 	if len(r.Choices) == 0 {
 		step.StopReason = model.StopEndTurn
 		step.Usage = usageOf(r)

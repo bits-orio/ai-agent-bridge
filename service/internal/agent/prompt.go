@@ -13,19 +13,16 @@ import (
 	"strings"
 )
 
+// systemPrompt is the same text for every question. Who is asking goes in
+// the user turn (askerContext), so the system prompt and the tool list after
+// it stay one stable prefix for the model's prompt cache; a line up here that
+// named the asker cost every change of player or surface a full cache miss.
 func systemPrompt(q Question) string {
 	var b strings.Builder
 	b.WriteString("You are the in-game assistant on a Factorio multiplayer server. ")
-	b.WriteString("You answer one question from one player by reading live game state with the tools you are given.\n\n")
+	b.WriteString("You answer one question from one player by reading live game state with the tools you are given. ")
+	b.WriteString("The question says who is asking, their force, and the surface they are looking at.\n\n")
 
-	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
-	switch {
-	case q.Surface != "" && q.PhysicalSurface != "":
-		fmt.Fprintf(&b, ", standing on surface %q and looking at surface %q", q.PhysicalSurface, q.Surface)
-	case q.Surface != "":
-		fmt.Fprintf(&b, ", standing on surface %q", q.Surface)
-	}
-	b.WriteString(". ")
 	b.WriteString("Every tool takes a force argument: leave it out for the asker's force, set it when the question names another. ")
 	b.WriteString("Any player may ask about any force.\n\n")
 
@@ -66,9 +63,27 @@ func systemPrompt(q Question) string {
 	return b.String()
 }
 
-// prompt is the user turn: the session so far, when there is one, then the
-// question. Every exchange names its asker, since a session is shared and
-// a follow-up may pile onto someone else's question.
+// askerContext is the one line that changes from question to question: who
+// asked, their force, and where they are, which the where rule in the system
+// prompt reads.
+func askerContext(q Question) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
+	switch {
+	case q.Surface != "" && q.PhysicalSurface != "":
+		fmt.Fprintf(&b, ", standing on surface %q and looking at surface %q", q.PhysicalSurface, q.Surface)
+	case q.Surface != "":
+		fmt.Fprintf(&b, ", standing on surface %q", q.Surface)
+	}
+	b.WriteString(".")
+	return b.String()
+}
+
+// prompt is the user turn: the session so far, when there is one, then who
+// is asking, then the question. Every exchange names its asker, since a
+// session is shared and a follow-up may pile onto someone else's question.
+// The transcript comes first because it only grows at its end, so a
+// follow-up shares its cached prefix with the exchange before it.
 func prompt(q Question, earlier []Exchange) string {
 	var b strings.Builder
 	if len(earlier) > 0 {
@@ -78,7 +93,8 @@ func prompt(q Question, earlier []Exchange) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Question: ")
+	b.WriteString(askerContext(q))
+	b.WriteString("\nQuestion: ")
 	b.WriteString(q.Text)
 	return b.String()
 }

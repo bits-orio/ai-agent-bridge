@@ -29,9 +29,18 @@ func (a *Agent) traceRound(q Question, round int, step model.Step) {
 		}
 	}
 	u := step.Usage
-	a.Trace("question %d round %d: stop=%s in=%d out=%d reasoning=%d cached=%d/%d thinking=%dc text=%dc calls=%s",
+	a.Trace("question %d round %d: stop=%s in=%d out=%d reasoning=%d cached=%d/%d thinking=%dc text=%dc calls=%s%s",
 		q.ID, round, step.StopReason, u.InputTokens, u.OutputTokens, u.ReasoningTokens, u.CacheReadTokens, u.CacheWriteTokens,
-		thinking, text, callList(calls))
+		thinking, text, callList(calls), via(step.Provider))
+}
+
+// via names the host that served a round when the route says; a cache miss
+// after a hit is usually a different host.
+func via(provider string) string {
+	if provider == "" {
+		return ""
+	}
+	return " via=" + provider
 }
 
 func callList(calls []string) string {
