@@ -54,7 +54,10 @@ model:
   # forces are there" that reasoning is most of the output bill. off sends reasoning
   # disabled; model leaves it to the model's default; low, medium or high ask for that
   # much of it.
-  reasoning: off
+  # low is the default: with reasoning off a model got the arithmetic of a comparison
+  # right and the verdict wrong; a little reasoning fixes that for a few hundred cheap
+  # tokens a question, and the log's reasoning= counter shows what it spends.
+  reasoning: low
   # How long the cached rules and tool definitions live between questions on routes
   # that take an explicit cache breakpoint (Anthropic). 1h costs twice the input price
   # to write once an hour; 5m a quarter more than sending them, on every question more

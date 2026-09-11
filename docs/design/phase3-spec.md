@@ -220,7 +220,7 @@ model:
   id: deepseek/deepseek-v4-pro-0813    # any id OpenRouter lists that supports tools
   small: deepseek/deepseek-v4.1-flash  # reserved for sub-agents (PLAN.md "Later"); unused until then
   fallbacks: []                        # optional: OpenRouter `models` list tried in order
-  reasoning: off                       # off (default) | model | low | medium | high
+  reasoning: low                       # low (default) | off | model | medium | high
   cache_ttl: 1h                        # 1h | 5m, for the explicit breakpoints on Anthropic routes
   data_collection: deny                # deny (default) | allow: OpenRouter's provider.data_collection
 openrouter:
@@ -407,6 +407,13 @@ team mod's clock rows. So every companion tool now accepts a label where
 a force name is expected, resolving it through the labels map, the MTS
 clock tool accepts a display name or a spaced slot, and the prompt says
 the argument is always the force name. A slip costs nothing.
+
+## Reasoning: low by default (2026-09-11)
+
+With reasoning off, the model titled a comparison "Team 01 ahead" over
+figures that said the opposite. The verdict now comes from the ranking
+tools, and the owner asked for `model.reasoning: low` as well; it is the
+shipped default, with `off` still available for the cheapest possible run.
 
 ## Safety review (2026-09-11)
 

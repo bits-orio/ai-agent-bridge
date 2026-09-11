@@ -27,7 +27,7 @@ const (
 	defaultProvider             = "openrouter"
 	defaultModel                = "deepseek/deepseek-v4-pro-0813"
 	defaultSmallModel           = "deepseek/deepseek-v4.1-flash"
-	defaultReasoning            = "off"
+	defaultReasoning            = "low"
 	defaultCacheTTL             = "1h"
 	defaultDataCollection       = "deny"
 	defaultOpenRouterKeyEnv     = "OPENROUTER_API_KEY"
@@ -148,7 +148,7 @@ type ModelConfig struct {
 	ID             string   `yaml:"id"`              // the model id as the provider names it
 	Small          string   `yaml:"small"`           // reserved for sub-agents; unused until they land
 	Fallbacks      []string `yaml:"fallbacks"`       // OpenRouter: models tried in order when ID fails
-	Reasoning      string   `yaml:"reasoning"`       // off (default) | model | low | medium | high
+	Reasoning      string   `yaml:"reasoning"`       // low (default) | off | model | medium | high
 	CacheTTL       string   `yaml:"cache_ttl"`       // 1h (default) | 5m for the rules-and-tools cache entry
 	DataCollection string   `yaml:"data_collection"` // OpenRouter: deny (default) | allow
 }

@@ -16,7 +16,9 @@ The service talks to OpenRouter's chat completions API through an in-house
 client and treats OpenRouter's model ids as the model choice. The direct
 Anthropic client stays selectable but frozen. OpenRouter's reported `cost`
 is the cost the service logs and serves; the price table is kept only for
-the direct backend. Thinking stays off by default on every route.
+the direct backend. Reasoning defaults to low on every route: off was tried first and a model
+got a comparison's arithmetic right and its verdict wrong; low fixes that
+for a few hundred cheap tokens a question.
 
 ## Consequences
 One key, one config line, any model OpenRouter lists that supports tool

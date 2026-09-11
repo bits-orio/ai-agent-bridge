@@ -110,7 +110,7 @@ each key):
 | `model.id` | `deepseek/deepseek-v4-pro-0813` | any model the provider lists that supports tool calling |
 | `model.small` | `deepseek/deepseek-v4.1-flash` | reserved for sub-agents, unused until they land |
 | `model.fallbacks` | none | OpenRouter models tried in order when `model.id` fails |
-| `model.reasoning` | `off` | `off`, `model`, `low`, `medium`, `high` |
+| `model.reasoning` | `low` | `off`, `model`, `low`, `medium`, `high` |
 | `model.cache_ttl` | `1h` | `1h` or `5m` for the cached rules and tools on Anthropic routes |
 | `model.data_collection` | `deny` | keep prompts off OpenRouter providers that train on them |
 
@@ -136,7 +136,7 @@ from environment variables, which is what hosting panels want:
 | `model.id` | `AAB_MODEL` | `deepseek/deepseek-v4-pro-0813` |
 | `model.small` | `AAB_MODEL_SMALL` | `deepseek/deepseek-v4.1-flash` |
 | `model.fallbacks` | `AAB_MODEL_FALLBACKS` (comma-separated) | (none) |
-| `model.reasoning` | `AAB_REASONING` | `off` |
+| `model.reasoning` | `AAB_REASONING` | `low` |
 | `model.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
 | `model.data_collection` | `AAB_DATA_COLLECTION` | `deny` |
 | `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
