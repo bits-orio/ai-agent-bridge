@@ -56,6 +56,28 @@ func (c *Client) Status(ctx context.Context) (StatusReply, error) {
 	return out, nil
 }
 
+// ForceLabel is one row of the labels op: a force name and the name players
+// use for it, supplied by a labels provider (companion README, "Force labels
+// by probe"). Forces without a label are not listed.
+type ForceLabel struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
+// Labels reads every force label the companion can find right now. An empty
+// list is the normal case on a server without a naming mod.
+func (c *Client) Labels(ctx context.Context) ([]ForceLabel, error) {
+	raw, err := c.Call(ctx, "labels", nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []ForceLabel
+	if err := unmarshalList(raw, &out); err != nil {
+		return nil, fmt.Errorf("aab-rpc: labels: bad reply: %w", err)
+	}
+	return out, nil
+}
+
 // callRequest is the payload of a call op: {i, f, a}, provider interface, function name,
 // arguments (PLAN.md).
 type callRequest struct {

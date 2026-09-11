@@ -274,6 +274,36 @@ S.interfaces["test-scope"] = nil
 S.interfaces["test-scope-broken"] = nil
 S.interfaces["test-scope-global"] = nil
 
+-- ── the question echo, sprites for bare names, force labels ───────────
+before = #S.printed
+local qid_echo = ask_cmd("what forces are there")
+check("a /ask question is echoed to its audience with the asker's name",
+      #S.printed == before + 1 and S.printed[#S.printed].who == "*"
+      and S.printed[#S.printed].text:find("Bob asked: what forces are there", 1, true) ~= nil,
+      S.printed[#S.printed].text)
+check("the echo carries the channel tag after the name",
+      S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%] Bob asked") ~= nil,
+      S.printed[#S.printed].text)
+rpc({ op = "answer", qid = qid_echo, artifact = { shape = "summary",
+  lines = { "iron-ore/min 15, [img=item.iron-ore] again, coal, crude-oil, logistics-2, assembling-machine-2, no-such-thing, [color=red]iron-plate[/color]" } } })
+local decorated = S.printed[#S.printed].text
+check("a bare item name renders as its sprite", decorated:find("[img=item.iron-ore]/min 15", 1, true) ~= nil, decorated)
+check("an existing sprite tag is left alone", decorated:find("[img=item.iron-ore] again", 1, true) ~= nil
+      and decorated:find("[img=item.[img=", 1, true) == nil, decorated)
+check("a single-word name stays prose", decorated:find(", coal,", 1, true) ~= nil, decorated)
+check("fluids, technologies and entities decorate by class",
+      decorated:find("[img=fluid.crude-oil], [img=technology.logistics-2], [img=entity.assembling-machine-2]", 1, true) ~= nil, decorated)
+check("an unknown hyphenated word stays as it is", decorated:find(", no-such-thing,", 1, true) ~= nil, decorated)
+check("a name inside a colour tag still decorates", decorated:find("[color=red][img=item.iron-plate][/color]", 1, true) ~= nil, decorated)
+
+local labels_reply = rpc({ op = "labels" })
+check("the labels op lists the test provider's label, rich text stripped",
+      labels_reply.ok and labels_reply.r[1] and labels_reply.r[1].name == "player" and labels_reply.r[1].label == "The Engineers",
+      F.encode(labels_reply))
+local forces_with_labels = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_forces", a = { force = "player" } })
+check("list_forces carries the label", forces_with_labels.ok and forces_with_labels.r.forces[1].label == "The Engineers",
+      F.encode(forces_with_labels))
+
 -- A question from a mod, with no player and no scope, goes to the server.
 local qid6 = remote.call("ai-agent-bridge-v1", "ask", { text = "from a mod", force = "player" })
 before = #S.printed

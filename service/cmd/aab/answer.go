@@ -59,6 +59,7 @@ func (r *runner) answerPage(ctx context.Context, questions rpc.PollReply) {
 // leaving the asker waiting.
 func (r *runner) run(ctx context.Context, q rpc.Question, game []tools.Tool) agent.Result {
 	question := agentQuestion(q)
+	question.Labels = r.labelsFor(ctx)
 	log.Printf("question %d from %s: %s", q.ID, question.AskerLabel(), q.Text)
 
 	result, err := r.agent.Answer(ctx, question, game)
@@ -141,4 +142,27 @@ func agentQuestion(q rpc.Question) agent.Question {
 		Scope:       q.Scope,
 		Private:     q.Private,
 	}
+}
+
+// labelsFor reads what players call each force, fresh for every question:
+// one small RCON call, and a team renamed a minute ago is named right. A
+// companion too old to know the op, or a failed read, means no labels and a
+// line in the log once per streak.
+func (r *runner) labelsFor(ctx context.Context) []agent.ForceLabel {
+	rows, err := r.rpc.Labels(ctx)
+	if err != nil {
+		if !r.labelsFailed {
+			log.Printf("labels: not available, answering without force labels: %v", err)
+			r.labelsFailed = true
+		}
+		return nil
+	}
+	r.labelsFailed = false
+	out := make([]agent.ForceLabel, 0, len(rows))
+	for _, row := range rows {
+		if row.Name != "" && row.Label != "" {
+			out = append(out, agent.ForceLabel{Name: row.Name, Label: row.Label})
+		}
+	}
+	return out
 }

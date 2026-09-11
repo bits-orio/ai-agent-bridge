@@ -311,6 +311,30 @@ the log shows verbatim.
   on a DeepSeek route, recorded in TESTING.md with the `cost` OpenRouter
   reported.
 
+## After the first MTS session (2026-09-11)
+
+Three things the first team-vs-team session showed, all built:
+
+- **The question echo goes to the audience.** `/ask` is a command, not a
+  chat line, so nobody but the asker saw the question; a shared session then
+  opened with an answer to a question the others never read. The companion
+  now prints `[AI Agent Bridge] [TAG] Alice asked: ...` to the same audience
+  the answer will reach, through the one `scripts/audience.lua` both use. A
+  chat-prefix question is its own echo and gets none. The asker-only "Got
+  it" line is gone.
+- **Bare names become sprites at render time.** The prompt asks for
+  `[img=item.iron-ore]` everywhere, columns included, and the companion
+  turns any bare hyphenated prototype name the model writes anyway into its
+  sprite (`scripts/sprites.lua`: item, then fluid, technology, entity; text
+  inside any tag untouched; single words left as prose).
+- **Force labels.** A fifth seam, `force_labels_v1`, zero-argument, on any
+  interface, returning `{ [force_name] = label }`. The companion strips rich
+  text and serves the merged map as the `labels` op and as a `label` field
+  on `list_forces` rows; the service reads the op once per question and
+  adds a paragraph to the system prompt, "team-1 is Team Ace; ...", capped
+  at forty forces, with the rule to write the label in answers and the
+  force name in tool arguments. MTS answers it from its claimed team list.
+
 ## Build order
 
 1. Sessions in the service, with `sessions` and `new`, unit tests for the

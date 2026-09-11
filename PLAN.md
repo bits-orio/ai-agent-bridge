@@ -86,6 +86,7 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 | `manifest` | `{i}` | one provider's manifest verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
 | `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope` and `private` (Phase 3) | no |
+| `labels` | `{}` | sorted `{name, label}` rows for every force a labels provider names (Phase 3) | no |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
 | `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer` |
 

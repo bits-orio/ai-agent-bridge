@@ -16,6 +16,7 @@
 -- bytes here would cut a legal answer to a third of its length. A client that
 -- drives the protocol without the service meets the net instead.
 
+local sprites = require("scripts.sprites")
 local MAX_BYTES = 640
 
 -- Cut to n bytes without leaving half a UTF-8 sequence behind. Player names
@@ -52,7 +53,7 @@ local function line(v)
   if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
     return "(unrenderable value)"
   end
-  return clip_bytes((tostring(v):gsub("%c+", " ")), MAX_BYTES)
+  return clip_bytes(sprites.decorate((tostring(v):gsub("%c+", " "))), MAX_BYTES)
 end
 
 local function clip(t, n)

@@ -8,6 +8,7 @@
 local events        = require("scripts.events")
 local player_lookup = require("scripts.player_lookup")
 local scope         = require("scripts.scope")
+local audience      = require("scripts.audience")
 
 local RING_SIZE = 64
 
@@ -125,13 +126,19 @@ function M.last_id()
   return storage.aab.q.next_id - 1
 end
 
---- Takes a question from a player and tells them it landed. Shared by the
---- /ask command and the chat prefix. `line` is what the player typed before
---- any prefix was stripped, handed to the scope providers as is.
+--- Takes a question from a player and shows it to its audience. Shared by
+--- the /ask command and the chat prefix. `line` is what the player typed
+--- before any prefix was stripped, handed to the scope providers as is, and
+--- its presence says the question was already visible as chat.
 function M.ask_as_player(player, text, line)
   local qid = M.ask({ text = text, player_index = player.index, force = player.force.name, line = line })
-  if qid then
-    player.print("[AI Agent Bridge] Got it, thinking about: " .. text)
+  if qid and not line then
+    -- A /ask command is not a chat line, so nobody else saw it. Echo it to
+    -- the same audience the answer will reach, or a session others may
+    -- follow up on would start with an answer to a question they never saw.
+    -- A chat-prefix question is its own echo: the chat line was visible.
+    local question = M.find(qid)
+    audience.deliver(question, audience.head(question) .. " " .. player.name .. " asked: " .. text)
   end
   return qid
 end

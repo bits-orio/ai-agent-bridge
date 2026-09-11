@@ -2,6 +2,7 @@
 -- plays on one, and what one is researching. Registered on the companion's own
 -- provider interface by scripts/tools/engine.lua.
 
+local labels = require("scripts.labels")
 local force_lookup = require("scripts.tools.force_lookup")
 local bounded      = require("scripts.tools.bounded")
 
@@ -14,7 +15,7 @@ local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "Forces on the server: name, players, connected players, by name. total beside shown says if there are more.",
+    desc = "Forces on the server: name, label players call it (when known), players, connected players, by name. total beside shown says if there are more.",
     params = {
       limit = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
     },
@@ -36,11 +37,13 @@ M.manifest = {
 -- reserved and injected on every OTHER tool). A scenario mod can run dozens of
 -- forces, so the row count is bounded like every other enumeration.
 local function list_forces(a)
+  local force_labels = labels.map()
   a = a or {} -- the only tool that is useful with no arguments at all
   local rows = {}
   for _, force in pairs(game.forces) do
     rows[#rows + 1] = {
       name = force.name,
+      label = force_labels[force.name],
       player_count = #force.players,
       connected_player_count = #force.connected_players,
     }

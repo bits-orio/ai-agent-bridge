@@ -17,6 +17,7 @@ local artifact_check = require("scripts.artifact_check")
 local ask_command    = require("scripts.ask_command")
 local remote_iface   = require("scripts.remote")
 local render         = require("scripts.render")
+local labels         = require("scripts.labels")
 local events         = require("scripts.events")
 local selftest       = require("scripts.rpc_selftest")
 local catalog        = require("scripts.rpc_catalog")
@@ -55,6 +56,12 @@ end
 -- so a zero-argument tool called without arguments works.
 function OPS.call(req, _cmd)
   return probe.call(req.i, req.f, req.a)
+end
+
+-- Pure read: what players call each force, from the labels providers. The
+-- service reads it once per question and tells the model.
+function OPS.labels(_req, _cmd)
+  return ok_reply(labels.all())
 end
 
 function OPS.poll(req, _cmd)

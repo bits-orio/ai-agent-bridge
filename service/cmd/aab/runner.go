@@ -21,12 +21,13 @@ import (
 const heartbeatEvery = 5 * time.Minute
 
 type runner struct {
-	cfg    *config.Config
-	rpc    *rpc.Client
-	caller *toolCaller
-	store  *history.Store
-	stats  *controlapi.Stats
-	agent  *agent.Agent
+	labelsFailed bool // the labels op failed on the last question; logged once per streak
+	cfg          *config.Config
+	rpc          *rpc.Client
+	caller       *toolCaller
+	store        *history.Store
+	stats        *controlapi.Stats
+	agent        *agent.Agent
 
 	tools   []tools.Tool
 	builtAt time.Time

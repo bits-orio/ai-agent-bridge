@@ -815,6 +815,26 @@ def scenario_private_scope(ctx: Ctx) -> Tuple[Status, str]:
     return "PASS", "qid=%d polled as scope=team-x private=true; its session stayed private" % qid
 
 
+def scenario_labels(ctx: Ctx) -> Tuple[Status, str]:
+    """The labels op (docs/design/phase3-spec.md, "Force labels") lists what
+    players call each force, from any mod exposing force_labels_v1. The test
+    provider labels the player force, with rich text the companion strips."""
+    if ctx.provider_iface is None:
+        return "SKIP", "no provider mod in this run"
+    env = aab_rpc(ctx.server_rcon, "labels")
+    if not env.get("ok"):
+        return "FAIL", "labels op failed: %r" % env
+    rows = as_list(env.get("r"))
+    hit = [r for r in rows if r.get("name") == "player"]
+    if not hit or hit[0].get("label") != "The Engineers":
+        return "FAIL", "expected player labelled 'The Engineers', got %r" % rows
+    forces = aab_rpc(ctx.server_rcon, "call", i="ai-agent-bridge-tools", f="list_forces", a={"force": "player"})
+    listed = [f for f in as_list((forces.get("r") or {}).get("forces")) if f.get("name") == "player"]
+    if not listed or listed[0].get("label") != "The Engineers":
+        return "FAIL", "list_forces did not carry the label: %r" % forces
+    return "PASS", "labels op and list_forces both say player is The Engineers"
+
+
 SCENARIOS: List[Scenario] = [
     Scenario("status", scenario_status),
     Scenario("providers + manifest ops: companion's own provider", scenario_providers_and_manifest),
@@ -839,6 +859,7 @@ SCENARIOS: List[Scenario] = [
     Scenario("sessions: follow-up, sessions, new", scenario_session_recall),
     Scenario("sessions: #named session", scenario_named_session),
     Scenario("chat scope: private question stays private", scenario_private_scope),
+    Scenario("force labels: labels op and list_forces", scenario_labels),
 ]
 
 

@@ -22,8 +22,10 @@ tools to the agent without this mod knowing anything about them.
    and point it at your server. Bring your own OpenRouter key and pick the
    model in its config.
 
-Once it's running, type `/ask <question>` in chat and the answer comes back a
-few seconds later, in chat, to everyone on the server so anyone can follow up.
+Once it's running, type `/ask <question>` in chat. The question is echoed to
+everyone who will see the answer, since a command is not a chat line, and the
+answer comes back a few seconds later, in chat, to everyone on the server so
+anyone can follow up.
 `/ask new ...` starts a fresh session, `/ask #iron ...` uses a named one that
 others can join, and `/ask sessions` lists what is open.
 
@@ -47,11 +49,11 @@ to the server (or to its private audience) like any other.
 
 ---
 
-## For mod authors, the four seams
+## For mod authors, the five seams
 
-The companion knows nothing about any other mod. Four frozen, additive-only
-seams let other mods add tools, submit questions, receive answers, and say who
-may hear an answer.
+The companion knows nothing about any other mod. Five frozen, additive-only
+seams let other mods add tools, submit questions, receive answers, say who
+may hear an answer, and say what players call a force.
 
 ### 1. Tools by probe, `agent_tools_v1`
 
@@ -167,6 +169,15 @@ audience however the channel has changed since, so a team leaving private
 mode never sees its private session continue in the open. The `scope` table
 `ask` accepts has the same shape, for a mod asking on behalf of a channel of
 its own.
+
+### 5. Force labels by probe, `force_labels_v1`
+
+A mod that names forces, a team mod calling `team-1` "Team Ace" for instance,
+adds a zero-argument `force_labels_v1` to any interface it owns, returning
+`{ ["team-1"] = "Team Ace", ... }`. The companion scans for it, strips rich
+text, and hands the labels to the service, which tells the model to write the
+label in every answer and the force name only in tool arguments. The
+`list_forces` tool carries the label too, and the `labels` op lists them.
 
 ### 3. Answers by event, `on_answer`
 
@@ -303,7 +314,9 @@ something silly: the service clips every cell to 160 characters first, and 160
 characters of Japanese or emoji is up to 640 bytes. Factorio rich text passes
 through untouched; the service sends icons as sprites alone, `[img=item.iron-plate]`
 rather than `[item=iron-plate]`, so an answer reads as icons and numbers the way a
-player's own line does.
+player's own line does. A bare hyphenated prototype name the model writes anyway,
+`iron-ore` or `assembling-machine-2`, is turned into its sprite at render time; the
+companion knows every prototype, so the lookup is exact.
 
 The first chat line is laid out like a player's own: the companion's name,
 the channel tag the scope provider gave, the session marker, a colon, then

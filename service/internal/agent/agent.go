@@ -51,9 +51,16 @@ type Question struct {
 	PlayerIndex *int
 	PlayerName  string // empty when the asker is not a connected player
 	Force       string
-	Asker       string // a label the caller chose, used when no player name came with the question
-	Scope       string // the chat scope key the companion resolved; "" means global
-	Private     bool   // true when the scope is private to an audience
+	Asker       string       // a label the caller chose, used when no player name came with the question
+	Scope       string       // the chat scope key the companion resolved; "" means global
+	Private     bool         // true when the scope is private to an audience
+	Labels      []ForceLabel // names players use for forces, from the companion's labels op
+}
+
+// ForceLabel is a force name and what players call it.
+type ForceLabel struct {
+	Name  string
+	Label string
 }
 
 // scope is the session pool this question belongs to.

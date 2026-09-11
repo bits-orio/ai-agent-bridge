@@ -68,6 +68,9 @@ messages and the portal page use them the same way.
 - **Scope provider**: any mod exposing `chat_scope_v1(player_index, text)` on
   a remote interface. Found by scan like a tool provider, never stored.
 - **Audience**: the force or player list a private answer prints to.
+- **Label**: what players call a force, from any mod exposing
+  `force_labels_v1`. The model writes labels in answers and force names in
+  tool arguments.
 - **Tag**: the channel badge a scope provider hands back, printed verbatim
   after the companion's name on the first answer line.
 - **Flow statistics**: the engine's own production history, read live. Never

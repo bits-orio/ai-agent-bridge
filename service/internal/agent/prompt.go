@@ -34,14 +34,40 @@ func systemPrompt(q Question) string {
 		MaxSummaryLines, MaxCellChars, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows)
 	b.WriteString("The game renders the artifact, so send values, not formatting.\n\n")
 
-	b.WriteString("Answers print in the game's chat. Where you name a thing the game can draw, write its sprite tag and nothing else, no name beside it: ")
-	b.WriteString("[img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=planet.nauvis], [img=quality.rare]. ")
-	b.WriteString("Never [item=...] or [entity=...], which print a label too. Wrap a warning in [color=red]...[/color]. ")
-	b.WriteString("Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
+	b.WriteString("Answers print in the game's chat. Every item, fluid, entity, technology or planet is written as its sprite tag and nothing else, no name beside it, ")
+	b.WriteString("in titles, column names and cells alike: [img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=planet.nauvis], [img=quality.rare]. ")
+	b.WriteString("So a column is [img=item.iron-ore]/min, never Iron ore/min. Never [item=...] or [entity=...], which print a label too. ")
+	b.WriteString("Wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
+	writeLabels(&b, q.Labels)
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
 	return b.String()
+}
+
+// maxLabels bounds the label paragraph: twenty teams is a big server and
+// forty lines of it would be a token sink.
+const maxLabels = 40
+
+// writeLabels tells the model what players call each force. Tools speak
+// force names; players never do, so an answer that says "team-1" to a
+// player who knows it as Team Ace has failed them.
+func writeLabels(b *strings.Builder, labels []ForceLabel) {
+	if len(labels) == 0 {
+		return
+	}
+	b.WriteString("Forces and the names players use for them; write the player's name for a force in every answer and the force name only in tool arguments: ")
+	for i, l := range labels {
+		if i == maxLabels {
+			b.WriteString("and more")
+			break
+		}
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		fmt.Fprintf(b, "%s is %s", l.Name, l.Label)
+	}
+	b.WriteString(".\n\n")
 }
 
 // prompt is the user turn: the session so far, when there is one, then the
