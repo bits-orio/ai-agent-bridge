@@ -227,6 +227,7 @@ local qid7 = ask_cmd("who is online")
 local poll7 = rpc({ op = "poll", after = qid7 - 1, limit = 1 })
 check("a global question polls with scope global and no private flag",
       poll7.ok and poll7.r[1].scope == "global" and poll7.r[1].private == nil, F.encode(poll7))
+check("a player's question polls with the surface they stand on", poll7.r[1].surface == "nauvis", F.encode(poll7))
 rpc({ op = "answer", qid = qid7, artifact = { shape = "notice", text = "Bob" } })
 check("the global tag sits after the name (the first provider by name supplies it)",
       S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Bob$") ~= nil,

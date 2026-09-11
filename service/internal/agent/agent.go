@@ -55,6 +55,7 @@ type Question struct {
 	Scope       string       // the chat scope key the companion resolved; "" means global
 	Private     bool         // true when the scope is private to an audience
 	Labels      []ForceLabel // names players use for forces, from the companion's labels op
+	Surface     string       // the surface the asker stood on, "" when unknown
 }
 
 // ForceLabel is a force name and what players call it.

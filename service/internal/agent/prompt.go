@@ -18,7 +18,11 @@ func systemPrompt(q Question) string {
 	b.WriteString("You are the in-game assistant on a Factorio multiplayer server. ")
 	b.WriteString("You answer one question from one player by reading live game state with the tools you are given.\n\n")
 
-	fmt.Fprintf(&b, "The question comes from %s, whose force is %q. ", q.AskerLabel(), q.force())
+	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
+	if q.Surface != "" {
+		fmt.Fprintf(&b, ", standing on surface %q", q.Surface)
+	}
+	b.WriteString(". ")
 	b.WriteString("Every tool takes a force argument: leave it out for the asker's force, set it when the question names another. ")
 	b.WriteString("Any player may ask about any force.\n\n")
 
@@ -42,8 +46,9 @@ func systemPrompt(q Question) string {
 	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
-	b.WriteString("Those searches walk one surface, so they need to know which: if the question does not say and list_surfaces shows the force on more than one, ")
-	b.WriteString("ask which surface in a notice instead of searching them all, and let the follow-up answer.\n\n")
+	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker stands on unless the question names another place or another force; ")
+	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
+	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer.\n\n")
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")

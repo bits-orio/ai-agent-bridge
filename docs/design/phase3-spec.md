@@ -351,7 +351,11 @@ Three things the first team-vs-team session showed, all built:
   says to write positions as gps tags, and, because both walk one surface,
   to ask the player which surface in a notice when the question does not
   say and the force stands on more than one; the session carries the
-  follow-up.
+  follow-up. The first live where question searched the wrong surface
+  before locating the asker, so the companion now fixes the asker's surface
+  on the question row (poll rows carry `surface`) and the prompt says where
+  the asker stands and to search there unless the question names another
+  place or force.
 
 ## Build order
 

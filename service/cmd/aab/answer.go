@@ -141,6 +141,7 @@ func agentQuestion(q rpc.Question) agent.Question {
 		Force:       q.Force,
 		Scope:       q.Scope,
 		Private:     q.Private,
+		Surface:     q.Surface,
 	}
 }
 

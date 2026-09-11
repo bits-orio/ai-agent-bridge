@@ -112,6 +112,9 @@ type Question struct {
 	// global.
 	Scope   string `json:"scope,omitempty"`
 	Private bool   `json:"private,omitempty"`
+	// Surface is where the asker stood when they asked, when they are a
+	// player; a where question is about that surface more often than not.
+	Surface string `json:"surface,omitempty"`
 }
 
 // PollReply is the "r" of a poll call: unanswered questions with id greater than

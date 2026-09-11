@@ -55,6 +55,9 @@ function M.ask(spec)
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
   local player_name = player and player.name or nil
+  -- Where the asker stands, fixed now: a "where is my X" question is about
+  -- this surface far more often than not, and the model is told so.
+  local player_surface = player and player.surface and player.surface.valid and player.surface.name or nil
   -- The chat scope, fixed here (docs/design/phase3-spec.md part 2). A caller
   -- may hand one in (a mod asking for a channel of its own); a player's is
   -- resolved from the providers; anything else is global.
@@ -70,6 +73,7 @@ function M.ask(spec)
     text = text,
     player_index = player_index,
     player_name = player_name,
+    surface = player_surface,
     force = force,
     tick = game.tick,
     answered = false,
