@@ -36,38 +36,18 @@ func systemPrompt(q Question) string {
 
 	b.WriteString("Answers print in the game's chat. Every item, fluid, entity, technology or planet is written as its sprite tag and nothing else, no name beside it, ")
 	b.WriteString("in titles, column names and cells alike: [img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=planet.nauvis], [img=quality.rare]. ")
-	b.WriteString("So a column is [img=item.iron-ore]/min, never Iron ore/min. Never [item=...] or [entity=...], which print a label too. ")
-	b.WriteString("Wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
-	writeLabels(&b, q.Labels)
+	b.WriteString("So a column is [img=item.iron-ore]/min, never Iron ore/min. ")
+	b.WriteString("The one exception: when the player asks about the thing itself, what an item is, what a recipe needs, a technology to look at, write the clickable tag instead, [item=iron-plate], [recipe=repair-pack], [technology=logistics-2], [fluid=crude-oil], [entity=lab], which opens it in game. ")
+	b.WriteString("Wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them. ")
+	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know.\n\n")
+
+	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
+	b.WriteString("Those searches walk one surface, so they need to know which: if the question does not say and list_surfaces shows the force on more than one, ")
+	b.WriteString("ask which surface in a notice instead of searching them all, and let the follow-up answer.\n\n")
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
 	return b.String()
-}
-
-// maxLabels bounds the label paragraph: twenty teams is a big server and
-// forty lines of it would be a token sink.
-const maxLabels = 40
-
-// writeLabels tells the model what players call each force. Tools speak
-// force names; players never do, so an answer that says "team-1" to a
-// player who knows it as Team Ace has failed them.
-func writeLabels(b *strings.Builder, labels []ForceLabel) {
-	if len(labels) == 0 {
-		return
-	}
-	b.WriteString("Forces and the names players use for them; write the player's name for a force in every answer and the force name only in tool arguments: ")
-	for i, l := range labels {
-		if i == maxLabels {
-			b.WriteString("and more")
-			break
-		}
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		fmt.Fprintf(b, "%s is %s", l.Name, l.Label)
-	}
-	b.WriteString(".\n\n")
 }
 
 // prompt is the user turn: the session so far, when there is one, then the

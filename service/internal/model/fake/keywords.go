@@ -24,6 +24,8 @@ type call struct {
 // into "<iface>__<fn>", so a bare function name is enough to find it.
 func firstCall(text string, defs []model.ToolDef) *call {
 	switch {
+	case has(text, "where"):
+		return resolve(defs, "find_entities", map[string]any{"surface": "nauvis", "name": "lab"})
 	case has(text, "queue"):
 		return resolve(defs, "research_queue", nil)
 	case has(text, "research"):

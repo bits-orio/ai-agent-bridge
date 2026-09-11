@@ -69,8 +69,9 @@ messages and the portal page use them the same way.
   a remote interface. Found by scan like a tool provider, never stored.
 - **Audience**: the force or player list a private answer prints to.
 - **Label**: what players call a force, from any mod exposing
-  `force_labels_v1`. The model writes labels in answers and force names in
-  tool arguments.
+  `force_labels_v1`. Swapped at the edges: labels become force names in the
+  question before the model reads it, force names become labels when the
+  companion renders. The model only ever sees force names.
 - **Tag**: the channel badge a scope provider hands back, printed verbatim
   after the companion's name on the first answer line.
 - **Flow statistics**: the engine's own production history, read live. Never

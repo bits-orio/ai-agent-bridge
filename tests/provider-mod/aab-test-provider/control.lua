@@ -76,5 +76,7 @@ remote.add_interface(INTERFACE, {
   chat_scope_v1 = chat_scope_v1,
   set_private = set_private,
   -- A labels provider too: what players call the player force.
-  force_labels_v1 = function() return { player = "[color=red]The[/color] Engineers" } end,
+  force_labels_v1 = function()
+    return { player = "[color=red]The[/color] Engineers", ["team-3"] = "Team Losers" }
+  end,
 })

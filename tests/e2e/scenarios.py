@@ -482,6 +482,10 @@ def scenario_pollution(ctx: Ctx) -> Tuple[Status, str]:
     return _ask_and_expect_field(ctx, "pollution on nauvis", '"total_pollution":')
 
 
+def scenario_find_entities(ctx: Ctx) -> Tuple[Status, str]:
+    return _ask_and_expect_field(ctx, "where are the labs on nauvis", '"scanned":')
+
+
 def scenario_production_since_start(ctx: Ctx) -> Tuple[Status, str]:
     return _ask_and_expect_field(ctx, "iron plate production since the start", '"produced":')
 
@@ -828,11 +832,7 @@ def scenario_labels(ctx: Ctx) -> Tuple[Status, str]:
     hit = [r for r in rows if r.get("name") == "player"]
     if not hit or hit[0].get("label") != "The Engineers":
         return "FAIL", "expected player labelled 'The Engineers', got %r" % rows
-    forces = aab_rpc(ctx.server_rcon, "call", i="ai-agent-bridge-tools", f="list_forces", a={"force": "player"})
-    listed = [f for f in as_list((forces.get("r") or {}).get("forces")) if f.get("name") == "player"]
-    if not listed or listed[0].get("label") != "The Engineers":
-        return "FAIL", "list_forces did not carry the label: %r" % forces
-    return "PASS", "labels op and list_forces both say player is The Engineers"
+    return "PASS", "labels op says player is The Engineers"
 
 
 SCENARIOS: List[Scenario] = [
@@ -850,6 +850,7 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask: how long have we played", scenario_game_time),
     Scenario("ask: pollution on nauvis", scenario_pollution),
     Scenario("ask: iron plate production since the start", scenario_production_since_start),
+    Scenario("ask: where are the labs on nauvis", scenario_find_entities),
     Scenario("answer op: malformed artifact -> bad_artifact", scenario_answer_bad_artifact),
     Scenario("answer op: large table artifact accepted", scenario_answer_large_table),
     Scenario("chat prefix creates a question", scenario_chat_prefix, needs_client=True),

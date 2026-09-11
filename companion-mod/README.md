@@ -174,10 +174,13 @@ its own.
 
 A mod that names forces, a team mod calling `team-1` "Team Ace" for instance,
 adds a zero-argument `force_labels_v1` to any interface it owns, returning
-`{ ["team-1"] = "Team Ace", ... }`. The companion scans for it, strips rich
-text, and hands the labels to the service, which tells the model to write the
-label in every answer and the force name only in tool arguments. The
-`list_forces` tool carries the label too, and the `labels` op lists them.
+`{ ["team-1"] = "Team Ace", ... }`. The companion scans for it and strips rich
+text. The swap happens at the edges and costs the model nothing: the service
+turns a label in a question into the force name before the model reads it
+("how is Team Ace doing" becomes "how is team-1 doing", and a bare "Ace" works
+too), and the renderer turns force names in an answer back into labels. Only
+force names with a digit, hyphen or underscore take part, so `player` stays a
+word. The `labels` op lists the merged map.
 
 ### 3. Answers by event, `on_answer`
 
@@ -346,6 +349,8 @@ service.
 | `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
 | `rockets` | `limit` | rockets launched by that force, and the items it sent up, largest first |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
+| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type or the recipe a crafting machine is set to, with `scanned`, `truncated`, `total` and `shown` |
+| `locate_player` | `player` | where one player is: surface, x, y, a ready `[gps=...]` tag, and whether they are connected |
 
 Every tool that lists things is bounded, because a reply over the byte cap is
 refused whole rather than cut short. `list_players` shows connected players
@@ -357,6 +362,10 @@ believing it saw everyone. `research_queue` and `tech_status` return 10 rows by
 default and 25 at most, `rockets` the same, and `logistics_summary` 5 networks,
 which is also its maximum, with eight item rows inside each. Contents and items
 are ranked by count before the cut, so what survives is the part worth reading.
+`find_entities` asks the engine for at most 2,000 entities of one force on one
+surface, one bounded pass however large the base, then keeps the ones on the
+recipe asked for and returns 5 positions by default, 10 at most; `truncated`
+says when the pass hit its cap.
 
 Every double in a reply is rounded before it is sent: four decimals for an
 evolution factor, two for a progress fraction, a rate, an hour count or a

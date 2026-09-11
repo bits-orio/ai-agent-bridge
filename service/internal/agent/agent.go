@@ -210,7 +210,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	}
 	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
 	mark.Fresh = fresh
-	q.Text = req.Question
+	q.Text = substituteLabels(req.Question, q.Labels)
 
 	ctx = catalog.WithForce(ctx, q.force())
 	byName := index(ts)

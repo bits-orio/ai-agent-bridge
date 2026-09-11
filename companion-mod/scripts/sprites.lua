@@ -8,6 +8,8 @@
 -- prototype, and the prompt covers those. Text inside any [..] tag is left
 -- alone, so an existing sprite or colour tag is never rewritten.
 
+local richtext = require("scripts.richtext")
+
 local M = {}
 
 -- Lookup order for a name that exists in more than one class: coal is both
@@ -35,16 +37,7 @@ end
 --- into its sprite tag.
 function M.decorate(text)
   if type(text) ~= "string" or not text:find("-", 1, true) then return text end
-  local out, pos = {}, 1
-  while true do
-    local open_, close_ = text:find("%[[^%[%]]*%]", pos)
-    if not open_ then break end
-    out[#out + 1] = decorate_plain(text:sub(pos, open_ - 1))
-    out[#out + 1] = text:sub(open_, close_)
-    pos = close_ + 1
-  end
-  out[#out + 1] = decorate_plain(text:sub(pos))
-  return table.concat(out)
+  return richtext.map_outside_tags(text, decorate_plain)
 end
 
 return M

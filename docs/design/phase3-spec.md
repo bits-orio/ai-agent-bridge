@@ -329,11 +329,29 @@ Three things the first team-vs-team session showed, all built:
   inside any tag untouched; single words left as prose).
 - **Force labels.** A fifth seam, `force_labels_v1`, zero-argument, on any
   interface, returning `{ [force_name] = label }`. The companion strips rich
-  text and serves the merged map as the `labels` op and as a `label` field
-  on `list_forces` rows; the service reads the op once per question and
-  adds a paragraph to the system prompt, "team-1 is Team Ace; ...", capped
-  at forty forces, with the rule to write the label in answers and the
-  force name in tool arguments. MTS answers it from its claimed team list.
+  text and serves the merged map as the `labels` op. The service reads the
+  op once per question and substitutes labels with force names in the
+  question text, whole words, case-insensitive, longest label first, and
+  the bare X of a "Team X" label when X is three characters or longer; the
+  renderer substitutes force names back into labels in every answer line
+  outside a tag. Only force names carrying a digit, hyphen or underscore
+  take part on either side, so `player` is never swapped. No prompt
+  paragraph, no tokens (owner decision, 2026-09-11). MTS answers the probe
+  from its claimed team list.
+- **Clickable tags on request.** The forced rewrite of `[item=x]` into
+  `[img=item.x]` is gone. The prompt keeps sprites as the default and adds
+  the exception: when the player asks about the thing itself (what an item
+  is, what a recipe needs, a technology to look at), the model writes the
+  clickable `[item=x]`, `[recipe=x]`, `[technology=x]`, `[fluid=x]` or
+  `[entity=x]`, which opens it in game.
+- **Where questions.** Two tools, `find_entities` (one force, one surface,
+  by name, type or the recipe a crafting machine is set to; the engine pass
+  capped at 2,000 entities, 5 positions returned by default, 10 at most,
+  each with a ready `[gps=x,y,surface]`) and `locate_player`. The prompt
+  says to write positions as gps tags, and, because both walk one surface,
+  to ask the player which surface in a notice when the question does not
+  say and the force stands on more than one; the session carries the
+  follow-up.
 
 ## Build order
 

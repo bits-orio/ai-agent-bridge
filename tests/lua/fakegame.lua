@@ -214,14 +214,41 @@ function F.install(opts)
       return S.entity_counts[filter.name] or 0
     end
     this.get_total_pollution = function() return S.pollution[this.name] or 0 end
+    -- LuaSurface::find_entities_filtered: name, type, force and limit are
+    -- honoured; everything lives on nauvis.
+    this.find_entities_filtered = function(filter)
+      assert(type(filter) == "table", "find_entities_filtered wants one table")
+      assert(type(filter.force) == "string", "find_entities_filtered wants a force name")
+      S.last_find_filter = filter
+      local out = {}
+      if this.name ~= "nauvis" then return out end
+      for _, e in ipairs(S.entities) do
+        if (filter.name == nil or e.name == filter.name) and (filter.type == nil or e.type == filter.type) then
+          out[#out + 1] = e
+          if filter.limit and #out >= filter.limit then break end
+        end
+      end
+      return out
+    end
   end
+  local function entity(name, etype, x, y, recipe)
+    return { name = name, type = etype, valid = true, position = { x = x, y = y },
+             get_recipe = function() return recipe and { name = recipe } or nil end }
+  end
+  S.entities = {
+    entity("lab", "lab", 10.2, -4.7),
+    entity("lab", "lab", 12.9, -4.7),
+    entity("assembling-machine-2", "assembling-machine", -20.5, 33.1, "repair-pack"),
+    entity("assembling-machine-2", "assembling-machine", -24.5, 33.1, "iron-gear-wheel"),
+    entity("stone-furnace", "furnace", 0, 0, "iron-plate"),
+  }
   nauvis.pollutant_type = { name = "pollution", valid = true }
   orbit.pollutant_type = nil
 
   local force
   local bob = {
     index = 1, name = "Bob", valid = true, connected = true, admin = true,
-    surface = nauvis, opened = nil,
+    surface = nauvis, opened = nil, position = { x = 10.4, y = -3.6 },
     print = function(text) S.printed[#S.printed + 1] = { who = "Bob", text = text } end,
   }
   bob.gui = { screen = element({ type = "empty-widget" }, nil) }
@@ -368,6 +395,7 @@ function F.install(opts)
     item = { ["iron-ore"] = { name = "iron-ore" }, ["iron-plate"] = { name = "iron-plate" }, coal = { name = "coal" } },
     fluid = { ["crude-oil"] = { name = "crude-oil" } },
     technology = { ["logistics-2"] = { name = "logistics-2" } },
+    recipe = { ["repair-pack"] = { name = "repair-pack" }, ["iron-gear-wheel"] = { name = "iron-gear-wheel" } },
     quality = { normal = { name = "normal", level = 0 }, uncommon = { name = "uncommon", level = 1 } },
   }
 
@@ -422,7 +450,12 @@ function F.install(opts)
     surfaces = S.surfaces,
     connected_players = { bob },
     players = { bob, gone },
-    get_player = function(i) return (i == 1 and bob) or (i == 2 and gone) or nil end,
+    -- LuaGameScript::get_player takes an index or a name.
+    get_player = function(i)
+      if i == 1 or i == "Bob" then return bob end
+      if i == 2 or i == "Ann" then return gone end
+      return nil
+    end,
     print = function(text) S.printed[#S.printed + 1] = { who = "*", text = text } end,
   }
   -- tick and ticks_played both live on the handle so a test can move the clock.

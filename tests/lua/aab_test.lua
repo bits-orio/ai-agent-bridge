@@ -300,9 +300,41 @@ local labels_reply = rpc({ op = "labels" })
 check("the labels op lists the test provider's label, rich text stripped",
       labels_reply.ok and labels_reply.r[1] and labels_reply.r[1].name == "player" and labels_reply.r[1].label == "The Engineers",
       F.encode(labels_reply))
-local forces_with_labels = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_forces", a = { force = "player" } })
-check("list_forces carries the label", forces_with_labels.ok and forces_with_labels.r.forces[1].label == "The Engineers",
-      F.encode(forces_with_labels))
+check("the labels op lists team-3 as well", labels_reply.r[2] and labels_reply.r[2].name == "team-3" and labels_reply.r[2].label == "Team Losers",
+      F.encode(labels_reply))
+local qid_label = ask_cmd("who is quiet")
+rpc({ op = "answer", qid = qid_label, artifact = { shape = "summary",
+  lines = { "team-3 is quiet; the player force is not; [color=red]team-3[/color] again; team-30 is nobody" } } })
+local labelled = S.printed[#S.printed].text
+check("a force name renders as its label", labelled:find("Team Losers is quiet", 1, true) ~= nil, labelled)
+check("a plain-word force name is never swapped", labelled:find("the player force is not", 1, true) ~= nil, labelled)
+check("a force name inside a colour tag is still swapped", labelled:find("[color=red]Team Losers[/color]", 1, true) ~= nil, labelled)
+check("a longer name is not a partial match", labelled:find("team-30 is nobody", 1, true) ~= nil, labelled)
+
+-- ── where things are ──────────────────────────────────────────────────
+local labs = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", name = "lab" } })
+check("find_entities by name finds the labs with gps tags", labs.ok and labs.r.total == 2 and labs.r.shown == 2
+      and labs.r.entities[1].gps == "[gps=10,-5,nauvis]" and labs.r.entities[2].x == 13, F.encode(labs))
+check("find_entities passes force and the scan cap to the engine",
+      S.last_find_filter.force == "player" and S.last_find_filter.limit == 2000 and S.last_find_filter.name == "lab")
+local repair = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-pack" } })
+check("find_entities by recipe keeps only the machine on that recipe", repair.ok and repair.r.total == 1
+      and repair.r.entities[1].name == "assembling-machine-2" and repair.r.entities[1].gps == "[gps=-20,33,nauvis]"
+      and repair.r.entities[1].recipe == "repair-pack", F.encode(repair))
+local furnaces = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "furnace", limit = 1 } })
+check("find_entities by type works and reports scanned", furnaces.ok and furnaces.r.total == 1 and furnaces.r.scanned == 1
+      and furnaces.r.truncated == false, F.encode(furnaces))
+local no_recipe = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "no-such" } })
+check("an unknown recipe is found=false", no_recipe.ok and no_recipe.r.found == false and no_recipe.r.reason ~= nil, F.encode(no_recipe))
+local no_filter = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis" } })
+check("no filter at all is an error in the tool's own words", not no_filter.ok and tostring(no_filter.m):find("at least one", 1, true) ~= nil, F.encode(no_filter))
+local elsewhere = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "platform-1", name = "lab" } })
+check("another surface has none", elsewhere.ok and elsewhere.r.total == 0 and elsewhere.r.found == true, F.encode(elsewhere))
+local where_bob = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob" } })
+check("locate_player finds Bob with a gps tag", where_bob.ok and where_bob.r.found == true and where_bob.r.gps == "[gps=10,-4,nauvis]"
+      and where_bob.r.connected == true, F.encode(where_bob))
+local where_nobody = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Zed" } })
+check("locate_player on an unknown name is found=false", where_nobody.ok and where_nobody.r.found == false, F.encode(where_nobody))
 
 -- A question from a mod, with no player and no scope, goes to the server.
 local qid6 = remote.call("ai-agent-bridge-v1", "ask", { text = "from a mod", force = "player" })

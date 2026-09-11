@@ -21,10 +21,12 @@ local entity_count     = require("scripts.tools.entity_count")
 local environment      = require("scripts.tools.environment")
 local rockets          = require("scripts.tools.rockets")
 local game_time        = require("scripts.tools.game_time")
+local locate           = require("scripts.tools.locate")
 
 local MODULES = {
   basics, surfaces, production, production_since,
   research, tech_status, logistics, entity_count, environment, rockets, game_time,
+  locate,
 }
 
 local INTERFACE = "ai-agent-bridge-tools"

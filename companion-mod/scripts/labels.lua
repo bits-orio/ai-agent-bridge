@@ -1,12 +1,17 @@
 -- Force labels: what players call a force (docs/design/phase3-spec.md,
 -- "Force labels"). A team mod knows that "team-1" is Team Ace; the companion
--- does not, and the model must never say team-1 to a player who knows it as
+-- does not, and a player must never read team-1 for a team they know as
 -- Team Ace. Any remote interface exposing a zero-argument `force_labels_v1`
 -- returning { [force_name] = label } is a labels provider, found by scan
--- like every other probe and never stored.
+-- like every other probe and never stored. The swap happens at the edges:
+-- the service turns labels into force names in the question, the renderer
+-- here turns force names back into labels, and the model never learns the
+-- mapping or pays a token for it.
 
 local PROBE_FN = "force_labels_v1"
 local LABEL_LIMIT = 64
+
+local richtext = require("scripts.richtext")
 
 local M = {}
 
@@ -50,6 +55,42 @@ function M.map()
     end
   end
   return out
+end
+
+-- One scan per tick: a rendered table asks once per cell, and the answer
+-- cannot change inside a tick. A plain Lua local, never storage, and the
+-- same on every peer because the providers are.
+local cache, cache_tick = nil, nil
+
+function M.cached_map()
+  if cache_tick ~= game.tick then
+    cache, cache_tick = M.map(), game.tick
+  end
+  return cache
+end
+
+--- Only force names that are not plain words are swapped in rendered text:
+--- "team-1" is, "player" is not, or "the player" in every answer would come
+--- out as a label. The service applies the same rule on the way in.
+function M.substitutable(force_name)
+  return type(force_name) == "string" and force_name:find("[%d%-_]") ~= nil
+end
+
+local function decorate_plain(text, map)
+  return (text:gsub("%f[%w%-_]([%w][%w%-_]*)%f[^%w%-_]", function(word)
+    local label = map[word]
+    if label and M.substitutable(word) then return label end
+    return word
+  end))
+end
+
+--- `text` with every bare force name outside a tag replaced by what
+--- players call that force.
+function M.decorate(text)
+  if type(text) ~= "string" or text == "" then return text end
+  local map = M.cached_map()
+  if next(map) == nil then return text end
+  return richtext.map_outside_tags(text, function(chunk) return decorate_plain(chunk, map) end)
 end
 
 --- The same as an array of { name, label } sorted by name: the `labels` op.
