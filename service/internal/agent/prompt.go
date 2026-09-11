@@ -46,7 +46,7 @@ func systemPrompt(q Question) string {
 	b.WriteString("So a column is [img=item.iron-ore]/min, never Iron ore/min. ")
 	b.WriteString("The one exception: when the player asks about the thing itself, what an item is, what a recipe needs, a technology to look at, write the clickable tag instead, [item=iron-plate], [recipe=repair-pack], [technology=logistics-2], [fluid=crude-oil], [entity=lab], which opens it in game. ")
 	b.WriteString("Wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them. ")
-	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know. ")
+	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know. A tool result may show that name as a label beside the force name; the argument is always the force name. ")
 	b.WriteString("game_time is the server's clock. When a tool reports a force's own clock, its online or elapsed time, compare forces by that, never by game time: forces start at different times and keep their own clocks. ")
 	b.WriteString("How much or how many of an item a force has made is a total: production_since with no surface, which counts every surface, and since_tick 0 for the whole game or the force's own start tick when a clock tool gives one. ")
 	b.WriteString("How fast is a rate: item_rate over the shortest window that covers the question, one_minute for right now. Never answer a total with a rate. ")

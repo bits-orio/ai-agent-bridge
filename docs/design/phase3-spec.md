@@ -398,6 +398,16 @@ from the engine's cumulative counters when `since_tick` is 0 and from the
 flow samples otherwise, with a per-surface breakdown; the prompt says a
 force's total is the no-surface call.
 
+The owner asked whether a model that reads labels could call tools with
+the wrong force name. By design it cannot read them: labels are swapped
+into force names before the model sees the question, the session keeps
+the service-side text, and the companion swaps names back only when it
+prints. One leak existed, the `label` field beside the force name in a
+team mod's clock rows. So every companion tool now accepts a label where
+a force name is expected, resolving it through the labels map, the MTS
+clock tool accepts a display name or a spaced slot, and the prompt says
+the argument is always the force name. A slip costs nothing.
+
 ## Safety review (2026-09-11)
 
 The whole tree reviewed for what a player can run, what can lag the game

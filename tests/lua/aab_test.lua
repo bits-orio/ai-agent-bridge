@@ -326,6 +326,11 @@ local labels_reply = rpc({ op = "labels" })
 check("the labels op lists the test provider's label, rich text stripped",
       labels_reply.ok and labels_reply.r[1] and labels_reply.r[1].name == "player" and labels_reply.r[1].label == "The Engineers",
       F.encode(labels_reply))
+local by_label = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_players", a = { force = "the engineers" } })
+check("a tool called with a force's label resolves it to the force", by_label.ok and by_label.r.force == "player", F.encode(by_label))
+local no_label = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_players", a = { force = "Team Nobody" } })
+check("a label nobody has is still an unknown force", not no_label.ok and no_label.e == "provider_error"
+      and tostring(no_label.m):find("unknown force", 1, true) ~= nil, F.encode(no_label))
 check("the labels op lists team-3 as well", labels_reply.r[2] and labels_reply.r[2].name == "team-3" and labels_reply.r[2].label == "Team Losers",
       F.encode(labels_reply))
 local qid_label = ask_cmd("who is quiet")
