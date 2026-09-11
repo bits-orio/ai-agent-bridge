@@ -79,7 +79,7 @@ func (c *Catalog) Target(name string) (Target, bool) {
 func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tools.Tool {
 	return tools.Tool{
 		Name:        name,
-		Description: describe(iface, fn, manifest),
+		Description: describe(manifest),
 		Schema:      schema(manifest),
 		Call: func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 			return caller.CallTool(ctx, iface, fn, withForce(ctx, args))
@@ -88,14 +88,14 @@ func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tool
 }
 
 // describe is what the model reads to choose a tool: the provider's own
-// description, then where it came from, so two mods offering similar tools
-// stay tellable apart.
-func describe(iface, fn string, manifest rpc.ToolManifest) string {
-	desc := manifest.Desc
-	if desc == "" {
-		desc = "No description supplied by the provider."
+// description and nothing else. The provider and function already sit in
+// the tool's name, and every word here is sent on every round of every
+// question, so nothing is appended.
+func describe(manifest rpc.ToolManifest) string {
+	if manifest.Desc == "" {
+		return "No description supplied by the provider."
 	}
-	return desc + " Read from the game live, through the " + iface + " provider's " + fn + " function."
+	return manifest.Desc
 }
 
 var unsafeNameChar = regexp.MustCompile(`[^A-Za-z0-9_-]`)

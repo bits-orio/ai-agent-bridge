@@ -178,3 +178,11 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    writes from a console command are refused by the engine (measured 2026-09-10).
    Current plan: the harness seeds `mod-settings.dat` before the map exists;
    operators change settings in the map settings dialog as usual.
+9. **Cost per question.** Measured 2026-09-10 on the first live run: four to
+   thirteen cents each on claude-opus-5, almost all of it a 6,500-token fixed
+   prompt re-sent uncached every round. Resolved in the service: cache
+   breakpoints on the system prompt and the newest user block, cache tokens
+   priced, claude-sonnet-5 as the default, one-line tool descriptions, a cap
+   on output tokens per turn and a cut on long tool results
+   (docs/design/phase1-2-spec.md, "Cost contract"). Still to measure: the
+   same questions after the change.

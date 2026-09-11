@@ -47,6 +47,7 @@ run it under a real desktop session or a virtual one such as Xvfb.
 | `FACTORIO_HEADLESS` | `~/factorio-dev/headless-2.0.77/factorio/bin/x64/factorio` | headless server binary |
 | `FACTORIO_CLIENT` | `~/factorio/bin/x64/factorio` | standalone client binary, only used with `--client` |
 | `SERVICE_BIN` | (unset) | skip the Docker build, use this `aab` binary instead |
+| `E2E_CONTROL_PORT` | `8090` | control API port for the harness service; set it when a live service already holds 8090 |
 
 ### Ports and state
 

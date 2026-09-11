@@ -20,10 +20,10 @@ local M = {}
 
 M.manifest = {
   entity_count = {
-    desc = "How many entities of one prototype name one force has built on one surface, counted by the engine over the whole surface. Answers \"how many labs do we have\". Pass the internal prototype name, not the display name. A name no prototype has, or a surface this game does not have, comes back as found = false rather than an error, so guess and read the reply.",
+    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, for example nauvis",
-      name    = "string! entity prototype name, for example lab, assembling-machine-2, rocket-silo",
+      surface = "string! surface name or index, e.g. nauvis",
+      name    = "string! entity prototype name, e.g. lab, assembling-machine-2",
     },
   },
 }

@@ -28,9 +28,9 @@ local M = {}
 
 M.manifest = {
   research_queue = {
-    desc = "What one force is researching and what is queued behind it, in engine order: technology name, level, research units, progress. Use this rather than current_research for what comes next or how long the plan is. A level-based technology queued more than once gets one row per level, each naming the level it will research; units and progress belong to the first row only, so never sum units over the repeats. queued beside shown says whether the queue was longer than came back.",
+    desc = "Current research and the queue behind it, in order: technology, level, units, progress. A repeated levelled technology gets one row per level; units and progress belong to the first row only. queued beside shown says if there is more.",
     params = {
-      limit = "integer how many queue rows to return, default " .. DEFAULT_QUEUE .. ", at most " .. MAX_QUEUE,
+      limit = "integer queue rows, default " .. DEFAULT_QUEUE .. ", max " .. MAX_QUEUE,
     },
   },
 }

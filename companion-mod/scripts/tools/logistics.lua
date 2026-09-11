@@ -31,10 +31,10 @@ local M = {}
 
 M.manifest = {
   logistics_summary = {
-    desc = "The logistic networks one force has on one surface, busiest first: robot totals, how many are idle, how many cells the network covers, and its eight largest item stacks by count, each summed over every quality. A stack held at more than one quality carries a qualities breakdown; one held at a single quality other than normal says which. Answers \"do we have enough bots\" and \"what is in the chests\". An unknown surface comes back as found = false.",
+    desc = "Logistic networks of one force on one surface, busiest first: robots, idle robots, cells, eight largest item stacks over all qualities (do we have enough bots, what is in the chests). Unknown surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, for example nauvis",
-      limit   = "integer how many networks to return, default " .. DEFAULT_NETWORKS .. ", at most " .. MAX_NETWORKS,
+      surface = "string! surface name or index, e.g. nauvis",
+      limit   = "integer networks, default " .. DEFAULT_NETWORKS .. ", max " .. MAX_NETWORKS,
     },
   },
 }

@@ -14,20 +14,20 @@ local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "The forces on the server: name, player count, connected player count, sorted by name. total beside shown says whether there are more.",
+    desc = "Forces on the server: name, players, connected players, by name. total beside shown says if there are more.",
     params = {
-      limit = "integer how many rows to return, default " .. DEFAULT_FORCES .. ", at most " .. MAX_FORCES,
+      limit = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
     },
   },
   list_players = {
-    desc = "Players belonging to one force: name, connected, admin. Connected players only unless you pass connected=false. known is every player the force has ever had, total how many matched, shown how many rows came back, so say \"12 online of 214 known\" rather than counting rows.",
+    desc = "Players of one force: name, connected, admin. Connected only unless connected=false. Quote total and known, not the row count.",
     params = {
-      connected = "boolean true (the default) for connected players only, false for every player the force has ever had",
-      limit     = "integer how many rows to return, default " .. DEFAULT_PLAYERS .. ", at most " .. MAX_PLAYERS,
+      connected = "boolean default true: connected only; false: every player ever",
+      limit     = "integer rows, default " .. DEFAULT_PLAYERS .. ", max " .. MAX_PLAYERS,
     },
   },
   current_research = {
-    desc = "The technology one force is currently researching, if any, and its progress.",
+    desc = "The technology one force is researching now, if any, and its progress.",
   },
 }
 

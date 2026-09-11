@@ -24,8 +24,13 @@ func TestCostUSD(t *testing.T) {
 		{"fake", million, 0},
 		// The everyday case: a few thousand tokens, in fractions of a cent.
 		{"claude-opus-5", model.Usage{InputTokens: 4000, OutputTokens: 300}, 0.0275},
-		// Cache counters are reported but not priced.
-		{"claude-opus-5", model.Usage{CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000}, 0},
+		// A cache read is a tenth of the input price, a cache write a
+		// quarter more than it.
+		{"claude-opus-5", model.Usage{CacheReadTokens: 1_000_000}, 0.5},
+		{"claude-opus-5", model.Usage{CacheWriteTokens: 1_000_000}, 6.25},
+		// The everyday cached case: the fixed prompt read back from the
+		// cache, a few hundred fresh tokens, a short answer.
+		{"claude-sonnet-5", model.Usage{InputTokens: 300, CacheReadTokens: 6000, OutputTokens: 200}, 0.0038},
 	} {
 		got := CostUSD(tc.name, tc.usage)
 		if math.Abs(got-tc.want) > 1e-9 {

@@ -32,8 +32,8 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if c.Factorio.RCON.Password != "pw" {
 		t.Fatalf("secret not resolved")
 	}
-	if c.Anthropic.Model != "claude-opus-5" {
-		t.Errorf("Anthropic.Model = %q, want default claude-opus-5", c.Anthropic.Model)
+	if c.Anthropic.Model != "claude-sonnet-5" {
+		t.Errorf("Anthropic.Model = %q, want default claude-sonnet-5", c.Anthropic.Model)
 	}
 	if c.Agent.MaxRounds != defaultMaxRounds {
 		t.Errorf("MaxRounds = %d, want default %d", c.Agent.MaxRounds, defaultMaxRounds)

@@ -19,6 +19,14 @@ type price struct {
 	out float64 // USD per million output tokens
 }
 
+// Cache prices are the published multiples of the input price: writing a
+// prefix into the cache costs a quarter more than sending it, reading it
+// back costs a tenth. Every model on the list uses the same multiples.
+const (
+	cacheWriteMultiple = 1.25
+	cacheReadMultiple  = 0.1
+)
+
 var prices = map[string]price{
 	"claude-opus-5":    {in: 5, out: 25},
 	"claude-sonnet-5":  {in: 2, out: 10},
@@ -28,14 +36,17 @@ var prices = map[string]price{
 // CostUSD prices one question's usage for one model id. Ids carrying a date
 // suffix, claude-haiku-4-5-20251001 for instance, match by prefix.
 //
-// Cache tokens are not priced: the service sets no cache control, so those
-// counters stay at zero. Add them here the day it does.
+// The four counters are disjoint: the API reports a cached prefix only in
+// the cache counters, never in InputTokens as well, so each is priced once.
 func CostUSD(name string, u model.Usage) float64 {
 	p, known := priceFor(name)
 	if !known {
 		return 0
 	}
-	return (float64(u.InputTokens)*p.in + float64(u.OutputTokens)*p.out) / 1e6
+	in := float64(u.InputTokens) * p.in
+	out := float64(u.OutputTokens) * p.out
+	cached := float64(u.CacheReadTokens)*p.in*cacheReadMultiple + float64(u.CacheWriteTokens)*p.in*cacheWriteMultiple
+	return (in + out + cached) / 1e6
 }
 
 func priceFor(name string) (price, bool) {

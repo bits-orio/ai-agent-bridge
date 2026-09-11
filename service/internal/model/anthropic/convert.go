@@ -30,6 +30,27 @@ func toMessageParams(msgs []model.Message) []sdk.MessageParam {
 	return out
 }
 
+// cacheLastUserBlock puts a cache breakpoint on the last block of the last
+// user message, which is the question on round one and the tool results on
+// every later round. Only text and tool-result blocks are ever in a user
+// message here, so those are the two variants it knows how to mark.
+func cacheLastUserBlock(msgs []sdk.MessageParam) []sdk.MessageParam {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != sdk.MessageParamRoleUser || len(msgs[i].Content) == 0 {
+			continue
+		}
+		last := &msgs[i].Content[len(msgs[i].Content)-1]
+		switch {
+		case last.OfText != nil:
+			last.OfText.CacheControl = sdk.NewCacheControlEphemeralParam()
+		case last.OfToolResult != nil:
+			last.OfToolResult.CacheControl = sdk.NewCacheControlEphemeralParam()
+		}
+		return msgs
+	}
+	return msgs
+}
+
 func toContentBlocks(blocks []model.Block) []sdk.ContentBlockParamUnion {
 	out := make([]sdk.ContentBlockParamUnion, 0, len(blocks))
 	for _, b := range blocks {

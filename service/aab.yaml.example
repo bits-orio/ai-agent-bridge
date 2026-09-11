@@ -34,15 +34,21 @@ poll_interval: 1s
 
 anthropic:
   api_key_env: ANTHROPIC_API_KEY
-  # Any model id the API accepts. Set it to "fake" to run the scripted model instead:
-  # it needs no key and answers deterministically, which is what the end-to-end tests
-  # use.
-  model: claude-opus-5
+  # Any model id the API accepts. Sonnet 5 picks tools and fills a table the same way
+  # Opus 5 does at less than half the price; claude-haiku-4-5 is cheaper again and
+  # fine for most questions; claude-opus-5 is there for operators who want it. The
+  # fixed part of every request (rules and tool definitions) is cached, so a question
+  # mostly pays for its own text, the tool results and the answer.
+  # Set it to "fake" to run the scripted model instead: it needs no key and answers
+  # deterministically, which is what the end-to-end tests use.
+  model: claude-sonnet-5
 
 # Per-question limits. A question that hits one still answers, with a notice saying why.
 agent:
   max_rounds: 6                       # model turns per question
   max_tokens_per_question: 20000      # token budget across those turns
+  max_output_tokens: 4096             # cap on one turn's output, thinking included
+  max_tool_result_bytes: 4096         # a longer tool result is cut before the model sees it
   memory_ttl: 10m                     # how long a player's last few exchanges are remembered
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota
 

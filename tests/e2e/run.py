@@ -37,7 +37,9 @@ import scenarios
 
 REPO_ROOT = rig.REPO_ROOT
 RUN_ROOT = rig.DEFAULT_RUN_ROOT
-CONTROL_API_ADDR = "127.0.0.1:8090"
+# E2E_CONTROL_PORT moves the harness's control API off 8090, so a run can sit
+# beside a live service that is already listening there.
+CONTROL_API_ADDR = "127.0.0.1:" + os.environ.get("E2E_CONTROL_PORT", "8090")
 
 # Shared by write_config (the YAML the service actually reads) and
 # tailer_settle_seconds below, so the two can never drift apart the way a
@@ -155,7 +157,7 @@ def fail_if_control_api_already_up(addr: str) -> None:
                 raise RuntimeError(
                     "control API at http://%s already answers, before this run started its own service. "
                     "A previous `--keep` run (or another aab process) is still listening there. "
-                    "Stop it first (`make e2e-stop`, or kill its PID) and re-run." % addr
+                    "Stop it first (`make e2e-stop`, or kill its PID) and re-run, or set E2E_CONTROL_PORT to another port." % addr
                 )
     except (urllib.error.URLError, OSError):
         pass  # nothing listening yet, as expected

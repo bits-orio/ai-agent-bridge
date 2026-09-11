@@ -42,7 +42,7 @@ func TestEffectiveDumpWrittenWithoutSecrets(t *testing.T) {
 		"ANTHROPIC_API_KEY: SET (18 chars)",
 		"poll_interval: 1s", // Duration must marshal as a string, not nanoseconds
 		"address: game:27015",
-		"model: claude-opus-5",
+		"model: claude-sonnet-5",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("effective config missing %q:\n%s", want, out)

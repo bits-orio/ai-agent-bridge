@@ -17,19 +17,19 @@ local M = {}
 
 M.manifest = {
   item_rate = {
-    desc = "Production and consumption rate of one item for one force on one surface, in items per minute, summed over every quality. An unknown surface comes back as found = false rather than an error.",
+    desc = "Production and consumption rate of one item for one force on one surface, items per minute over all qualities. Unknown surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, e.g. nauvis",
+      surface = "string! surface name or index, e.g. nauvis",
       item    = "string! item prototype name",
       window  = "string! one of " .. flow.window_names,
     },
   },
   top_items = {
-    desc = "The N most-produced items for one force on one surface over a window, ranked by production rate, each summed over every quality. An unknown surface comes back as found = false rather than an error.",
+    desc = "The N most-produced items for one force on one surface over a window, by rate over all qualities. Unknown surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, e.g. nauvis",
+      surface = "string! surface name or index, e.g. nauvis",
       window  = "string! one of " .. flow.window_names,
-      n       = "integer! how many items to return, capped at " .. MAX_TOP_N,
+      n       = "integer! items to return, max " .. MAX_TOP_N,
     },
   },
 }

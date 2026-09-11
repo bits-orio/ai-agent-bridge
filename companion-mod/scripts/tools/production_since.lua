@@ -31,11 +31,11 @@ local M = {}
 
 M.manifest = {
   production_since = {
-    desc = "How many of one item a force produced and consumed on one surface since a given tick, summed over every quality from the engine's own flow samples. Pass the tick of an earlier event, a death or a research finish, and read produced, consumed and net. covered_ticks rounds up to whole samples, so check it against elapsed_ticks before quoting an exact figure. An unknown surface comes back as found = false.",
+    desc = "Produced, consumed and net of one item for one force on one surface since a tick, e.g. the tick of a death, over all qualities. covered_ticks rounds up to whole samples; compare it with elapsed_ticks. Unknown surface: found=false.",
     params = {
-      surface    = "string! surface name or index from list_surfaces, e.g. nauvis",
+      surface    = "string! surface name or index, e.g. nauvis",
       item       = "string! item prototype name",
-      since_tick = "integer! the tick to count from, never later than the current tick",
+      since_tick = "integer! tick to count from, not after the current tick",
     },
   },
 }

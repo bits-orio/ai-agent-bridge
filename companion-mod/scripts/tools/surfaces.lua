@@ -16,9 +16,9 @@ local M = {}
 
 M.manifest = {
   list_surfaces = {
-    desc = "Surfaces in the game: name, index, the planet it belongs to if it has one, and how many of this force's players stand on it, sorted by name. Call it first when a question is about a place, then pass a name or an index as another tool's surface argument. total beside shown says whether there are more.",
+    desc = "Surfaces in the game: name, index, planet, this force's players on it, by name. Pass a name or index as another tool's surface. total beside shown says if there are more.",
     params = {
-      limit = "integer how many rows to return, default " .. DEFAULT_SURFACES .. ", at most " .. MAX_SURFACES,
+      limit = "integer rows, default " .. DEFAULT_SURFACES .. ", max " .. MAX_SURFACES,
     },
   },
 }

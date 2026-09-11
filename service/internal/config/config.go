@@ -24,9 +24,11 @@ import (
 
 // Defaults applied whenever a field is left unset, in both config modes.
 const (
-	defaultModel                = "claude-opus-5"
+	defaultModel                = "claude-sonnet-5"
 	defaultMaxRounds            = 6
 	defaultMaxTokensPerQuestion = 20000
+	defaultMaxOutputTokens      = 4096
+	defaultMaxToolResultBytes   = 4096
 	defaultMemoryTTL            = 10 * time.Minute
 	defaultQuestionsPerHour     = 20
 	defaultPollInterval         = time.Second
@@ -71,6 +73,8 @@ type Config struct {
 type AgentConfig struct {
 	MaxRounds                 int      `yaml:"max_rounds"`                    // model turns per question
 	MaxTokensPerQuestion      int      `yaml:"max_tokens_per_question"`       // token budget across those turns
+	MaxOutputTokens           int      `yaml:"max_output_tokens"`             // cap on one model turn's output, thinking included
+	MaxToolResultBytes        int      `yaml:"max_tool_result_bytes"`         // a tool result longer than this is cut before the model sees it
 	MemoryTTL                 Duration `yaml:"memory_ttl"`                    // how long a player's follow-up context lives
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
 }
@@ -274,6 +278,20 @@ func loadFromEnv(m Meta) (*Config, error) {
 		}
 		c.Agent.MaxTokensPerQuestion = n
 	}
+	if v := os.Getenv("AAB_MAX_OUTPUT_TOKENS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_MAX_OUTPUT_TOKENS: invalid value %q", v)
+		}
+		c.Agent.MaxOutputTokens = n
+	}
+	if v := os.Getenv("AAB_MAX_TOOL_RESULT_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_MAX_TOOL_RESULT_BYTES: invalid value %q", v)
+		}
+		c.Agent.MaxToolResultBytes = n
+	}
 	if v := os.Getenv("AAB_MEMORY_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -305,6 +323,12 @@ func (c *Config) applyAgentDefaults() {
 	}
 	if c.Agent.MaxTokensPerQuestion == 0 {
 		c.Agent.MaxTokensPerQuestion = defaultMaxTokensPerQuestion
+	}
+	if c.Agent.MaxOutputTokens == 0 {
+		c.Agent.MaxOutputTokens = defaultMaxOutputTokens
+	}
+	if c.Agent.MaxToolResultBytes == 0 {
+		c.Agent.MaxToolResultBytes = defaultMaxToolResultBytes
 	}
 	if c.Agent.MemoryTTL == 0 {
 		c.Agent.MemoryTTL = Duration(defaultMemoryTTL)

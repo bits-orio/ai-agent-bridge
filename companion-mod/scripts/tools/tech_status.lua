@@ -19,10 +19,10 @@ local M = {}
 
 M.manifest = {
   tech_status = {
-    desc = "Where one named technology stands for one force: researched, enabled, available (every prerequisite researched), level, research units, progress, and which prerequisites are still missing. Answers \"can we research X yet\" and \"what is blocking X\". An unknown name comes back as found = false, so guess the prototype name and read the reply.",
+    desc = "One technology's state for one force: researched, enabled, available, level, units, progress, missing prerequisites (can we research X yet, what blocks X). Unknown name: found=false.",
     params = {
-      tech  = "string! technology prototype name, for example logistics-2 or mining-productivity-1",
-      limit = "integer how many prerequisite rows to return, default " .. DEFAULT_PREREQS .. ", at most " .. MAX_PREREQS,
+      tech  = "string! technology prototype name, e.g. logistics-2",
+      limit = "integer prerequisite rows, default " .. DEFAULT_PREREQS .. ", max " .. MAX_PREREQS,
     },
   },
 }

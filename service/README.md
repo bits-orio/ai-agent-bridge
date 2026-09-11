@@ -52,9 +52,11 @@ configuration from `AAB_*` environment variables instead:
 | `factorio.events_file` | `AAB_EVENTS_FILE` | |
 | `transport` | `AAB_TRANSPORT` | `local` |
 | `poll_interval` | `AAB_POLL_INTERVAL` | `1s` |
-| `anthropic.model` | `AAB_MODEL` | `claude-opus-5` |
+| `anthropic.model` | `AAB_MODEL` | `claude-sonnet-5` |
 | `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
+| `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
+| `agent.max_tool_result_bytes` | `AAB_MAX_TOOL_RESULT_BYTES` | `4096` |
 | `agent.memory_ttl` | `AAB_MEMORY_TTL` | `10m` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
 | `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
@@ -83,7 +85,7 @@ when it is picked up and one when the answer reaches the game:
 
 ```
 question 7 from Bob (player 1, force player): what is my iron plate rate
-answer 7 shape=summary rounds=2 tokens=1840/96 cost=$0.0116
+answer 7 shape=summary rounds=2 tokens=340/96 cached=12600/0 cost=$0.0038
 ```
 
 A few other lines are worth knowing:
@@ -157,14 +159,21 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
   "tokens_in": 21840,
   "tokens_out": 1130,
   "cost_usd": 0.1375,
-  "model": "claude-opus-5",
+  "model": "claude-sonnet-5",
   "uptime": "42m8s"
 }
 ```
 
 The cost is the operator's own money, so it is reported rather than hidden (ADR 0005).
 Prices come from a small table in `internal/agent/cost.go`; a model the table does not
-know prices at zero rather than at a guess.
+know prices at zero rather than at a guess. The `cached=read/write` pair in the answer
+line is where most of a question's input goes: the rules and the tool definitions are
+sent with a cache breakpoint, so after the first question in five minutes they are read
+back at a tenth of the input price, and a second breakpoint on the newest user block
+does the same for earlier rounds of the same question. Two caps keep the rest small:
+`max_output_tokens` bounds one turn's output, thinking included, and
+`max_tool_result_bytes` cuts a long tool result before the model reads it, with a note
+telling it to ask for fewer rows.
 
 ## The RCON client
 

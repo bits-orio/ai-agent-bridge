@@ -47,7 +47,9 @@ cp aab.yaml.example aab.yaml
 ```
 
 Edit `aab.yaml`: point `factorio.rcon.address` at your server's host and
-RCON port, and set `anthropic.model` to the model you want to pay for.
+RCON port, and set `anthropic.model` to the model you want to pay for. The
+default, `claude-sonnet-5`, answers a simple question for under a cent;
+`claude-haiku-4-5` is cheaper still and `claude-opus-5` costs a few cents.
 
 Put your secrets in a `.env` file next to `aab.yaml`, never in the YAML
 itself:

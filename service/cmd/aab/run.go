@@ -53,6 +53,7 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		agent: agent.New(mdl, agent.Caps{
 			MaxRounds:                 cfg.Agent.MaxRounds,
 			MaxTokensPerQuestion:      cfg.Agent.MaxTokensPerQuestion,
+			MaxToolResultBytes:        cfg.Agent.MaxToolResultBytes,
 			MemoryTTL:                 cfg.MemoryTTL(),
 			QuestionsPerPlayerPerHour: cfg.Agent.QuestionsPerPlayerPerHour,
 		}),
@@ -106,5 +107,5 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 	if cfg.Anthropic.APIKey == "" {
 		return nil, fmt.Errorf("no API key: set env var %q, or set the model to %q to run the scripted model", cfg.Anthropic.APIKeyEnv, fake.ModelID)
 	}
-	return anthropic.New(cfg.Anthropic.APIKey, cfg.Anthropic.Model), nil
+	return anthropic.New(cfg.Anthropic.APIKey, cfg.Anthropic.Model, cfg.Agent.MaxOutputTokens), nil
 }

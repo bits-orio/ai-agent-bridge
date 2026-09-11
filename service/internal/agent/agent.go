@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -93,8 +94,22 @@ func (q Question) key() string {
 type Caps struct {
 	MaxRounds                 int
 	MaxTokensPerQuestion      int
+	MaxToolResultBytes        int // a tool result longer than this is cut before the model sees it
 	MemoryTTL                 time.Duration
 	QuestionsPerPlayerPerHour int
+}
+
+// DefaultMaxToolResultBytes is the cut applied when the caps leave it unset.
+// The companion refuses a call reply past 8000 bytes; half of that is room
+// for every bounded list at its default limit and about a thousand tokens
+// of the model's context.
+const DefaultMaxToolResultBytes = 4096
+
+func (c Caps) toolResultBytes() int {
+	if c.MaxToolResultBytes <= 0 {
+		return DefaultMaxToolResultBytes
+	}
+	return c.MaxToolResultBytes
 }
 
 func (c Caps) maxRounds() int {
@@ -170,7 +185,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			return a.finish(q, fromText(step), round, usage), nil
 		}
 
-		results, artifact, submitted := runCalls(ctx, calls, byName, q.force())
+		results, artifact, submitted := runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
 		if submitted {
 			return a.finish(q, artifact, round, usage), nil
 		}
@@ -188,7 +203,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 // ends the loop: a round that mixes it with reads is refused, and a round that
 // submits twice keeps the first submission in block order, so which answer
 // reaches the player never depends on which goroutine finished first.
-func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string) ([]model.Block, Artifact, bool) {
+func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit int) ([]model.Block, Artifact, bool) {
 	results := make([]model.Block, len(calls))
 	submits, reads := partition(calls)
 
@@ -196,7 +211,7 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 		for _, i := range submits {
 			results[i] = failed(calls[i].ID, errors.New(besideReadsRefusal))
 		}
-		runReads(ctx, calls, reads, results, byName, force)
+		runReads(ctx, calls, reads, results, byName, force, limit)
 		return results, Artifact{}, false
 	}
 
@@ -230,13 +245,13 @@ func partition(calls []model.Block) (submits, reads []int) {
 
 // runReads runs a round's reads at once and writes each result into its own
 // slot, so the results come back in the order the model asked for them.
-func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string) {
+func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit int) {
 	var wg sync.WaitGroup
 	for _, i := range reads {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = read(ctx, calls[i], byName, force)
+			results[i] = read(ctx, calls[i], byName, force, limit)
 		}()
 	}
 	wg.Wait()
@@ -245,7 +260,7 @@ func runReads(ctx context.Context, calls []model.Block, reads []int, results []m
 // read runs one tool. Every tool that declares force gets the asker's force
 // filled in when the model left it out, game tools and history tools alike,
 // which is what the system prompt promises the model.
-func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string) model.Block {
+func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int) model.Block {
 	t, known := byName[call.Name]
 	if !known {
 		return failed(call.ID, fmt.Errorf("there is no tool named %q", call.Name))
@@ -258,7 +273,7 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 	if err != nil {
 		return failed(call.ID, err)
 	}
-	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out)}
+	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out, limit)}
 }
 
 // finish clips the artifact, remembers the exchange and prices the question.
@@ -317,11 +332,22 @@ func failed(id string, err error) model.Block {
 
 // content is what the model sees of a tool's return value. An empty return is
 // shown as null rather than as nothing at all, which reads as a broken tool.
-func content(out json.RawMessage) string {
+// content is the text the model reads for one tool result: the JSON as the
+// tool returned it, cut at limit bytes. The cut lands on a rune boundary and
+// says what it did, so the model asks for fewer rows instead of guessing at
+// what fell off the end. Every token here is paid for on every later round.
+func content(out json.RawMessage, limit int) string {
 	if len(out) == 0 {
 		return "null"
 	}
-	return string(out)
+	if limit <= 0 || len(out) <= limit {
+		return string(out)
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(out[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s\n[cut: %d of %d bytes shown; ask for fewer rows]", out[:cut], cut, len(out))
 }
 
 func index(ts []tools.Tool) map[string]tools.Tool {

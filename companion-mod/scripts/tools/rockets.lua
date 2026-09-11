@@ -18,9 +18,9 @@ local M = {}
 
 M.manifest = {
   rockets = {
-    desc = "How many rockets one force has launched in total, and the items it has sent up, largest count first. distinct_items beside shown says whether more kinds went up than came back.",
+    desc = "Rockets one force has launched, and the items sent up, largest count first. distinct_items beside shown says if there are more kinds.",
     params = {
-      limit = "integer how many item rows to return, default " .. DEFAULT_ITEMS .. ", at most " .. MAX_ITEMS,
+      limit = "integer item rows, default " .. DEFAULT_ITEMS .. ", max " .. MAX_ITEMS,
     },
   },
 }

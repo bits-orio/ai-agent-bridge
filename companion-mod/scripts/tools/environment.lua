@@ -30,15 +30,15 @@ local M = {}
 
 M.manifest = {
   evolution = {
-    desc = "How far the enemies on one surface have evolved against one force, from 0 to 1, plus the three parts the engine adds up to get there: time survived, pollution absorbed, spawners killed. Say which part is driving the number. Evolution is per surface in this version, so ask about the surface the question is about. An unknown surface comes back as found = false.",
+    desc = "Enemy evolution on one surface against one force, 0 to 1, with its three parts: time, pollution, spawners killed. Say which part drives it. Unknown surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, for example nauvis",
+      surface = "string! surface name or index, e.g. nauvis",
     },
   },
   pollution = {
-    desc = "Total pollution on one surface right now, and which pollutant that surface uses. Context for an evolution answer. This is the whole-surface sum, not a reading at one position, and a surface with pollution turned off answers 0 with pollution_enabled false. An unknown surface comes back as found = false.",
+    desc = "Total pollution on one surface now and its pollutant. Whole-surface sum; 0 with pollution_enabled=false where it is off. Unknown surface: found=false.",
     params = {
-      surface = "string! surface name or index from list_surfaces, for example nauvis",
+      surface = "string! surface name or index, e.g. nauvis",
     },
   },
 }

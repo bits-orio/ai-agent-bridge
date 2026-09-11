@@ -164,4 +164,27 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
 - [ ] Popup rendering seen by a person (`aab-answer-style` = `popup` or a table
   answer with a connected player).
 - [ ] `production_since` against real flow statistics.
-- [ ] A live model call (needs an API key in `.env`).
+- [x] A live model call: see section 3.
+
+## 3. Live model run
+
+- [x] 2026-09-10, the owner's key, claude-opus-5, Steam client joined to the rig
+  server `aab-p0`. Four questions answered in game, all through submit_answer:
+
+  ```
+  answer 1 shape=table  rounds=2 tokens=12978/227  cost=$0.0706   what forces are there?
+  answer 2 shape=notice rounds=3 tokens=20326/443  cost=$0.1127   how much stone did my team produce so far?
+  answer 3 shape=table  rounds=3 tokens=21554/1010 cost=$0.1330   What about other resources?
+  answer 4 shape=notice rounds=1 tokens=6518/245   cost=$0.0387   The factory must what?
+  ```
+
+  Question 4 is the measurement that matters: one round, no tool results, 6,518 input
+  tokens, so the fixed prompt was about 6,500 tokens and every round re-sent it in full
+  at Opus prices. Question 2 shows the loop ending in a notice after three rounds: the
+  tools have rates and totals since a tick, not a lifetime total, and the model said so.
+  Also seen: the client must join the headless server for the service to see a question;
+  a locally hosted game holds the question in its own ring with nothing polling it.
+- [ ] Re-measure after the cost contract (spec, "Cost contract"): same four questions
+  on claude-sonnet-5 with caching. Expected from the token counts above: question 1
+  near one cent, question 4 under half a cent, `cached=` non-zero from the second
+  request on.

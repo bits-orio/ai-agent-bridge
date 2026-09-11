@@ -88,9 +88,10 @@ func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 	switch {
 	case err == nil:
 		state.done = true
-		log.Printf("answer %d shape=%s rounds=%d tokens=%d/%d cost=$%.4f",
+		u := state.result.Usage
+		log.Printf("answer %d shape=%s rounds=%d tokens=%d/%d cached=%d/%d cost=$%.4f",
 			q.ID, state.result.Artifact.Shape, state.result.Rounds,
-			state.result.Usage.InputTokens, state.result.Usage.OutputTokens, state.result.CostUSD)
+			u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, state.result.CostUSD)
 	case rpc.HasCode(err, rpc.CodeBadArtifact):
 		r.refused(ctx, q, state, err)
 	case state.attempts >= maxDeliveries:

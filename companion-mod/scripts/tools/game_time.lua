@@ -24,7 +24,7 @@ local M = {}
 
 M.manifest = {
   game_time = {
-    desc = "How long this game has been running and who is on: current tick, ticks played, hours played, connected players on the server and on this force. Turn a tick into hours before you quote it. Ticks played counts from when the map was created, which is what a player means by playtime.",
+    desc = "Game age and who is on: tick, ticks and hours played since the map was made, connected players on the server and this force. Quote hours, not ticks.",
   },
 }
 

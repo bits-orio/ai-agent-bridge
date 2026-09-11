@@ -32,26 +32,24 @@ func (s *Store) Tools() []tools.Tool {
 	return []tools.Tool{
 		{
 			Name: "recent_events",
-			Description: "Returns the most recently recorded history events, newest first, each with " +
-				"its tick, event key, player, force and data. Filter by event, force or player to " +
-				"narrow the list; omit all three for the most recent events of any kind. Capped at " +
-				"20 rows (10 by default); call count_events instead if you only need a total.",
+			Description: "Recorded history events, newest first: tick, event key, player, force, data. " +
+				"Filter by event, force or player. At most 20 rows; use count_events for a total.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
-					"description": "Event key to filter to, for example player_died or research_finished. Omitted matches every event key.",
+					"description": "Event key, e.g. player_died or research_finished. Omit for every key.",
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Force name to filter to. Omitted reads the asker's force, the same as every other tool.",
+					"description": "Force name. Omit for the asker's force.",
 				},
 				"player": map[string]any{
 					"type":        "string",
-					"description": "Player name to filter to. Omitted matches every player.",
+					"description": "Player name. Omit for every player.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
-					"description": "Maximum rows to return, newest first. Defaults to 10, capped at 20.",
+					"description": "Rows to return, default 10, at most 20.",
 					"minimum":     1,
 					"maximum":     maxRecentLimit,
 				},
@@ -60,43 +58,40 @@ func (s *Store) Tools() []tools.Tool {
 		},
 		{
 			Name: "last_event",
-			Description: "Returns the single newest recorded occurrence of one event key, optionally " +
-				"restricted to a player or a force. Use this for questions like when a player last " +
-				"died or when a force last finished research. Returns a clear none-recorded result " +
-				"when the event has never been recorded for that filter.",
+			Description: "The newest recorded occurrence of one event key, optionally for one player or " +
+				"force: when a player last died, when research last finished. Says so when there is none.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
-					"description": "Event key to find the newest occurrence of, for example player_died.",
+					"description": "Event key, e.g. player_died.",
 				},
 				"player": map[string]any{
 					"type":        "string",
-					"description": "Restrict to this player's events.",
+					"description": "Player name.",
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Restrict to this force's events. Omitted reads the asker's force.",
+					"description": "Force name. Omit for the asker's force.",
 				},
 			}, "event"),
 			Call: s.lastEvent,
 		},
 		{
 			Name: "count_events",
-			Description: "Counts how many times one event key has been recorded, optionally restricted " +
-				"to a force and to ticks at or after since_tick. Use this for totals, such as how many " +
-				"times a force has launched a rocket, rather than listing every matching row.",
+			Description: "How many times one event key was recorded, optionally for one force and only " +
+				"from since_tick on. Use it for totals instead of listing rows.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
-					"description": "Event key to count, for example rocket_launched.",
+					"description": "Event key, e.g. rocket_launched.",
 				},
 				"force": map[string]any{
 					"type":        "string",
-					"description": "Restrict the count to this force. Omitted counts the asker's force.",
+					"description": "Force name. Omit for the asker's force.",
 				},
 				"since_tick": map[string]any{
 					"type":        "integer",
-					"description": "Only count events recorded at or after this game tick.",
+					"description": "Count only events at or after this tick.",
 				},
 			}, "event"),
 			Call: s.countEvents,
