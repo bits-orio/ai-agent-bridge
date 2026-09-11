@@ -82,6 +82,7 @@ function M.problem(a)
     return "unknown shape: " .. a.shape:sub(1, 40) .. " (use summary, notice, list, table or comparison)"
   end
   if a.title ~= nil and type(a.title) ~= "string" then return "title must be a string" end
+  if a.session ~= nil and type(a.session) ~= "table" then return "session must be an object" end
   return check(a)
 end
 

@@ -149,7 +149,7 @@ function F.install(opts)
     settings = {
       ["aab-events-enabled"] = { value = true },
       ["aab-chat-prefix"]    = { value = "" },
-      ["aab-answer-style"]   = { value = "auto" },
+      ["aab-answer-audience"] = { value = "server" },
     },
   }
 
@@ -297,7 +297,8 @@ function F.install(opts)
   }
 
   force = {
-    name = "player", players = { bob, gone }, connected_players = { bob },
+    name = "player", valid = true, players = { bob, gone }, connected_players = { bob },
+    print = function(text) S.printed[#S.printed + 1] = { who = "force:player", text = text } end,
     current_research = techs.logistics, research_progress = 0.25,
     technologies = techs,
     research_queue = S.research_queue,
@@ -407,8 +408,14 @@ function F.install(opts)
 
   _G.settings = { global = S.settings }
 
+  -- A second force with nobody on it, for private-scope answers.
+  S.team3 = {
+    name = "team-3", valid = true, players = {}, connected_players = {},
+    print = function(text) S.printed[#S.printed + 1] = { who = "force:team-3", text = text } end,
+  }
+
   _G.game = {
-    forces = { player = force },
+    forces = { player = force, ["team-3"] = S.team3 },
     surfaces = S.surfaces,
     connected_players = { bob },
     players = { bob, gone },

@@ -34,22 +34,24 @@ func systemPrompt(q Question) string {
 		MaxSummaryLines, MaxCellChars, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows)
 	b.WriteString("The game renders the artifact, so send values, not formatting.\n\n")
 
-	b.WriteString("Use the internal prototype names the tools return, such as iron-plate; rich text such as [item=iron-plate] is welcome. ")
-	b.WriteString("Numbers keep the units the tool gave them.\n\n")
+	b.WriteString("Answers print in the game's chat. Where you name a thing the game can draw, write it as Factorio rich text so it shows its icon: ")
+	b.WriteString("[item=iron-plate], [fluid=crude-oil], [entity=assembling-machine-2], [technology=logistics-2], [planet=nauvis]; ")
+	b.WriteString("wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
 	return b.String()
 }
 
-// prompt is the user turn: what this asker asked before, if anything, then
-// the question itself.
-func prompt(q Question, past []exchange) string {
+// prompt is the user turn: the session so far, when there is one, then the
+// question. Every exchange names its asker, since a session is shared and
+// a follow-up may pile onto someone else's question.
+func prompt(q Question, earlier []Exchange) string {
 	var b strings.Builder
-	if len(past) > 0 {
-		b.WriteString("Earlier in this conversation, oldest first:\n")
-		for _, e := range past {
-			fmt.Fprintf(&b, "Q: %s\nA: %s\n", e.question, e.answer)
+	if len(earlier) > 0 {
+		b.WriteString("Earlier in this session, oldest first:\n")
+		for _, e := range earlier {
+			fmt.Fprintf(&b, "%s asked: %s\nAnswer: %s\n", e.Asker, e.Question, e.Answer)
 		}
 		b.WriteString("\n")
 	}

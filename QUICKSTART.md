@@ -47,9 +47,10 @@ cp aab.yaml.example aab.yaml
 ```
 
 Edit `aab.yaml`: point `factorio.rcon.address` at your server's host and
-RCON port, and set `anthropic.model` to the model you want to pay for. The
-default, `claude-sonnet-5`, answers a simple question for under a cent;
-`claude-haiku-4-5` is cheaper still and `claude-opus-5` costs a few cents.
+RCON port, and pick `model.id`, any model OpenRouter lists that supports
+tool calling. The default, DeepSeek V4 Pro, answers a simple question for
+a fraction of a cent; `anthropic/claude-opus-5` costs a few cents. The
+example file lists a few with their prices.
 
 Put your secrets in a `.env` file next to `aab.yaml`, never in the YAML
 itself:
@@ -57,11 +58,13 @@ itself:
 ```sh
 cat > .env <<'EOF'
 FACTORIO_RCON_PASSWORD=<the password from step 2>
-ANTHROPIC_API_KEY=<your Anthropic API key>
+OPENROUTER_API_KEY=<your OpenRouter API key>
 EOF
 ```
 
-Bring your own key from [console.anthropic.com](https://console.anthropic.com/).
+Bring your own key from [openrouter.ai](https://openrouter.ai/keys). To talk
+to the Anthropic API directly instead, set `model.provider: anthropic`, put
+an Anthropic model id in `model.id` and `ANTHROPIC_API_KEY` in `.env`.
 The service brings the model and pays for every question; nothing else in
 this repository ever holds a key.
 

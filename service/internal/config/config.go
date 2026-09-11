@@ -24,14 +24,22 @@ import (
 
 // Defaults applied whenever a field is left unset, in both config modes.
 const (
-	defaultModel                = "claude-sonnet-5"
-	defaultThinking             = "off"
+	defaultProvider             = "openrouter"
+	defaultModel                = "deepseek/deepseek-v4-pro-0813"
+	defaultSmallModel           = "deepseek/deepseek-v4.1-flash"
+	defaultReasoning            = "off"
 	defaultCacheTTL             = "1h"
+	defaultDataCollection       = "deny"
+	defaultOpenRouterKeyEnv     = "OPENROUTER_API_KEY"
+	defaultAnthropicKeyEnv      = "ANTHROPIC_API_KEY"
 	defaultMaxRounds            = 6
 	defaultMaxTokensPerQuestion = 20000
 	defaultMaxOutputTokens      = 4096
 	defaultMaxToolResultBytes   = 4096
-	defaultMemoryTTL            = 10 * time.Minute
+	defaultSessionIdle          = 3 * time.Minute
+	defaultNamedSessionIdle     = 30 * time.Minute
+	defaultSessionMaxExchanges  = 10
+	defaultSessionMaxBytes      = 8000
 	defaultQuestionsPerHour     = 20
 	defaultPollInterval         = time.Second
 	defaultHistoryPath          = "history.sqlite"
@@ -63,6 +71,8 @@ type Config struct {
 	Factorio     FactorioConfig   `yaml:"factorio"`
 	Transport    string           `yaml:"transport"` // "local" or "sftp"
 	PollInterval Duration         `yaml:"poll_interval"`
+	Model        ModelConfig      `yaml:"model"`
+	OpenRouter   OpenRouterConfig `yaml:"openrouter"`
 	Anthropic    AnthropicConfig  `yaml:"anthropic"`
 	Agent        AgentConfig      `yaml:"agent"`
 	History      HistoryConfig    `yaml:"history"`
@@ -77,7 +87,10 @@ type AgentConfig struct {
 	MaxTokensPerQuestion      int      `yaml:"max_tokens_per_question"`       // token budget across those turns
 	MaxOutputTokens           int      `yaml:"max_output_tokens"`             // cap on one model turn's output, thinking included
 	MaxToolResultBytes        int      `yaml:"max_tool_result_bytes"`         // a tool result longer than this is cut before the model sees it
-	MemoryTTL                 Duration `yaml:"memory_ttl"`                    // how long a player's follow-up context lives
+	SessionIdle               Duration `yaml:"session_idle"`                  // a session ends after this long without a question
+	NamedSessionIdle          Duration `yaml:"named_session_idle"`            // a #named session waits longer
+	SessionMaxExchanges       int      `yaml:"session_max_exchanges"`         // oldest exchanges drop past this count
+	SessionMaxBytes           int      `yaml:"session_max_bytes"`             // and past this many bytes of question and answer text
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
 }
 
@@ -122,18 +135,57 @@ type RCONConfig struct {
 	Password    string `yaml:"-"` // resolved from env at load time
 }
 
-// AnthropicConfig holds the operator's model choice and API key reference. The key is
-// not validated as present here: none of the Phase 0 subcommands (status/probe/rpc/poll)
-// call the Anthropic API, so a service that only wants to check the RCON transport should
-// not be blocked on having a key configured yet. The agent loop (Phase 1) checks for
-// itself before running.
+// ModelConfig is the operator's model choice, one section for every
+// provider (docs/design/phase3-spec.md part 3, ADR 0007).
+type ModelConfig struct {
+	Provider       string   `yaml:"provider"`        // openrouter (default) | anthropic | fake
+	ID             string   `yaml:"id"`              // the model id as the provider names it
+	Small          string   `yaml:"small"`           // reserved for sub-agents; unused until they land
+	Fallbacks      []string `yaml:"fallbacks"`       // OpenRouter: models tried in order when ID fails
+	Reasoning      string   `yaml:"reasoning"`       // off (default) | model | low | medium | high
+	CacheTTL       string   `yaml:"cache_ttl"`       // 1h (default) | 5m for the rules-and-tools cache entry
+	DataCollection string   `yaml:"data_collection"` // OpenRouter: deny (default) | allow
+}
+
+// OpenRouterConfig and AnthropicConfig hold each provider's key reference.
+// A key is not required to be present at load: the Phase 0 subcommands
+// (status/probe/rpc/poll) never call a model, so a service that only wants
+// to check the RCON transport is not blocked on having one. The run
+// subcommand checks for itself.
+type OpenRouterConfig struct {
+	APIKeyEnv string `yaml:"api_key_env"`
+	APIKey    string `yaml:"-"` // resolved from env at load time
+}
+
 type AnthropicConfig struct {
 	APIKeyEnv string `yaml:"api_key_env"`
-	APIKey    string `yaml:"-"`         // resolved from env at load time
-	Thinking  string `yaml:"thinking"`  // off (default), adaptive, or model for the model's own default
-	Effort    string `yaml:"effort"`    // empty (default) leaves it to the model; low, medium, high where the model accepts it
-	CacheTTL  string `yaml:"cache_ttl"` // 1h (default) or 5m: how long the cached rules and tools live between questions
-	Model     string `yaml:"model"`
+	APIKey    string `yaml:"-"` // resolved from env at load time
+}
+
+// check refuses a value a provider would refuse later, so a typo in
+// aab.yaml fails at start and not on the first question.
+func (m ModelConfig) check() error {
+	switch m.Provider {
+	case "openrouter", "anthropic", "fake":
+	default:
+		return fmt.Errorf("model.provider: %q is not openrouter, anthropic or fake", m.Provider)
+	}
+	switch m.Reasoning {
+	case "off", "model", "low", "medium", "high":
+	default:
+		return fmt.Errorf("model.reasoning: %q is not off, model, low, medium or high", m.Reasoning)
+	}
+	switch m.CacheTTL {
+	case "5m", "1h":
+	default:
+		return fmt.Errorf("model.cache_ttl: %q is not 5m or 1h", m.CacheTTL)
+	}
+	switch m.DataCollection {
+	case "deny", "allow":
+	default:
+		return fmt.Errorf("model.data_collection: %q is not deny or allow", m.DataCollection)
+	}
+	return nil
 }
 
 // Load reads and validates configuration. If the config file is absent, or env-var mode
@@ -169,16 +221,8 @@ func Load(path string) (*Config, error) {
 	if c.PollInterval == 0 {
 		c.PollInterval = Duration(defaultPollInterval)
 	}
-	if c.Anthropic.Model == "" {
-		c.Anthropic.Model = defaultModel
-	}
-	if c.Anthropic.Thinking == "" {
-		c.Anthropic.Thinking = defaultThinking
-	}
-	if c.Anthropic.CacheTTL == "" {
-		c.Anthropic.CacheTTL = defaultCacheTTL
-	}
-	if err := c.Anthropic.check(); err != nil {
+	c.applyModelDefaults()
+	if err := c.Model.check(); err != nil {
 		return nil, err
 	}
 	c.applyAgentDefaults()
@@ -188,6 +232,9 @@ func Load(path string) (*Config, error) {
 	// Resolve secrets from the environment; never store them in the YAML.
 	if c.Factorio.RCON.PasswordEnv != "" {
 		c.Factorio.RCON.Password = os.Getenv(c.Factorio.RCON.PasswordEnv)
+	}
+	if c.OpenRouter.APIKeyEnv != "" {
+		c.OpenRouter.APIKey = os.Getenv(c.OpenRouter.APIKeyEnv)
 	}
 	if c.Anthropic.APIKeyEnv != "" {
 		c.Anthropic.APIKey = os.Getenv(c.Anthropic.APIKeyEnv)
@@ -255,13 +302,22 @@ func loadFromEnv(m Meta) (*Config, error) {
 				KnownHostsPath: os.Getenv("AAB_SFTP_KNOWN_HOSTS"),
 			},
 		},
+		Model: ModelConfig{
+			Provider:       getenvDefault("AAB_MODEL_PROVIDER", defaultProvider),
+			ID:             getenvDefault("AAB_MODEL", defaultModel),
+			Small:          getenvDefault("AAB_MODEL_SMALL", defaultSmallModel),
+			Fallbacks:      splitList(os.Getenv("AAB_MODEL_FALLBACKS")),
+			Reasoning:      getenvDefault("AAB_REASONING", defaultReasoning),
+			CacheTTL:       getenvDefault("AAB_CACHE_TTL", defaultCacheTTL),
+			DataCollection: getenvDefault("AAB_DATA_COLLECTION", defaultDataCollection),
+		},
+		OpenRouter: OpenRouterConfig{
+			APIKeyEnv: defaultOpenRouterKeyEnv,
+			APIKey:    os.Getenv(defaultOpenRouterKeyEnv),
+		},
 		Anthropic: AnthropicConfig{
-			APIKeyEnv: "ANTHROPIC_API_KEY",
-			APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
-			Model:     getenvDefault("AAB_MODEL", defaultModel),
-			Thinking:  getenvDefault("AAB_THINKING", defaultThinking),
-			Effort:    os.Getenv("AAB_EFFORT"),
-			CacheTTL:  getenvDefault("AAB_CACHE_TTL", defaultCacheTTL),
+			APIKeyEnv: defaultAnthropicKeyEnv,
+			APIKey:    os.Getenv(defaultAnthropicKeyEnv),
 		},
 		History: HistoryConfig{Path: expandPath(os.Getenv("AAB_HISTORY_PATH"))},
 		ControlAPI: ControlAPIConfig{
@@ -309,12 +365,33 @@ func loadFromEnv(m Meta) (*Config, error) {
 		}
 		c.Agent.MaxToolResultBytes = n
 	}
-	if v := os.Getenv("AAB_MEMORY_TTL"); v != "" {
+	if v := os.Getenv("AAB_SESSION_IDLE"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
-			return nil, fmt.Errorf("AAB_MEMORY_TTL: %w", err)
+			return nil, fmt.Errorf("AAB_SESSION_IDLE: %w", err)
 		}
-		c.Agent.MemoryTTL = Duration(d)
+		c.Agent.SessionIdle = Duration(d)
+	}
+	if v := os.Getenv("AAB_NAMED_SESSION_IDLE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_NAMED_SESSION_IDLE: %w", err)
+		}
+		c.Agent.NamedSessionIdle = Duration(d)
+	}
+	if v := os.Getenv("AAB_SESSION_MAX_EXCHANGES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_SESSION_MAX_EXCHANGES: invalid value %q", v)
+		}
+		c.Agent.SessionMaxExchanges = n
+	}
+	if v := os.Getenv("AAB_SESSION_MAX_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_SESSION_MAX_BYTES: invalid value %q", v)
+		}
+		c.Agent.SessionMaxBytes = n
 	}
 	if v := os.Getenv("AAB_QUESTIONS_PER_PLAYER_PER_HOUR"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -329,6 +406,9 @@ func loadFromEnv(m Meta) (*Config, error) {
 	c.History.Path = resolveHistoryPath(c.History.Path, "")
 	c.applyControlDefaults()
 
+	if err := c.Model.check(); err != nil {
+		return nil, err
+	}
 	return finish(c, m)
 }
 
@@ -347,8 +427,17 @@ func (c *Config) applyAgentDefaults() {
 	if c.Agent.MaxToolResultBytes == 0 {
 		c.Agent.MaxToolResultBytes = defaultMaxToolResultBytes
 	}
-	if c.Agent.MemoryTTL == 0 {
-		c.Agent.MemoryTTL = Duration(defaultMemoryTTL)
+	if c.Agent.SessionIdle == 0 {
+		c.Agent.SessionIdle = Duration(defaultSessionIdle)
+	}
+	if c.Agent.NamedSessionIdle == 0 {
+		c.Agent.NamedSessionIdle = Duration(defaultNamedSessionIdle)
+	}
+	if c.Agent.SessionMaxExchanges == 0 {
+		c.Agent.SessionMaxExchanges = defaultSessionMaxExchanges
+	}
+	if c.Agent.SessionMaxBytes == 0 {
+		c.Agent.SessionMaxBytes = defaultSessionMaxBytes
 	}
 	if c.Agent.QuestionsPerPlayerPerHour == 0 {
 		c.Agent.QuestionsPerPlayerPerHour = defaultQuestionsPerHour
@@ -390,7 +479,9 @@ func getenvDefault(key, def string) string {
 func (c *Config) Interval() time.Duration { return time.Duration(c.PollInterval) }
 
 // MemoryTTL is how long a player's follow-up context lives.
-func (c *Config) MemoryTTL() time.Duration { return time.Duration(c.Agent.MemoryTTL) }
+// SessionIdle and NamedSessionIdle as durations.
+func (c *Config) SessionIdle() time.Duration      { return time.Duration(c.Agent.SessionIdle) }
+func (c *Config) NamedSessionIdle() time.Duration { return time.Duration(c.Agent.NamedSessionIdle) }
 
 func expandPath(p string) string {
 	p = os.ExpandEnv(p)
@@ -402,23 +493,40 @@ func expandPath(p string) string {
 	return p
 }
 
-// check refuses a value the API would refuse later, so a typo in aab.yaml
-// fails at start and not on the first question.
-func (a AnthropicConfig) check() error {
-	switch a.Thinking {
-	case "off", "adaptive", "model":
-	default:
-		return fmt.Errorf("anthropic.thinking: %q is not off, adaptive or model", a.Thinking)
+func (c *Config) applyModelDefaults() {
+	if c.Model.Provider == "" {
+		c.Model.Provider = defaultProvider
 	}
-	switch a.Effort {
-	case "", "low", "medium", "high", "xhigh", "max":
-	default:
-		return fmt.Errorf("anthropic.effort: %q is not low, medium, high, xhigh or max", a.Effort)
+	if c.Model.ID == "" {
+		c.Model.ID = defaultModel
 	}
-	switch a.CacheTTL {
-	case "5m", "1h":
-	default:
-		return fmt.Errorf("anthropic.cache_ttl: %q is not 5m or 1h", a.CacheTTL)
+	if c.Model.Small == "" {
+		c.Model.Small = defaultSmallModel
 	}
-	return nil
+	if c.Model.Reasoning == "" {
+		c.Model.Reasoning = defaultReasoning
+	}
+	if c.Model.CacheTTL == "" {
+		c.Model.CacheTTL = defaultCacheTTL
+	}
+	if c.Model.DataCollection == "" {
+		c.Model.DataCollection = defaultDataCollection
+	}
+	if c.OpenRouter.APIKeyEnv == "" {
+		c.OpenRouter.APIKeyEnv = defaultOpenRouterKeyEnv
+	}
+	if c.Anthropic.APIKeyEnv == "" {
+		c.Anthropic.APIKeyEnv = defaultAnthropicKeyEnv
+	}
+}
+
+// splitList reads a comma-separated env value into a list, blanks dropped.
+func splitList(v string) []string {
+	var out []string
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }

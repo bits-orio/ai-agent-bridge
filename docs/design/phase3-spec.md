@@ -24,21 +24,25 @@ saw. It is the only thing carried from one question to the next.
 
 - Exchanges, oldest first. One exchange is: who asked (player name, or the
   asker label for a mod), the question text (already capped at 400 bytes),
-  and the answer as rendered, that is the lines the companion printed
-  joined with newlines and clipped to 400 characters. Never a tool result,
-  never a model's reasoning. The renderer is the compaction.
+  and the answer exactly as rendered, every line the companion printed.
+  Never cut: a half table is worse than no table, because the model reads
+  it as the whole. Never a tool result, never a model's reasoning. The
+  renderer is the compaction: an answer is already within the artifact caps.
 - `started_at`, `last_at`, the scope key and the optional name.
 
 ### Cost bound
 
-Each exchange is at most about 100 tokens, so a session adds at most
-`session_max_exchanges` times that to a question's input. At the defaults
-below that is about 1,000 tokens: $0.002 on Sonnet 5, $0.001 on Haiku 4.5,
-a fraction of a cent on DeepSeek. No model-written summaries: they cost
-output tokens, the expensive direction, and the rendered answers already
-are the summary. The session text sits after the cached rules and tools,
-inside the per-round cache breakpoint, so a round two or three of the same
-question reads it from the cache.
+A session is bounded by bytes, not by cutting: when adding an exchange
+would take the session past `session_max_bytes` (default 8000, about two
+thousand tokens), whole exchanges are dropped oldest first until it fits.
+`session_max_exchanges` (default 10) bounds the count the same way. An
+answer larger than the byte cap on its own is kept alone. So a session adds
+at most about two thousand tokens to a question: $0.002 on DeepSeek V4 Pro,
+$0.004 on Sonnet 5, and nothing ever reaches the model half-cut. No
+model-written summaries: they cost output tokens, the expensive direction,
+and the rendered answers already are the summary. The session text sits
+after the cached rules and tools, inside the per-round cache breakpoint, so
+a round two or three of the same question reads it from the cache.
 
 ### Identity
 
@@ -58,9 +62,9 @@ lowercase `[a-z0-9_-]`, 1 to 16 characters, typed with a leading `#`.
 ### Lifetime
 
 - A session ends after `session_idle` (default 3m) without a question, or
-  `named_session_idle` (default 30m) for a named one, or when it reaches
-  `session_max_exchanges` (default 10). The next question with that key
-  starts a new session.
+  `named_session_idle` (default 30m) for a named one. The next question with
+  that key starts a new session. The count and byte caps never end a
+  session; they drop its oldest exchanges whole, so piling on keeps working.
 - `new` in the grammar below ends the session for that key and starts a
   fresh one.
 - Ended sessions are dropped from memory. Nothing about sessions is written
@@ -93,9 +97,8 @@ Answer: ...
 Question from Bob: ...
 ```
 
-Ordering: questions with the same session key are answered one at a time,
-in id order, so a follow-up always sees the answer it follows. Different
-keys run concurrently as they do today.
+Ordering: the service answers questions one at a time in id order, as it
+does today, so a follow-up always sees the answer it follows.
 
 ### Marking a fresh session
 
@@ -112,6 +115,7 @@ Phase 1 contract already allows.
 | `session_idle` | `AAB_SESSION_IDLE` | `3m` |
 | `named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
 | `session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
+| `session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 
 `memory_ttl` and the per-player memory it governed are removed; sessions
 replace them. `questions_per_player_per_hour` stays per player.
@@ -162,8 +166,15 @@ global mid-question still gets that answer privately, and the reverse.
   it; `server` is the default.
 - Private with `audience.force`: that force's `print`. With
   `audience.players`: each connected one.
-- The popup style is unchanged and only ever shows to the asker; the chat
-  copy still goes to the audience, so others can follow up.
+- Chat only. The popup frame and the `aab-answer-style` setting are
+  removed: a window opening over whatever the player was doing is an
+  interruption, and chat is where the question was asked. Tables render as
+  one line per row with ` | ` between cells, the column names first, as the
+  chat renderer already does. The system prompt asks the model for
+  Factorio rich text where it names a thing the game can draw: `[item=...]`,
+  `[fluid=...]`, `[entity=...]`, `[technology=...]`, `[planet=...]`, plus
+  `[color=...]` for a warning, so answers carry icons the way players' own
+  chat does.
 - The "Got it, thinking about" echo stays asker-only.
 - The first answer line is laid out like a player's own chat line, name
   then badge then colon: `[AI Agent Bridge] [TEAM]: Forces: ...`, with the
@@ -202,23 +213,44 @@ stays for the harness.
 
 ```yaml
 model:
-  provider: openrouter            # openrouter (default) | anthropic | fake
-  id: anthropic/claude-sonnet-4.6 # any id OpenRouter lists that supports tools
-  fallbacks: []                   # optional: OpenRouter `models` list tried in order
-  reasoning: off                  # off (default) | model | effort: low|medium|high
-  cache_ttl: 1h                   # 1h | 5m, for the explicit breakpoints on Anthropic routes
-  max_output_tokens: 4096
-  route:                          # optional, passed through as OpenRouter's `provider` object
-    data_collection: deny
+  provider: openrouter                 # openrouter (default) | anthropic | fake
+  id: deepseek/deepseek-v4-pro-0813    # any id OpenRouter lists that supports tools
+  small: deepseek/deepseek-v4.1-flash  # reserved for sub-agents (PLAN.md "Later"); unused until then
+  fallbacks: []                        # optional: OpenRouter `models` list tried in order
+  reasoning: off                       # off (default) | model | low | medium | high
+  cache_ttl: 1h                        # 1h | 5m, for the explicit breakpoints on Anthropic routes
+  data_collection: deny                # deny (default) | allow: OpenRouter's provider.data_collection
 openrouter:
   api_key_env: OPENROUTER_API_KEY
+anthropic:
+  api_key_env: ANTHROPIC_API_KEY       # only read for provider: anthropic, which uses model.id too
 ```
 
-`anthropic.*` keeps working for `provider: anthropic`. `.env.example` gains
+One `model` section serves every provider: `reasoning` becomes
+`thinking: disabled` / adaptive with effort on the direct Anthropic client
+and OpenRouter's `reasoning` object on the router, and `cache_ttl` sets the
+same breakpoints on both. The `anthropic.model`, `thinking`, `effort` and
+`cache_ttl` keys from the second cost addendum fold into it; the
+`agent.max_output_tokens` cap stays where it is. `.env.example` gains
 `OPENROUTER_API_KEY=` beside the Anthropic placeholder. The example config
 lists a few ids with their prices on the day it was written and says how to
 check the live list (`GET /api/v1/models`, keep the ones whose
 `supported_parameters` include `tools`).
+
+Defaults, decided 2026-09-10: DeepSeek V4 Pro is the everyday model, the
+role Sonnet had, and DeepSeek V4.1 Flash is the small one for sub-agents
+when they land, the role Haiku had. Listed that day on OpenRouter at
+$1.05 and $3.15 per million tokens in and out for Pro, $0.30 and $1.20 for
+Flash, both with tool calling.
+
+`data_collection: deny` is the default: prompts carry players' chat and
+names. OpenRouter's provider table marks DeepSeek's own endpoint as
+training on prompts and every other host of these two models (Novita,
+DeepInfra, Fireworks, Together, Parasail, GMICloud and the rest, eighteen
+for Pro, seven for Flash on that day) as not training, so denying keeps
+both models available at the same or lower prices and only drops the
+first-party route. A model with no compliant host fails with a 404 that
+the log shows verbatim.
 
 ### Request
 
@@ -235,10 +267,10 @@ check the live list (`GET /api/v1/models`, keep the ones whose
   from the same tool definitions as today; `tool_choice: "auto"`;
   `parallel_tool_calls: true`.
 - `reasoning`: `{enabled: false}` for `off`; omitted for `model`;
-  `{effort}` when an effort is set. Routes that ignore a field ignore it;
-  the trace line shows what came back.
-- `max_tokens` from `max_output_tokens`; `models` from `fallbacks`;
-  `provider` from `route`.
+  `{effort}` for low, medium or high. Routes that ignore a field ignore
+  it; the trace line shows what came back.
+- `max_tokens` from `agent.max_output_tokens`; `models` from `fallbacks`;
+  `provider: {data_collection}` from `data_collection`.
 - Caching on DeepSeek, OpenAI, Gemini and the other automatic routes needs
   nothing from the service; the explicit breakpoints are for Anthropic
   routes and are harmless elsewhere.
@@ -268,7 +300,10 @@ check the live list (`GET /api/v1/models`, keep the ones whose
   with recorded response shapes: a tool call round, a text round, a
   reasoning_details round, a `length` finish, a 429 then success, an error
   body.
-- Harness: unchanged, on the fake model.
+- Harness: on the fake model, which answers "recall" with how many earlier
+  exchanges the prompt carried and the first of them, so a session can be
+  read from outside: follow-up, `sessions`, `new`, `#named`, and a private
+  scope handed in through the interface.
 - Live: the owner's OpenRouter key, one question on a Claude route and one
   on a DeepSeek route, recorded in TESTING.md with the `cost` OpenRouter
   reported.
@@ -279,8 +314,9 @@ check the live list (`GET /api/v1/models`, keep the ones whose
    grammar, the idle cut, the cap, ordering per key; the per-player memory
    removed.
 2. Chat scope in the companion: probe, question-row fields, audience
-   printing, tag layout, the `aab-answer-audience` setting; fake-game
-   checks with a test scope provider beside the test tool provider.
+   printing, tag layout, the `aab-answer-audience` setting, the popup and
+   its setting removed; fake-game checks with a test scope provider beside
+   the test tool provider.
 3. Poll row and interface additions; the `session` artifact field and its
    marker.
 4. OpenRouter client, config, docs; the Anthropic client left as is.

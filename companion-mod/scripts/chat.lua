@@ -41,7 +41,7 @@ function M.on_console_chat(e)
 
   local player = game.get_player(e.player_index)
   if not (player and player.valid) then return end
-  questions.ask_as_player(player, text)
+  questions.ask_as_player(player, text, message)
 end
 
 return M

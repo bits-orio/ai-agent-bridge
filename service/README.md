@@ -52,23 +52,29 @@ configuration from `AAB_*` environment variables instead:
 | `factorio.events_file` | `AAB_EVENTS_FILE` | |
 | `transport` | `AAB_TRANSPORT` | `local` |
 | `poll_interval` | `AAB_POLL_INTERVAL` | `1s` |
-| `anthropic.model` | `AAB_MODEL` | `claude-sonnet-5` |
-| `anthropic.thinking` | `AAB_THINKING` | `off` |
-| `anthropic.effort` | `AAB_EFFORT` | (unset, the model's default) |
-| `anthropic.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
+| `model.provider` | `AAB_MODEL_PROVIDER` | `openrouter` |
+| `model.id` | `AAB_MODEL` | `deepseek/deepseek-v4-pro-0813` |
+| `model.small` | `AAB_MODEL_SMALL` | `deepseek/deepseek-v4.1-flash` |
+| `model.fallbacks` | `AAB_MODEL_FALLBACKS` (comma-separated) | (none) |
+| `model.reasoning` | `AAB_REASONING` | `off` |
+| `model.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
+| `model.data_collection` | `AAB_DATA_COLLECTION` | `deny` |
 | `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
 | `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
 | `agent.max_tool_result_bytes` | `AAB_MAX_TOOL_RESULT_BYTES` | `4096` |
-| `agent.memory_ttl` | `AAB_MEMORY_TTL` | `10m` |
+| `agent.session_idle` | `AAB_SESSION_IDLE` | `3m` |
+| `agent.named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
+| `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
+| `agent.session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
 | `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
 | `control_api.addr` | `AAB_CONTROL_ADDR` | `127.0.0.1:8090` |
 | `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |
 | `log_file` | `AAB_LOG_FILE` | `aab.log` next to the events file |
 
-Secrets keep their own names in both modes: `ANTHROPIC_API_KEY`,
-`FACTORIO_RCON_PASSWORD`, `AAB_CONTROL_TOKEN`, `SFTP_PASSWORD`.
+Secrets keep their own names in both modes: `OPENROUTER_API_KEY`,
+`ANTHROPIC_API_KEY`, `FACTORIO_RCON_PASSWORD`, `AAB_CONTROL_TOKEN`, `SFTP_PASSWORD`.
 
 Every load, in either mode, writes `aab.effective.yaml` to the working directory: the
 fully-resolved config with secrets reduced to `SET (n chars)` or `MISSING`, so you can

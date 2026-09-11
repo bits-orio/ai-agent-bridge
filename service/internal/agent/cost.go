@@ -41,6 +41,11 @@ var prices = map[string]price{
 // The four counters are disjoint: the API reports a cached prefix only in
 // the cache counters, never in InputTokens as well, so each is priced once.
 func CostUSD(name string, u model.Usage) float64 {
+	// A route that reports what it charged is believed over the table: the
+	// table knows three models, the route knows every one it sells.
+	if u.Cost > 0 {
+		return u.Cost
+	}
 	p, known := priceFor(name)
 	if !known {
 		return 0

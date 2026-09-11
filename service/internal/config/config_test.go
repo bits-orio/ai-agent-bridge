@@ -32,8 +32,8 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if c.Factorio.RCON.Password != "pw" {
 		t.Fatalf("secret not resolved")
 	}
-	if c.Anthropic.Model != "claude-sonnet-5" {
-		t.Errorf("Anthropic.Model = %q, want default claude-sonnet-5", c.Anthropic.Model)
+	if c.Model.ID != "deepseek/deepseek-v4-pro-0813" {
+		t.Errorf("Anthropic.Model = %q, want default deepseek/deepseek-v4-pro-0813", c.Model.ID)
 	}
 	if c.Agent.MaxRounds != defaultMaxRounds {
 		t.Errorf("MaxRounds = %d, want default %d", c.Agent.MaxRounds, defaultMaxRounds)
@@ -49,7 +49,7 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 func TestLoadFromEnvOverrides(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)
-	t.Setenv("AAB_MODEL", "claude-sonnet-5")
+	t.Setenv("AAB_MODEL", "deepseek/deepseek-v4-pro-0813")
 	t.Setenv("AAB_MAX_ROUNDS", "12")
 	t.Setenv("AAB_MAX_TOKENS_PER_QUESTION", "8000")
 	t.Setenv("AAB_POLL_INTERVAL", "500ms")
@@ -59,8 +59,8 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("env load: %v", err)
 	}
-	if c.Anthropic.Model != "claude-sonnet-5" {
-		t.Errorf("Model = %q, want override", c.Anthropic.Model)
+	if c.Model.ID != "deepseek/deepseek-v4-pro-0813" {
+		t.Errorf("Model = %q, want override", c.Model.ID)
 	}
 	if c.Agent.MaxRounds != 12 {
 		t.Errorf("MaxRounds = %d, want 12", c.Agent.MaxRounds)
@@ -181,13 +181,14 @@ factorio:
     address: "game:27015"
     password_env: FACTORIO_RCON_PASSWORD
   events_file: /tmp/events.jsonl
-anthropic:
-  api_key_env: ANTHROPIC_API_KEY
-  model: fake
+model:
+  provider: fake
+  id: fake
 agent:
   max_rounds: 4
   max_tokens_per_question: 1234
-  memory_ttl: 90s
+  session_idle: 90s
+  session_max_bytes: 4000
   questions_per_player_per_hour: 3
 history:
   path: history.sqlite
@@ -206,8 +207,11 @@ control_api:
 	if c.Agent.MaxRounds != 4 || c.Agent.MaxTokensPerQuestion != 1234 {
 		t.Errorf("agent caps = %+v", c.Agent)
 	}
-	if c.MemoryTTL().String() != "1m30s" {
-		t.Errorf("memory_ttl = %s, want 1m30s", c.MemoryTTL())
+	if c.SessionIdle().String() != "1m30s" || c.Agent.SessionMaxBytes != 4000 {
+		t.Errorf("session caps = %+v, want idle 1m30s and 4000 bytes", c.Agent)
+	}
+	if c.NamedSessionIdle() != 30*time.Minute || c.Agent.SessionMaxExchanges != 10 {
+		t.Errorf("unset session caps must default: %+v", c.Agent)
 	}
 	if c.Agent.QuestionsPerPlayerPerHour != 3 {
 		t.Errorf("quota = %d, want 3", c.Agent.QuestionsPerPlayerPerHour)
@@ -218,8 +222,8 @@ control_api:
 	if c.ControlAPI.Addr != "127.0.0.1:9999" || c.ControlAPI.Token != "control-secret" {
 		t.Errorf("control api = %+v", c.ControlAPI)
 	}
-	if c.Anthropic.Model != "fake" {
-		t.Errorf("model = %q, want fake", c.Anthropic.Model)
+	if c.Model.ID != "fake" {
+		t.Errorf("model = %q, want fake", c.Model.ID)
 	}
 }
 
@@ -234,8 +238,8 @@ func TestAgentDefaults(t *testing.T) {
 	if c.Agent.MaxRounds != 6 || c.Agent.MaxTokensPerQuestion != 20000 {
 		t.Errorf("agent caps = %+v, want 6 rounds and 20000 tokens", c.Agent)
 	}
-	if c.MemoryTTL() != 10*time.Minute {
-		t.Errorf("memory_ttl = %s, want 10m", c.MemoryTTL())
+	if c.SessionIdle() != 3*time.Minute || c.NamedSessionIdle() != 30*time.Minute {
+		t.Errorf("session idle defaults = %s and %s, want 3m and 30m", c.SessionIdle(), c.NamedSessionIdle())
 	}
 	if c.Agent.QuestionsPerPlayerPerHour != 20 {
 		t.Errorf("quota = %d, want 20", c.Agent.QuestionsPerPlayerPerHour)
@@ -251,7 +255,7 @@ func TestAgentDefaults(t *testing.T) {
 func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)
-	t.Setenv("AAB_MEMORY_TTL", "45s")
+	t.Setenv("AAB_SESSION_IDLE", "45s")
 	t.Setenv("AAB_QUESTIONS_PER_PLAYER_PER_HOUR", "-1")
 	t.Setenv("AAB_HISTORY_PATH", "/var/lib/aab/history.sqlite")
 	t.Setenv("AAB_CONTROL_ADDR", "0.0.0.0:9000")
@@ -260,8 +264,8 @@ func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("env load: %v", err)
 	}
-	if c.MemoryTTL().String() != "45s" {
-		t.Errorf("memory_ttl = %s, want 45s", c.MemoryTTL())
+	if c.SessionIdle().String() != "45s" {
+		t.Errorf("session_idle = %s, want 45s", c.SessionIdle())
 	}
 	// A negative quota is a deliberate "no quota" and must survive the defaults.
 	if c.Agent.QuestionsPerPlayerPerHour != -1 {
@@ -275,12 +279,12 @@ func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnvInvalidMemoryTTL(t *testing.T) {
+func TestLoadFromEnvInvalidSessionIdle(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)
-	t.Setenv("AAB_MEMORY_TTL", "ten minutes")
+	t.Setenv("AAB_SESSION_IDLE", "ten minutes")
 
 	if _, err := Load("/no/such/aab.yaml"); err == nil {
-		t.Fatal("expected an error for an unparsable AAB_MEMORY_TTL")
+		t.Fatal("expected an error for an unparsable AAB_SESSION_IDLE")
 	}
 }

@@ -22,6 +22,9 @@ func TestCostUSD(t *testing.T) {
 		// An unknown model prices at zero rather than at a guess.
 		{"some-other-model", million, 0},
 		{"fake", million, 0},
+		// A reported cost is the cost, whatever the model id.
+		{"deepseek/deepseek-v4-pro-0813", model.Usage{InputTokens: 5000, OutputTokens: 200, Cost: 0.0031}, 0.0031},
+		{"claude-opus-5", model.Usage{InputTokens: 1_000_000, Cost: 4.2}, 4.2},
 		// The everyday case: a few thousand tokens, in fractions of a cent.
 		{"claude-opus-5", model.Usage{InputTokens: 4000, OutputTokens: 300}, 0.0275},
 		// A cache read is a tenth of the input price, a cache write a

@@ -73,7 +73,7 @@ func stubTool(name, out string, err error) tools.Tool {
 }
 
 func caps() Caps {
-	return Caps{MaxRounds: 6, MaxTokensPerQuestion: 20000, MemoryTTL: 10 * time.Minute, QuestionsPerPlayerPerHour: 20}
+	return Caps{MaxRounds: 6, MaxTokensPerQuestion: 20000, QuestionsPerPlayerPerHour: 20}
 }
 
 func player(index int) *int { return &index }
@@ -286,33 +286,70 @@ func (failingModel) Step(context.Context, string, []model.Message, []model.ToolD
 	return model.Step{}, fmt.Errorf("no route to host")
 }
 
-// The next question from the same player carries the last exchange.
-func TestAnswerRemembersTheLastExchange(t *testing.T) {
+// The next question in the same scope carries the last exchange, whoever
+// asked it, with the answer as the game rendered it.
+func TestAnswerSharesTheSessionAcrossAskers(t *testing.T) {
 	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"42 plates a minute"}})}}
 	a := New(m, caps())
-	q := Question{ID: 11, Text: "iron plate rate", PlayerIndex: player(3)}
+	q := Question{ID: 11, Text: "iron plate rate", PlayerIndex: player(3), PlayerName: "Alice"}
 
-	if _, err := a.Answer(context.Background(), q, nil); err != nil {
+	first, err := a.Answer(context.Background(), q, nil)
+	if err != nil {
 		t.Fatalf("first answer: %v", err)
 	}
-	q.ID, q.Text = 12, "and copper"
-	if _, err := a.Answer(context.Background(), q, nil); err != nil {
+	if !first.Session.Fresh || first.Artifact.Session == nil || !first.Artifact.Session.Fresh {
+		t.Errorf("the first question must start the session and say so: %+v", first.Session)
+	}
+	q = Question{ID: 12, Text: "and copper", PlayerIndex: player(4), PlayerName: "Bob"}
+	second, err := a.Answer(context.Background(), q, nil)
+	if err != nil {
 		t.Fatalf("second answer: %v", err)
 	}
-
-	first := m.msgs[0].Blocks[0].Text
-	for _, want := range []string{"iron plate rate", "42 plates a minute", "Question: and copper"} {
-		if !strings.Contains(first, want) {
-			t.Errorf("the follow-up prompt is missing %q:\n%s", want, first)
+	if second.Session.Fresh {
+		t.Error("the second question continues the session")
+	}
+	got := m.msgs[0].Blocks[0].Text
+	for _, want := range []string{"Alice asked: iron plate rate", "Answer: 42 plates a minute", "Question: and copper"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the follow-up prompt is missing %q:\n%s", want, got)
 		}
 	}
 }
 
-// Memory expires: a question after the TTL starts clean.
-func TestMemoryExpires(t *testing.T) {
+// A private scope and a named session never see the global session, and
+// "new" starts over.
+func TestAnswerKeepsScopesAndNamesApart(t *testing.T) {
+	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"first answer"}})}}
+	a := New(m, caps())
+	if _, err := a.Answer(context.Background(), Question{ID: 1, Text: "first question", PlayerIndex: player(1)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []Question{
+		{ID: 2, Text: "private follow-up", PlayerIndex: player(1), Scope: "team-3"},
+		{ID: 3, Text: "#iron named follow-up", PlayerIndex: player(1)},
+		{ID: 4, Text: "new fresh follow-up", PlayerIndex: player(1)},
+	} {
+		res, err := a.Answer(context.Background(), q, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !res.Session.Fresh {
+			t.Errorf("question %d should start its own session", q.ID)
+		}
+		if got := m.msgs[0].Blocks[0].Text; strings.Contains(got, "first answer") {
+			t.Errorf("question %d saw the global session:\n%s", q.ID, got)
+		}
+	}
+	if res, _ := a.Answer(context.Background(), Question{ID: 5, Text: "#iron again", PlayerIndex: player(2)}, nil); res.Session.Fresh || res.Session.Name != "iron" {
+		t.Errorf("#iron should continue for another asker: %+v", res.Session)
+	}
+}
+
+// Idle time ends a session: a question after the idle cut starts clean.
+func TestSessionIdlesOut(t *testing.T) {
 	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"first answer"}})}}
 	c := caps()
-	c.MemoryTTL = time.Minute
+	c.Sessions.Idle = time.Minute
 	a := New(m, c)
 	now := time.Now()
 	a.now = func() time.Time { return now }
@@ -323,11 +360,45 @@ func TestMemoryExpires(t *testing.T) {
 	}
 	now = now.Add(2 * time.Minute)
 	q.ID, q.Text = 14, "second question"
-	if _, err := a.Answer(context.Background(), q, nil); err != nil {
+	res, err := a.Answer(context.Background(), q, nil)
+	if err != nil {
 		t.Fatalf("second answer: %v", err)
 	}
+	if !res.Session.Fresh {
+		t.Error("two minutes of silence must start a new session")
+	}
 	if got := m.msgs[0].Blocks[0].Text; strings.Contains(got, "first answer") {
-		t.Errorf("expired memory came back:\n%s", got)
+		t.Errorf("the ended session came back:\n%s", got)
+	}
+}
+
+// "sessions" and a bare "new" never reach the model and cost nothing.
+func TestSessionCommandsSkipTheModel(t *testing.T) {
+	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"an answer"}})}}
+	a := New(m, caps())
+	empty, _ := a.Answer(context.Background(), Question{ID: 1, Text: "sessions", PlayerIndex: player(1)}, nil)
+	if empty.Artifact.Shape != ShapeNotice || empty.Rounds != 0 {
+		t.Errorf("sessions with nothing live = %+v", empty.Artifact)
+	}
+	if _, err := a.Answer(context.Background(), Question{ID: 2, Text: "#iron a question", PlayerIndex: player(1), PlayerName: "Alice"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	listed, _ := a.Answer(context.Background(), Question{ID: 3, Text: "sessions", PlayerIndex: player(2)}, nil)
+	if listed.Artifact.Shape != ShapeList || len(listed.Artifact.Items) != 1 || !strings.Contains(listed.Artifact.Items[0], "#iron: 1 exchange") || !strings.Contains(listed.Artifact.Items[0], "Alice") {
+		t.Errorf("sessions listing = %+v", listed.Artifact)
+	}
+	if hidden, _ := a.Answer(context.Background(), Question{ID: 4, Text: "sessions", Scope: "team-3", PlayerIndex: player(3)}, nil); hidden.Artifact.Shape != ShapeNotice {
+		t.Errorf("a private scope must not list global sessions: %+v", hidden.Artifact)
+	}
+	reset, _ := a.Answer(context.Background(), Question{ID: 5, Text: "new #iron", PlayerIndex: player(1)}, nil)
+	if reset.Artifact.Shape != ShapeNotice || reset.Artifact.Level != LevelConfirmation || !reset.Session.Fresh {
+		t.Errorf("new #iron = %+v", reset.Artifact)
+	}
+	if again, _ := a.Answer(context.Background(), Question{ID: 6, Text: "sessions", PlayerIndex: player(1)}, nil); again.Artifact.Shape != ShapeNotice {
+		t.Errorf("after new #iron the listing should be empty: %+v", again.Artifact)
+	}
+	if m.calls != 1 {
+		t.Errorf("the model was called %d times, want once for the one real question", m.calls)
 	}
 }
 

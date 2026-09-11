@@ -49,6 +49,7 @@ function M.poll(after, limit)
       return {
         id = q.id, text = q.text, player_index = q.player_index,
         player_name = q.player_name, force = q.force, tick = q.tick,
+        scope = q.scope, private = q.private or nil,
       }
     end)
 end

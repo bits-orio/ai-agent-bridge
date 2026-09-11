@@ -7,6 +7,7 @@
 
 local events        = require("scripts.events")
 local player_lookup = require("scripts.player_lookup")
+local scope         = require("scripts.scope")
 
 local RING_SIZE = 64
 
@@ -17,7 +18,7 @@ function M.ensure_storage()
   storage.aab.q = storage.aab.q or { next_id = 1, ring = {} }
 end
 
---- Creates a question. spec = { text, player_index?, force? }. Returns the
+--- Creates a question. spec = { text, player_index?, force?, scope? }. Returns the
 --- new question id, or nil if spec.text is missing. This is also reachable
 --- from the ai-agent-bridge-v1 remote interface by any other mod, so bad
 --- input returns nil rather than error()s: a mistake in a caller's spec
@@ -53,6 +54,12 @@ function M.ask(spec)
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
   local player_name = player and player.name or nil
+  -- The chat scope, fixed here (docs/design/phase3-spec.md part 2). A caller
+  -- may hand one in (a mod asking for a channel of its own); a player's is
+  -- resolved from the providers; anything else is global.
+  local sc = type(spec.scope) == "table" and spec.scope or nil
+  if not sc and player_index then sc = scope.resolve(player_index, spec.line or text) end
+  sc = sc or { key = scope.GLOBAL_KEY, private = false }
 
   local q = storage.aab.q
   local qid = q.next_id
@@ -65,12 +72,19 @@ function M.ask(spec)
     force = force,
     tick = game.tick,
     answered = false,
+    scope = type(sc.key) == "string" and sc.key or scope.GLOBAL_KEY,
+    private = sc.private == true,
+    audience = sc.private == true and type(sc.audience) == "table" and sc.audience or nil,
+    tag = type(sc.tag) == "string" and sc.tag or nil,
   }
   if #q.ring > RING_SIZE then
     table.remove(q.ring, 1)
   end
 
-  events.write("question", { qid = qid, player = player_name, force = force, text = spec.text })
+  events.write("question", {
+    qid = qid, player = player_name, force = force, text = spec.text,
+    scope = sc.key, private = sc.private == true,
+  })
   return qid
 end
 
@@ -112,9 +126,10 @@ function M.last_id()
 end
 
 --- Takes a question from a player and tells them it landed. Shared by the
---- /ask command and the chat prefix.
-function M.ask_as_player(player, text)
-  local qid = M.ask({ text = text, player_index = player.index, force = player.force.name })
+--- /ask command and the chat prefix. `line` is what the player typed before
+--- any prefix was stripped, handed to the scope providers as is.
+function M.ask_as_player(player, text, line)
+  local qid = M.ask({ text = text, player_index = player.index, force = player.force.name, line = line })
   if qid then
     player.print("[AI Agent Bridge] Got it, thinking about: " .. text)
   end

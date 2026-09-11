@@ -25,6 +25,7 @@ import (
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/anthropic"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/fake"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/model/openrouter"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/transport"
 )
@@ -51,10 +52,15 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		stats:    controlapi.NewStats(mdl.Name(), time.Now()),
 		inFlight: map[int64]*delivery{},
 		agent: agent.New(mdl, agent.Caps{
-			MaxRounds:                 cfg.Agent.MaxRounds,
-			MaxTokensPerQuestion:      cfg.Agent.MaxTokensPerQuestion,
-			MaxToolResultBytes:        cfg.Agent.MaxToolResultBytes,
-			MemoryTTL:                 cfg.MemoryTTL(),
+			MaxRounds:            cfg.Agent.MaxRounds,
+			MaxTokensPerQuestion: cfg.Agent.MaxTokensPerQuestion,
+			MaxToolResultBytes:   cfg.Agent.MaxToolResultBytes,
+			Sessions: agent.SessionCaps{
+				Idle:         cfg.SessionIdle(),
+				NamedIdle:    cfg.NamedSessionIdle(),
+				MaxExchanges: cfg.Agent.SessionMaxExchanges,
+				MaxBytes:     cfg.Agent.SessionMaxBytes,
+			},
 			QuestionsPerPlayerPerHour: cfg.Agent.QuestionsPerPlayerPerHour,
 		}),
 	}
@@ -70,8 +76,8 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		}()
 	}
 
-	log.Printf("run: model %s (thinking %s, effort %s, cache %s), %d rounds and %d tokens per question, polling every %s",
-		mdl.Name(), cfg.Anthropic.Thinking, orDefault(cfg.Anthropic.Effort, "model default"), cfg.Anthropic.CacheTTL,
+	log.Printf("run: model %s via %s (reasoning %s, cache %s, data collection %s), %d rounds and %d tokens per question, polling every %s",
+		mdl.Name(), cfg.Model.Provider, cfg.Model.Reasoning, cfg.Model.CacheTTL, cfg.Model.DataCollection,
 		cfg.Agent.MaxRounds, cfg.Agent.MaxTokensPerQuestion, cfg.Interval())
 	r.greet(ctx)
 	r.loop(ctx)
@@ -100,28 +106,36 @@ func tailEvents(ctx context.Context, cfg *config.Config, store *history.Store) {
 	})
 }
 
-// buildModel picks the model the operator configured. "fake" selects the
-// scripted model the end-to-end harness runs against, which needs no key.
+// buildModel picks the provider and model the operator configured. "fake"
+// selects the scripted model the end-to-end harness runs against, which
+// needs no key.
 func buildModel(cfg *config.Config) (model.Model, error) {
-	if cfg.Anthropic.Model == fake.ModelID {
+	m := cfg.Model
+	switch m.Provider {
+	case "fake":
 		log.Print("run: using the scripted fake model, no API key needed")
 		return fake.New(), nil
+	case "anthropic":
+		if cfg.Anthropic.APIKey == "" {
+			return nil, fmt.Errorf("no Anthropic API key: set env var %q, or set model.provider to fake", cfg.Anthropic.APIKeyEnv)
+		}
+		thinking, effort := "off", ""
+		switch m.Reasoning {
+		case "model":
+			thinking = "model"
+		case "low", "medium", "high":
+			thinking, effort = "adaptive", m.Reasoning
+		}
+		return anthropic.New(cfg.Anthropic.APIKey, anthropic.Options{
+			Model: m.ID, MaxOutput: cfg.Agent.MaxOutputTokens, Thinking: thinking, Effort: effort, CacheTTL: m.CacheTTL,
+		}), nil
+	default:
+		if cfg.OpenRouter.APIKey == "" {
+			return nil, fmt.Errorf("no OpenRouter API key: set env var %q, or set model.provider to fake", cfg.OpenRouter.APIKeyEnv)
+		}
+		return openrouter.New(cfg.OpenRouter.APIKey, openrouter.Options{
+			Model: m.ID, Fallbacks: m.Fallbacks, MaxOutput: cfg.Agent.MaxOutputTokens,
+			Reasoning: m.Reasoning, CacheTTL: m.CacheTTL, DataCollection: m.DataCollection,
+		}), nil
 	}
-	if cfg.Anthropic.APIKey == "" {
-		return nil, fmt.Errorf("no API key: set env var %q, or set the model to %q to run the scripted model", cfg.Anthropic.APIKeyEnv, fake.ModelID)
-	}
-	return anthropic.New(cfg.Anthropic.APIKey, anthropic.Options{
-		Model:     cfg.Anthropic.Model,
-		MaxOutput: cfg.Agent.MaxOutputTokens,
-		Thinking:  cfg.Anthropic.Thinking,
-		Effort:    cfg.Anthropic.Effort,
-		CacheTTL:  cfg.Anthropic.CacheTTL,
-	}), nil
-}
-
-func orDefault(v, fallback string) string {
-	if v == "" {
-		return fallback
-	}
-	return v
 }

@@ -84,6 +84,12 @@ type Question struct {
 	PlayerName string `json:"player_name,omitempty"`
 	Force      string `json:"force,omitempty"`
 	Tick       uint64 `json:"tick"`
+	// Scope and Private come from the companion's chat scope probe (Phase 3):
+	// the session pool this question belongs to, and whether its answer stays
+	// inside an audience. An older companion sends neither, which reads as
+	// global.
+	Scope   string `json:"scope,omitempty"`
+	Private bool   `json:"private,omitempty"`
 }
 
 // PollReply is the "r" of a poll call: unanswered questions with id greater than

@@ -42,6 +42,9 @@ func (m *Model) Step(_ context.Context, _ string, msgs []model.Message, defs []m
 	id := fmt.Sprintf("fake-%d", turn)
 
 	if turn == 1 {
+		if has(text, "recall") {
+			return step(submitBlock(id, recall(msgs))), nil
+		}
 		if c := firstCall(text, defs); c != nil {
 			return step(model.Block{
 				Type: model.BlockToolUse, ID: id, Name: c.tool, Input: mustJSON(c.args),
@@ -62,6 +65,43 @@ func step(block model.Block) model.Step {
 
 func submitBlock(id string, artifact map[string]any) model.Block {
 	return model.Block{Type: model.BlockToolUse, ID: id, Name: "submit_answer", Input: mustJSON(artifact)}
+}
+
+// recall answers "recall" with what the session carried into the prompt:
+// how many earlier exchanges, and the first of them. The harness uses it to
+// see a session from outside.
+func recall(msgs []model.Message) map[string]any {
+	context := contextOf(msgs)
+	n := strings.Count(context, " asked: ")
+	lines := []string{fmt.Sprintf("earlier=%d", n)}
+	if i := strings.Index(context, " asked: "); i >= 0 {
+		first := context[i+len(" asked: "):]
+		if j := strings.Index(first, "\n"); j >= 0 {
+			first = first[:j]
+		}
+		lines = append(lines, "first="+clip(first))
+	}
+	return map[string]any{"shape": "summary", "lines": lines}
+}
+
+// contextOf is the user text before the question itself: the session
+// transcript when there is one.
+func contextOf(msgs []model.Message) string {
+	for _, m := range msgs {
+		if m.Role != model.RoleUser {
+			continue
+		}
+		for _, b := range m.Blocks {
+			if b.Type != model.BlockText {
+				continue
+			}
+			if i := strings.LastIndex(b.Text, "Question: "); i >= 0 {
+				return b.Text[:i]
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 // echo is the answer to a question that matched no keyword at all.

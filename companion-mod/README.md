@@ -19,10 +19,13 @@ tools to the agent without this mod knowing anything about them.
 2. **Enable RCON** on your server, the service uses it to poll questions and
    send answers. The repo shows exactly how for each hosting style.
 3. **Run the service** from [the GitHub repo](https://github.com/bits-orio/ai-agent-bridge)
-   and point it at your server. Bring your own Anthropic API key.
+   and point it at your server. Bring your own OpenRouter key and pick the
+   model in its config.
 
 Once it's running, type `/ask <question>` in chat and the answer comes back a
-few seconds later, in chat or in a popup window depending on its shape.
+few seconds later, in chat, to everyone on the server so anyone can follow up.
+`/ask new ...` starts a fresh session, `/ask #iron ...` uses a named one that
+others can join, and `/ask sessions` lists what is open.
 
 ## Settings
 
@@ -33,22 +36,22 @@ the server runs, no restart needed.
 |---|---|---|
 | `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Turn it off and the file stops growing. |
 | `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks a question. Set it and any chat line starting with those exact characters becomes a question, with the rest of the line as the text. |
-| `aab-answer-style` | auto | `auto` opens a popup for tables, comparisons and lists longer than three items, and prints everything else to chat. `chat` always prints. `popup` always opens the window. |
+| `aab-answer-audience` | server | `server` prints every global answer to the whole server, so anyone can follow up on it. `asker` prints only to the player who asked. A question a chat privacy mod marked private always prints to its own audience, whatever this says. |
 
 The chat prefix is matched literally, spaces included, and never as a pattern.
 Pick something no ordinary sentence starts with, `?` or `@ai ` for example, or
 a prefix like `ai` will also fire on "airlocks are cheaper".
 
-The popup needs the asker to still be connected. A question asked by another
-mod, or by a player who has since left, is answered in chat whatever the
-setting says.
+A question asked by another mod, or by a player who has since left, prints
+to the server (or to its private audience) like any other.
 
 ---
 
-## For mod authors, the three seams
+## For mod authors, the four seams
 
-The companion knows nothing about any other mod. Three frozen, additive-only
-seams let other mods add tools, submit questions, and receive answers.
+The companion knows nothing about any other mod. Four frozen, additive-only
+seams let other mods add tools, submit questions, receive answers, and say who
+may hear an answer.
 
 ### 1. Tools by probe, `agent_tools_v1`
 
@@ -118,13 +121,14 @@ if remote.interfaces["ai-agent-bridge-v1"] then
     text = "How's the north force doing on science?",
     force = "north",       -- optional force hint
     player_index = nil,    -- optional, if this came from a player
+    scope = nil,           -- optional: who may hear the answer, see seam 4
   })
 end
 ```
 
 | function | args | returns |
 |---|---|---|
-| `ask` | `{ text, player_index?, force? }` | the new question's id, or `nil` if `text` was missing |
+| `ask` | `{ text, player_index?, force?, scope? }` | the new question's id, or `nil` if `text` was missing |
 | `get_event_id` | `"on_answer"` | this session's event id for `on_answer`, or `nil` |
 
 `text` must be a non-empty string. `force` must be the force's *name*, a
@@ -132,6 +136,37 @@ string, and `player_index` a number; pass a `LuaForce` or a name where an index
 belongs and that field is dropped rather than stored, because one unencodable
 question would break every later poll for everybody. Nothing here errors: a
 mistake in your spec costs you the question, never a crash.
+
+### 4. Chat scope by probe, `chat_scope_v1`
+
+A mod with a chat privacy feature, team-only chat for instance, decides who
+may hear an answer. Add a `chat_scope_v1(player_index, text)` function to any
+remote interface you own; the companion scans for it when a question is
+created, the way it scans for tools, and stores nothing.
+
+```lua
+chat_scope_v1 = function(player_index, text)
+  local player = game.get_player(player_index)
+  if not (player and my_channel_is_team_only(player)) then
+    return { key = "global", private = false, tag = GLOBAL_BADGE }
+  end
+  return {
+    key = player.force.name,                   -- equal keys share sessions
+    private = true,                            -- the answer stays inside the audience
+    audience = { force = player.force.name },  -- or { players = { 1, 5, 9 } }
+    label = "Team 3",                          -- optional, shown by /ask sessions
+    tag = TEAM_BADGE,                          -- optional rich text, printed verbatim
+  }
+end
+```
+
+`text` is the line as typed, so a "shout" rule can apply. A nil return means
+global. When several mods answer, a private answer wins over a global one. The
+result is fixed on the question when it is asked: an answer prints to that
+audience however the channel has changed since, so a team leaving private
+mode never sees its private session continue in the open. The `scope` table
+`ask` accepts has the same shape, for a mod asking on behalf of a channel of
+its own.
 
 ### 3. Answers by event, `on_answer`
 
@@ -251,7 +286,9 @@ the frozen v1 surface above.
 
 The model fills one of five shapes; this mod renders it, never the other way
 round. Every shape but `notice` may carry a `title`, which becomes the first
-chat line or the popup's window caption.
+chat line. Every shape may carry `session = { name, fresh }`, rendered as a
+`(new session)` or `(new session #name)` marker after the channel tag when
+`fresh` is true.
 
 - `summary`, up to three lines.
 - `comparison`, two named columns, up to five rows.
@@ -266,9 +303,10 @@ something silly: the service clips every cell to 160 characters first, and 160
 characters of Japanese or emoji is up to 640 bytes. Factorio rich text such as
 `[item=iron-plate]` passes through untouched.
 
-In a popup, the `table` shape becomes a real GUI table with a bold header row.
-Every other shape becomes a column of labels. The window centres itself, its
-titlebar drags, and Esc or the close button dismisses it.
+The first chat line is laid out like a player's own: the companion's name,
+the channel tag the scope provider gave, the session marker, a colon, then
+the answer. A `table` prints its column names and one row per line with
+` | ` between cells.
 
 ## Tools this mod provides
 

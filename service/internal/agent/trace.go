@@ -20,8 +20,8 @@ func (a *Agent) traceRound(q Question, round int, step model.Step) {
 		switch b.Type {
 		case model.BlockThinking:
 			thinking += len(b.Thinking)
-		case model.BlockRedactedThinking:
-			thinking += len(b.Data)
+		case model.BlockRedactedThinking, model.BlockReasoning:
+			thinking += len(b.Data) + len(b.Thinking)
 		case model.BlockText:
 			text += len(b.Text)
 		case model.BlockToolUse:
@@ -29,8 +29,8 @@ func (a *Agent) traceRound(q Question, round int, step model.Step) {
 		}
 	}
 	u := step.Usage
-	a.Trace("question %d round %d: stop=%s in=%d out=%d cached=%d/%d thinking=%dc text=%dc calls=%s",
-		q.ID, round, step.StopReason, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens,
+	a.Trace("question %d round %d: stop=%s in=%d out=%d reasoning=%d cached=%d/%d thinking=%dc text=%dc calls=%s",
+		q.ID, round, step.StopReason, u.InputTokens, u.OutputTokens, u.ReasoningTokens, u.CacheReadTokens, u.CacheWriteTokens,
 		thinking, text, callList(calls))
 }
 

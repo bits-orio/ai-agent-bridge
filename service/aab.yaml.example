@@ -32,29 +32,44 @@ poll_interval: 1s
 # aab.log next to the events file (local transport). Set to "-" to log to stdout only.
 # log_file: ${HOME}/factorio/script-output/ai-agent-bridge/aab.log
 
-anthropic:
-  api_key_env: ANTHROPIC_API_KEY
-  # Any model id the API accepts. Sonnet 5 picks tools and fills a table the same way
-  # Opus 5 does at less than half the price; claude-haiku-4-5 is cheaper again and
-  # fine for most questions; claude-opus-5 is there for operators who want it. The
-  # fixed part of every request (rules and tool definitions) is cached, so a question
-  # mostly pays for its own text, the tool results and the answer.
-  # Set it to "fake" to run the scripted model instead: it needs no key and answers
-  # deterministically, which is what the end-to-end tests use.
-  model: claude-sonnet-5
-  # A Claude 5 model thinks before it answers unless told not to, and on a question
-  # like "what forces are there" that thinking is most of the output bill. off sends
-  # thinking disabled; adaptive turns it on; model leaves the field out and takes the
-  # model's own default (the only choice Claude Fable accepts).
-  thinking: off
-  # Effort trims tool-call depth and preamble on the models that accept it (Sonnet 5,
-  # Opus 5). Leave it out for a model that does not, such as claude-haiku-4-5.
-  effort: low
-  # How long the cached rules and tool definitions live between questions. 1h costs
-  # twice the input price to write once an hour; 5m costs a quarter more than sending
-  # them, but every question more than five minutes after the last one writes again.
-  # A game server's questions come in bursts with gaps, so 1h is the default.
+# The model. One section for every provider (docs/design/phase3-spec.md part 3).
+model:
+  # openrouter (default): any model OpenRouter lists that supports tool calling, one
+  # key for all of them. anthropic: the Anthropic API directly, with an Anthropic key.
+  # fake: the scripted model the end-to-end tests use, no key needed.
+  provider: openrouter
+  # Ids as OpenRouter writes them. Listed 2026-09-10, USD per million tokens in / out:
+  #   deepseek/deepseek-v4-pro-0813    1.05 / 3.15   the everyday model (default)
+  #   deepseek/deepseek-v4.1-flash     0.30 / 1.20   the small one
+  #   anthropic/claude-opus-5          5.00 / 25.00
+  # Check the live list at https://openrouter.ai/api/v1/models and keep to ids whose
+  # supported_parameters include "tools". For provider anthropic use the Anthropic id,
+  # claude-sonnet-5 for instance.
+  id: deepseek/deepseek-v4-pro-0813
+  # Reserved for sub-agents on a cheaper model (PLAN.md "Later"); unused until then.
+  small: deepseek/deepseek-v4.1-flash
+  # OpenRouter tries these in order when the model above fails.
+  fallbacks: []
+  # Models reason before they answer unless told not to, and on a question like "what
+  # forces are there" that reasoning is most of the output bill. off sends reasoning
+  # disabled; model leaves it to the model's default; low, medium or high ask for that
+  # much of it.
+  reasoning: off
+  # How long the cached rules and tool definitions live between questions on routes
+  # that take an explicit cache breakpoint (Anthropic). 1h costs twice the input price
+  # to write once an hour; 5m a quarter more than sending them, on every question more
+  # than five minutes after the last. Other routes cache by themselves.
   cache_ttl: 1h
+  # deny keeps prompts, which carry players' chat and names, off OpenRouter providers
+  # that may train on them. DeepSeek's own endpoint is one of those; the other hosts of
+  # the same models are not, so both defaults above stay available at the same prices.
+  data_collection: deny
+
+openrouter:
+  api_key_env: OPENROUTER_API_KEY   # the key itself goes in .env, never here
+
+anthropic:
+  api_key_env: ANTHROPIC_API_KEY    # only read for provider: anthropic
 
 # Per-question limits. A question that hits one still answers, with a notice saying why.
 agent:
@@ -62,7 +77,14 @@ agent:
   max_tokens_per_question: 20000      # token budget across those turns
   max_output_tokens: 4096             # cap on one turn's output, thinking included
   max_tool_result_bytes: 4096         # a longer tool result is cut before the model sees it
-  memory_ttl: 10m                     # how long a player's last few exchanges are remembered
+  # Sessions: the shared transcript follow-up questions see. One per chat scope
+  # plus any "#name"; ends by idle time or on "new"; bounded by count and bytes,
+  # dropping the oldest exchanges whole, so a session never adds more than about
+  # two thousand tokens to a question.
+  session_idle: 3m
+  named_session_idle: 30m
+  session_max_exchanges: 10
+  session_max_bytes: 8000
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota
 
 # The event history for this save. A relative path is resolved against this file, so

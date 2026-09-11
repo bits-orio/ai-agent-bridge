@@ -66,6 +66,9 @@ func (r *runner) run(ctx context.Context, q rpc.Question, game []tools.Tool) age
 		log.Printf("question %d: the model failed: %v", q.ID, err)
 		result.Artifact = agent.Notice(agent.LevelWarning, modelFailedNotice)
 	}
+	if result.Session.Fresh {
+		log.Printf("question %d: new session %s", q.ID, result.Session.Key)
+	}
 	r.stats.RecordAnswer(result.Usage, result.CostUSD)
 	r.answered++
 	r.lastActivity = time.Now()
@@ -135,5 +138,7 @@ func agentQuestion(q rpc.Question) agent.Question {
 		PlayerIndex: q.PlayerIndex,
 		PlayerName:  q.PlayerName,
 		Force:       q.Force,
+		Scope:       q.Scope,
+		Private:     q.Private,
 	}
 }

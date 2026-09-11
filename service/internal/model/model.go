@@ -23,6 +23,10 @@ const (
 	BlockToolResult       = "tool_result"
 	BlockThinking         = "thinking"
 	BlockRedactedThinking = "redacted_thinking"
+	// BlockReasoning is one entry of an OpenRouter reasoning_details array,
+	// kept as the raw JSON it arrived as and sent back unchanged. Thinking
+	// holds the plain reasoning string instead when a route sent only that.
+	BlockReasoning = "reasoning"
 )
 
 // Message roles.
@@ -47,6 +51,7 @@ const (
 //   - BlockToolResult: ID (the tool_use it answers), Content, IsError.
 //   - BlockThinking: Thinking, Signature.
 //   - BlockRedactedThinking: Data.
+//   - BlockReasoning: Data (raw JSON) or Thinking (plain text).
 //
 // The loop reads only text and tool calls, but it keeps every block a turn
 // produced and replays them in order: a thinking block is signed, and a model
@@ -92,6 +97,8 @@ type Usage struct {
 	CacheReadTokens      int
 	CacheWriteTokens     int
 	CacheWriteHourTokens int
+	ReasoningTokens      int     // the part of OutputTokens a route reported as reasoning
+	Cost                 float64 // USD the route itself reported, 0 when it reports none
 }
 
 // Add folds another step's usage into u.
@@ -101,6 +108,8 @@ func (u *Usage) Add(other Usage) {
 	u.CacheReadTokens += other.CacheReadTokens
 	u.CacheWriteTokens += other.CacheWriteTokens
 	u.CacheWriteHourTokens += other.CacheWriteHourTokens
+	u.ReasoningTokens += other.ReasoningTokens
+	u.Cost += other.Cost
 }
 
 // Total is every token the question has spent so far, which is what the

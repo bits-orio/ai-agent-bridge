@@ -155,69 +155,135 @@ check("answers after a cursor is empty", (function()
   return later.ok and next(later.r) == nil
 end)())
 
--- ── auto style sends a table to the popup ─────────────────────────────
+-- ── chat only: a table prints to the whole server ─────────────────────
 local qid2 = remote.call("ai-agent-bridge-v1", "ask", { text = "table of players", force = "player", player_index = 1 })
 local before = #S.printed
 local a2 = rpc({ op = "answer", qid = qid2, artifact = {
   shape = "table", title = "Players", columns = { "name", "online" },
   rows = { { "Bob", "yes" }, { "Ann", "no" } } } })
 check("table answer ok", a2.ok, F.encode(a2))
-local frame = S.bob.gui.screen["aab_answer_frame"]
-check("auto opened a popup for a table", frame ~= nil and frame.valid)
-check("the popup printed nothing to chat", #S.printed == before, #S.printed .. " vs " .. before)
-check("Esc closes the popup (player.opened is the frame)", S.bob.opened == frame)
-local function find(el, pred)
-  if pred(el) then return el end
-  for _, kid in ipairs(el.kids or {}) do
-    local hit = find(kid, pred)
-    if hit then return hit end
-  end
-end
-local gui_table = find(frame, function(el) return el.type == "table" end)
-check("the popup used a GUI table", gui_table ~= nil and gui_table.column_count == 2,
-      gui_table and gui_table.column_count)
-check("the GUI table holds a header row plus every row", gui_table and #gui_table.kids == 6, gui_table and #gui_table.kids)
-check("the popup caption is the artifact title", (function()
-  local label = find(frame, function(el) return el.type == "label" and el.caption == "Players" end)
-  return label ~= nil
-end)())
-local close = find(frame, function(el) return el.name == "aab_answer_close" end)
-check("the popup has a close button", close ~= nil)
-S.handlers[defines.events.on_gui_click]({ element = close, player_index = 1 })
-check("the close button destroys the frame", S.bob.gui.screen["aab_answer_frame"] == nil)
+check("a table prints to chat, once", #S.printed == before + 1, #S.printed .. " vs " .. before)
+check("a global answer goes to the whole server", S.printed[#S.printed].who == "*", S.printed[#S.printed].who)
+check("the table is one line per row with columns first",
+      S.printed[#S.printed].text:find("Players\nname | online\nBob | yes\nAnn | no", 1, true) ~= nil,
+      S.printed[#S.printed].text)
+-- The test provider is also a scope provider, so every answer here carries
+-- its global badge between the name and the colon.
+check("the line opens with the companion's name, the badge, then a colon",
+      S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Players\n") ~= nil,
+      S.printed[#S.printed].text)
+check("no popup frame exists any more", S.bob.gui.screen["aab_answer_frame"] == nil)
 
--- Esc path.
-local qid3 = remote.call("ai-agent-bridge-v1", "ask", { text = "again", force = "player", player_index = 1 })
-rpc({ op = "answer", qid = qid3, artifact = { shape = "table", columns = { "a" }, rows = { { "b" } } } })
-local frame3 = S.bob.gui.screen["aab_answer_frame"]
-S.handlers[defines.events.on_gui_closed]({ element = frame3, player_index = 1 })
-check("on_gui_closed destroys the frame", S.bob.gui.screen["aab_answer_frame"] == nil)
-
--- ── style settings ────────────────────────────────────────────────────
-S.settings["aab-answer-style"].value = "chat"
+-- ── audience setting: asker only ──────────────────────────────────────
+S.settings["aab-answer-audience"].value = "asker"
 local qid4 = remote.call("ai-agent-bridge-v1", "ask", { text = "t", force = "player", player_index = 1 })
 before = #S.printed
 rpc({ op = "answer", qid = qid4, artifact = { shape = "table", columns = { "a" }, rows = { { "b" } } } })
-check("style chat keeps a table in chat", #S.printed == before + 1 and S.bob.gui.screen["aab_answer_frame"] == nil)
+check("audience asker prints to the asker alone", #S.printed == before + 1 and S.printed[#S.printed].who == "Bob",
+      S.printed[#S.printed].who)
+S.settings["aab-answer-audience"].value = "server"
 
-S.settings["aab-answer-style"].value = "popup"
+-- ── the session marker ────────────────────────────────────────────────
 local qid5 = remote.call("ai-agent-bridge-v1", "ask", { text = "n", force = "player", player_index = 1 })
-rpc({ op = "answer", qid = qid5, artifact = { shape = "notice", text = "all good" } })
-check("style popup opens a window for a notice", S.bob.gui.screen["aab_answer_frame"] ~= nil)
-S.bob.gui.screen["aab_answer_frame"].destroy()
+rpc({ op = "answer", qid = qid5, artifact = { shape = "notice", text = "all good", session = { name = "", fresh = true } } })
+check("a fresh session is marked", S.printed[#S.printed].text:find("[/color] (new session): all good", 1, true) ~= nil,
+      S.printed[#S.printed].text)
+local qid5b = remote.call("ai-agent-bridge-v1", "ask", { text = "n", force = "player", player_index = 1 })
+rpc({ op = "answer", qid = qid5b, artifact = { shape = "notice", text = "iron", session = { name = "iron", fresh = true } } })
+check("a fresh named session names itself", S.printed[#S.printed].text:find("(new session #iron): iron", 1, true) ~= nil,
+      S.printed[#S.printed].text)
+local qid5c = remote.call("ai-agent-bridge-v1", "ask", { text = "n", force = "player", player_index = 1 })
+rpc({ op = "answer", qid = qid5c, artifact = { shape = "notice", text = "same", session = { name = "iron", fresh = false } } })
+check("a continued session carries no marker", S.printed[#S.printed].text:find("new session", 1, true) == nil
+      and S.printed[#S.printed].text:find("[/color]: same", 1, true) ~= nil, S.printed[#S.printed].text)
+local qid5d = remote.call("ai-agent-bridge-v1", "ask", { text = "n", force = "player", player_index = 1 })
+local bad2 = rpc({ op = "answer", qid = qid5d, artifact = { shape = "notice", text = "x", session = "iron" } })
+check("a session field that is not an object is refused", not bad2.ok and bad2.e == "bad_artifact", F.encode(bad2))
 
--- A question from a mod, with no player, always goes to chat.
-S.settings["aab-answer-style"].value = "popup"
+-- ── chat scope: private questions stay inside their audience ──────────
+-- Asks as Bob through the /ask command, the way a player does.
+local function ask_cmd(text)
+  local before_id = tonumber(rpc({ op = "status" }).r.last_id)
+  S.commands["ask"]({ parameter = text, player_index = 1, tick = S.tick })
+  local after_id = tonumber(rpc({ op = "status" }).r.last_id)
+  check("/ask " .. text .. " created a question", after_id == before_id + 1)
+  return after_id
+end
+-- A scope provider that puts Bob's force in team mode, with a badge on
+-- both states the way a team-chat mod stamps its own lines.
+local team_mode = false
+remote.add_interface("test-scope", {
+  chat_scope_v1 = function(player_index, text)
+    local player = game.get_player(player_index)
+    if not player then return nil end
+    if team_mode and text:sub(1, 1) ~= "!" then
+      return { key = player.force.name, private = true, audience = { force = player.force.name },
+               label = "Team", tag = "[TEAM]" }
+    end
+    return { key = "global", private = false, tag = "[GLOBAL]" }
+  end,
+})
+local qid7 = ask_cmd("who is online")
+local poll7 = rpc({ op = "poll", after = qid7 - 1, limit = 1 })
+check("a global question polls with scope global and no private flag",
+      poll7.ok and poll7.r[1].scope == "global" and poll7.r[1].private == nil, F.encode(poll7))
+rpc({ op = "answer", qid = qid7, artifact = { shape = "notice", text = "Bob" } })
+check("the global tag sits after the name (the first provider by name supplies it)",
+      S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Bob$") ~= nil,
+      S.printed[#S.printed].text)
+check("and the answer went to the server", S.printed[#S.printed].who == "*")
+
+team_mode = true
+local qid8 = ask_cmd("who is online")
+local poll8 = rpc({ op = "poll", after = qid8 - 1, limit = 1 })
+check("a private question polls with its force as scope and private true",
+      poll8.ok and poll8.r[1].scope == "player" and poll8.r[1].private == true, F.encode(poll8))
+team_mode = false  -- the team flips back before the answer lands
+rpc({ op = "answer", qid = qid8, artifact = { shape = "notice", text = "Bob" } })
+check("a private answer prints to the force it was asked in, whatever the channel is now",
+      S.printed[#S.printed].who == "force:player", S.printed[#S.printed].who)
+check("with the team tag", S.printed[#S.printed].text == "[AI Agent Bridge] [TEAM]: Bob", S.printed[#S.printed].text)
+
+team_mode = true
+local qid9 = ask_cmd("!shout")
+local poll9 = rpc({ op = "poll", after = qid9 - 1, limit = 1 })
+check("the provider sees the line as typed, so a shout is global", poll9.ok and poll9.r[1].scope == "global", F.encode(poll9))
+
+-- A provider whose force is gone falls back to the asker alone.
+local qid10 = remote.call("ai-agent-bridge-v1", "ask", { text = "q", player_index = 1,
+  scope = { key = "team-9", private = true, audience = { force = "team-9" }, tag = "[TEAM]" } })
+rpc({ op = "answer", qid = qid10, artifact = { shape = "notice", text = "secret" } })
+check("a private answer with no such force reaches the asker only", S.printed[#S.printed].who == "Bob", S.printed[#S.printed].who)
+
+-- A mod may hand in a scope of its own through the interface.
+local qid11 = remote.call("ai-agent-bridge-v1", "ask", { text = "q", force = "team-3",
+  scope = { key = "team-3", private = true, audience = { force = "team-3" } } })
+rpc({ op = "answer", qid = qid11, artifact = { shape = "notice", text = "for team 3" } })
+check("an interface caller's scope prints to that force", S.printed[#S.printed].who == "force:team-3", S.printed[#S.printed].who)
+
+-- Two providers: the private one wins; a broken one is skipped.
+remote.add_interface("test-scope-broken", { chat_scope_v1 = function() error("scope boom") end })
+remote.add_interface("test-scope-global", { chat_scope_v1 = function() return { key = "global", private = false, tag = "[G2]" } end })
+team_mode = true
+local qid12 = ask_cmd("again")
+local poll12 = rpc({ op = "poll", after = qid12 - 1, limit = 1 })
+check("the private provider wins over a global one and a broken one",
+      poll12.ok and poll12.r[1].private == true and poll12.r[1].scope == "player", F.encode(poll12))
+team_mode = false
+S.interfaces["test-scope"] = nil
+S.interfaces["test-scope-broken"] = nil
+S.interfaces["test-scope-global"] = nil
+
+-- A question from a mod, with no player and no scope, goes to the server.
 local qid6 = remote.call("ai-agent-bridge-v1", "ask", { text = "from a mod", force = "player" })
 before = #S.printed
 rpc({ op = "answer", qid = qid6, artifact = { shape = "notice", text = "no asker here" } })
-check("an answer with no connected asker goes to chat", #S.printed == before + 1 and S.printed[#S.printed].who == "*")
+check("an answer with no connected asker goes to the server", #S.printed == before + 1 and S.printed[#S.printed].who == "*")
 
--- A player who has left gets it in chat, not a popup.
-S.settings["aab-answer-style"].value = "auto"
-local qid7 = remote.call("ai-agent-bridge-v1", "ask", { text = "gone", force = "player", player_index = 2 })
-rpc({ op = "answer", qid = qid7, artifact = { shape = "table", columns = { "a" }, rows = { { "b" } } } })
-check("a disconnected asker gets chat", S.gone.gui.screen["aab_answer_frame"] == nil and S.printed[#S.printed].who == "*")
+-- A player who has left still gets the answer, to the server.
+local qid7b = remote.call("ai-agent-bridge-v1", "ask", { text = "gone", force = "player", player_index = 2 })
+rpc({ op = "answer", qid = qid7b, artifact = { shape = "table", columns = { "a" }, rows = { { "b" } } } })
+check("a disconnected asker's answer goes to the server", S.printed[#S.printed].who == "*")
 
 -- ── the chat prefix ───────────────────────────────────────────────────
 local chat_handler = S.handlers[defines.events.on_console_chat]
@@ -244,7 +310,6 @@ check("a server console line is not a question", qcount() == before_q)
 
 -- ── rendering caps and sanitising ─────────────────────────────────────
 local qid8 = remote.call("ai-agent-bridge-v1", "ask", { text = "x", force = "player", player_index = 1 })
-S.settings["aab-answer-style"].value = "chat"
 rpc({ op = "answer", qid = qid8, artifact = { shape = "summary",
   lines = { "a\nSomeone: forged", "b", "c", "d" } } })
 local rendered = rpc({ op = "answers", after = qid8 - 1 }).r[1]
@@ -292,37 +357,27 @@ remote.call("ai-agent-bridge-v1", "ask", { text = "quiet", force = "player" })
 check("turning events off stops the file growing", #S.files["ai-agent-bridge/events.jsonl"] == size)
 
 
--- ── auto style, the remaining shapes ──────────────────────────────────
-S.settings["aab-answer-style"].value = "auto"
+-- ── every shape prints to chat, once ──────────────────────────────────
 local function answer_as_bob(artifact)
   local id = remote.call("ai-agent-bridge-v1", "ask", { text = "q", force = "player", player_index = 1 })
   local printed_before = #S.printed
   rpc({ op = "answer", qid = id, artifact = artifact })
-  local frame_now = S.bob.gui.screen["aab_answer_frame"]
-  local where = frame_now and "popup" or "chat"
-  if frame_now then frame_now.destroy() end
-  return where, #S.printed - printed_before
+  return #S.printed - printed_before, S.printed[#S.printed].text
 end
 
-check("auto sends a comparison to the popup",
-      answer_as_bob({ shape = "comparison", columns = { "north", "south" },
-                      rows = { { label = "iron", a = "1", b = "2" } } }) == "popup")
-check("auto keeps a short list in chat",
-      answer_as_bob({ shape = "list", items = { "a", "b", "c" } }) == "chat")
-check("auto sends a list of four to the popup",
-      answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } }) == "popup")
-check("auto keeps a summary in chat",
-      answer_as_bob({ shape = "summary", lines = { "one" } }) == "chat")
-check("auto keeps a notice in chat",
-      answer_as_bob({ shape = "notice", text = "careful" }) == "chat")
+local n, text = answer_as_bob({ shape = "comparison", columns = { "north", "south" },
+                                rows = { { label = "iron", a = "1", b = "2" } } })
+check("a comparison prints once, one line per row", n == 1 and text:find("- iron: 1 vs 2", 1, true) ~= nil, text)
+n, text = answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } })
+check("a list of four prints once", n == 1 and text:find("- d", 1, true) ~= nil, text)
+n = answer_as_bob({ shape = "summary", lines = { "one" } })
+check("a summary prints once", n == 1)
+n = answer_as_bob({ shape = "notice", text = "careful" })
+check("a notice prints once", n == 1)
 
--- A short row must not leave a ragged GUI table.
-local ragged_id = remote.call("ai-agent-bridge-v1", "ask", { text = "r", force = "player", player_index = 1 })
-rpc({ op = "answer", qid = ragged_id, artifact = { shape = "table",
-  columns = { "a", "b", "c" }, rows = { { "1" } } } })
-local ragged = find(S.bob.gui.screen["aab_answer_frame"], function(el) return el.type == "table" end)
-check("a short row is padded to the column count", ragged and #ragged.kids == 6, ragged and #ragged.kids)
-S.bob.gui.screen["aab_answer_frame"].destroy()
+-- A short row is padded to the column count so the line still has every cell.
+n, text = answer_as_bob({ shape = "table", columns = { "a", "b", "c" }, rows = { { "1" } } })
+check("a short table row still prints", n == 1 and text:find("a | b | c\n1 |  | ", 1, true) ~= nil, text)
 
 -- ── artifact validation, the answer op's gate ─────────────────────────
 -- Contract item 5 and review findings 18/24: a bad artifact is bad_artifact,
@@ -366,7 +421,6 @@ local refused = ask_bob("refused then told")
 local printed_before_notice = #S.printed
 check("the bad artifact is refused",
       (not rpc({ op = "answer", qid = refused, artifact = { shape = "nope" } }).ok))
-S.settings["aab-answer-style"].value = "chat"
 local notice = rpc({ op = "answer", qid = refused, artifact = { shape = "notice",
   text = "I could not put that answer into a shape the game can show" } })
 check("a notice after a refusal is accepted", notice.ok, F.encode(notice))
@@ -379,7 +433,6 @@ check("the question then leaves the poll page", (function()
   end
   return true
 end)())
-S.settings["aab-answer-style"].value = "auto"
 
 local good = ask_bob("fine")
 check("a valid artifact is still accepted",
@@ -458,7 +511,7 @@ check("list_surfaces cuts to limit and reports the total",
       and one_surface.r.surfaces[1].name == "nauvis", F.encode(one_surface))
 
 local forces = call("ai-agent-bridge-tools", "list_forces", { force = "player" })
-check("list_forces reports total and shown", forces.ok and forces.r.total == 1 and forces.r.shown == 1,
+check("list_forces reports total and shown", forces.ok and forces.r.total == 2 and forces.r.shown == 2,
       F.encode(forces))
 
 -- ── the probe drops what it cannot use ────────────────────────────────
@@ -597,7 +650,7 @@ S.interfaces["aab-verbose-provider"] = nil
 -- service's own JSON omits it for a tool with no arguments.
 local no_args = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_forces" })
 check("a zero-argument tool called with no argument table works",
-      no_args.ok and no_args.r.total == 1, F.encode(no_args))
+      no_args.ok and no_args.r.total == 2, F.encode(no_args))
 local needs_force = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "game_time" })
 check("a tool that needs force says so in its own words",
       (not needs_force.ok) and needs_force.e == "provider_error"

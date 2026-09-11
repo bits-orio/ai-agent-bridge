@@ -194,3 +194,27 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
   the first question about $0.02 (the hour-long cache write), the second about $0.003
   with `cached=5000/0` or so and `out` under 200. Switch `anthropic.model` to
   `claude-haiku-4-5` (and remove `effort`) for about half of that.
+
+## 4. Phase 3: sessions, chat scope, OpenRouter
+
+- [x] 2026-09-11, fake-game suites after the build: 199 checks in `aab_test.lua`
+  (the popup checks replaced by audience, tag, session-marker and scope checks: a
+  private question prints to its force with the team badge even after the channel
+  flipped back, a shout is global, a mod-supplied scope prints to that force, a
+  private provider beats a global and a broken one) and 139 in the breadth suite.
+- [x] 2026-09-11, Go: session store (sharing by scope and name, idle cut, whole-exchange
+  drops at the caps), grammar, session commands that never call the model, OpenRouter
+  client against an httptest router (request shapes, cache breakpoints with the 1h TTL,
+  reasoning on and off, tool-call and reasoning_details replay, 429 retry, error
+  bodies), config with the `model` section.
+- [x] 2026-09-11, harness server-only: 21 passed, 0 failed, 2 skipped. Three new
+  scenarios read a session from outside through the fake model's `recall` rule: a
+  follow-up sees the first exchange, `sessions` lists it, `new` starts clean; `#iron`
+  carries its own exchange and the default session never sees it; a private scope
+  handed in through the interface polls as `scope=team-x private=true` and its session
+  stays out of the global one and out of the global listing.
+- [ ] With a client: the tag and marker on the chat line by eye, and a team-mode
+  question through a real privacy mod's `chat_scope_v1`.
+- [ ] Live on OpenRouter: one question on `deepseek/deepseek-v4-pro-0813` and one on an
+  Anthropic route, recorded with the `cost` OpenRouter reported and the `reasoning=`
+  count in the trace line. Needs `OPENROUTER_API_KEY` in `service/.env`.

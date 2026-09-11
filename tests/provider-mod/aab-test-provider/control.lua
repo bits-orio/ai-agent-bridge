@@ -38,8 +38,41 @@ local function boom()
   error("boom from the test provider")
 end
 
+-- A chat scope provider as well (docs/design/phase3-spec.md part 2), so the
+-- harness can make one force private and watch an answer stay inside it.
+-- The badge strings copy the layout a team-chat mod stamps on its lines;
+-- nothing here knows what a team is beyond a force name.
+local GLOBAL_TAG = "[color=0.4,0.9,0.4][GLOBAL][/color]"
+local TEAM_TAG   = "[color=0.45,0.8,1][TEAM][/color]"
+
+local function private_forces()
+  storage.private_forces = storage.private_forces or {}
+  return storage.private_forces
+end
+
+--- set_private(force_name, on): flips one force between team-only and
+--- global. Called by the harness over RCON through /sc.
+local function set_private(force_name, on)
+  private_forces()[force_name] = on and true or nil
+end
+
+--- The probe. A "!" at the start of the line shouts globally, the way a
+--- team-chat mod would let a team-only player do.
+local function chat_scope_v1(player_index, text)
+  local player = player_index and game.get_player(player_index)
+  if not (player and player.valid) then return nil end
+  local force_name = player.force.name
+  local shout = type(text) == "string" and text:sub(1, 1) == "!"
+  if private_forces()[force_name] and not shout then
+    return { key = force_name, private = true, audience = { force = force_name }, label = force_name, tag = TEAM_TAG }
+  end
+  return { key = "global", private = false, tag = GLOBAL_TAG }
+end
+
 remote.add_interface(INTERFACE, {
   agent_tools_v1 = function() return { v = 1, tools = MANIFEST } end,
   hello = hello,
   boom = boom,
+  chat_scope_v1 = chat_scope_v1,
+  set_private = set_private,
 })

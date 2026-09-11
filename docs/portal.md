@@ -14,10 +14,10 @@ Design stage. Nothing here is installable or playable yet. The protocol and the 
 Once the first release ships, running it looks like this:
 
 1. Install the companion mod on your Factorio server.
-2. Run the AI Agent Bridge service next to the server (one small program, you keep your own API key).
+2. Run the AI Agent Bridge service next to the server (one small program, you keep your own OpenRouter key and pick the model).
 3. Point the service at your server over RCON.
 4. Type `/ask` followed by your question in game chat.
-5. Read the answer in chat or in a popup, with item icons rendered inline.
+5. Read the answer in chat, with item icons rendered inline, and ask a follow-up; anyone can.
 
 ## Features
 

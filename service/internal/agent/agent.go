@@ -52,6 +52,30 @@ type Question struct {
 	PlayerName  string // empty when the asker is not a connected player
 	Force       string
 	Asker       string // a label the caller chose, used when no player name came with the question
+	Scope       string // the chat scope key the companion resolved; "" means global
+	Private     bool   // true when the scope is private to an audience
+}
+
+// scope is the session pool this question belongs to.
+func (q Question) scope() string {
+	if q.Scope == "" {
+		return "global"
+	}
+	return q.Scope
+}
+
+// askerName is how the asker appears in a session transcript, where every
+// exchange may come from a different player.
+func (q Question) askerName() string {
+	switch {
+	case q.PlayerName != "":
+		return q.PlayerName
+	case q.Asker != "":
+		return q.Asker
+	case q.PlayerIndex != nil:
+		return fmt.Sprintf("player %d", *q.PlayerIndex)
+	}
+	return "another mod"
 }
 
 func (q Question) force() string {
@@ -95,7 +119,7 @@ type Caps struct {
 	MaxRounds                 int
 	MaxTokensPerQuestion      int
 	MaxToolResultBytes        int // a tool result longer than this is cut before the model sees it
-	MemoryTTL                 time.Duration
+	Sessions                  SessionCaps
 	QuestionsPerPlayerPerHour int
 }
 
@@ -125,6 +149,16 @@ type Result struct {
 	Rounds   int
 	Usage    model.Usage
 	CostUSD  float64
+	Session  SessionMark // which session the question ran in
+}
+
+// SessionMark says which session a question ran in and whether it started
+// it. It rides on the artifact as the `session` field, which the companion
+// renders as a "(new session)" marker.
+type SessionMark struct {
+	Key   string `json:"-"`
+	Name  string `json:"name"`
+	Fresh bool   `json:"fresh"`
 }
 
 // Agent answers questions with one model, one set of caps, and the memory and
@@ -132,7 +166,7 @@ type Result struct {
 type Agent struct {
 	mdl   model.Model
 	caps  Caps
-	mem   *memory
+	sess  *sessions
 	quota *quota
 	now   func() time.Time
 
@@ -145,7 +179,7 @@ func New(m model.Model, caps Caps) *Agent {
 	return &Agent{
 		mdl:   m,
 		caps:  caps,
-		mem:   newMemory(caps.MemoryTTL),
+		sess:  newSessions(caps.Sessions),
 		quota: newQuota(caps.QuestionsPerPlayerPerHour),
 		now:   time.Now,
 	}
@@ -159,9 +193,17 @@ func (a *Agent) Model() string { return a.mdl.Name() }
 // comes back as a Result.
 func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result, error) {
 	now := a.now()
-	if !a.quota.take(q.key(), now) {
-		return Result{Artifact: Notice(LevelWarning, quotaNotice)}, nil
+	req := parse(q.Text)
+	mark := SessionMark{Key: sessionKey(q.scope(), req.Name), Name: req.Name}
+	if req.Command != "" {
+		return a.command(q, req, mark, now), nil
 	}
+	if !a.quota.take(q.key(), now) {
+		return Result{Artifact: Notice(LevelWarning, quotaNotice), Session: mark}, nil
+	}
+	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
+	mark.Fresh = fresh
+	q.Text = req.Question
 
 	ctx = catalog.WithForce(ctx, q.force())
 	byName := index(ts)
@@ -169,7 +211,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	system := systemPrompt(q)
 	msgs := []model.Message{{
 		Role:   model.RoleUser,
-		Blocks: []model.Block{{Type: model.BlockText, Text: prompt(q, a.mem.recall(q.key(), now))}},
+		Blocks: []model.Block{{Type: model.BlockText, Text: prompt(q, earlier)}},
 	}}
 
 	var usage model.Usage
@@ -179,7 +221,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// The asker got no answer, so the slot goes back: a model
 			// outage must not spend anyone's hourly allowance.
 			a.quota.refund(q.key(), now)
-			return Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage)}, err
+			return Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage), Session: mark}, err
 		}
 		usage.Add(step.Usage)
 		a.traceRound(q, round, step)
@@ -187,20 +229,20 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 
 		calls := model.ToolUses(step.Blocks)
 		if len(calls) == 0 {
-			return a.finish(q, fromText(step), round, usage), nil
+			return a.finish(q, fromText(step), round, usage, mark), nil
 		}
 
 		results, artifact, submitted := runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
 		if submitted {
-			return a.finish(q, artifact, round, usage), nil
+			return a.finish(q, artifact, round, usage, mark), nil
 		}
 		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
 
 		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Total() >= budget {
-			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage), nil
+			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark), nil
 		}
 	}
-	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage), nil
+	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark), nil
 }
 
 // runCalls executes one round's tool calls and reports whether the round
@@ -282,17 +324,21 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 }
 
 // finish clips the artifact, remembers the exchange and prices the question.
-func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage) Result {
+func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark) Result {
 	clipped, err := validate(artifact)
 	if err != nil {
 		clipped = Notice(LevelWarning, stalledNotice)
 	}
-	a.mem.record(q.key(), q.Text, clipped.Line(), a.now())
+	clipped.Session = &mark
+	a.sess.record(q.scope(), mark.Name, Exchange{
+		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
+	})
 	return Result{
 		Artifact: clipped,
 		Rounds:   rounds,
 		Usage:    usage,
 		CostUSD:  CostUSD(a.mdl.Name(), usage),
+		Session:  mark,
 	}
 }
 

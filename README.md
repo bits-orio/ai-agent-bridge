@@ -10,8 +10,10 @@ AI Agent Bridge is two halves. The **companion mod** exposes a tiny protocol
 over one console command and knows nothing about any other mod. The **service**,
 one Go binary per server, drives that protocol over RCON: it picks up questions,
 runs an agent whose tools are bounded reads of live game state, and sends a
-typed answer back into chat or a popup. It is multi-force from the start: every
-tool takes a force, and any player may ask about any force.
+typed answer back into chat, with the channel tag players' own lines carry. It
+is multi-force from the start: every tool takes a force, and any player may ask
+about any force. Follow-ups pile onto a shared session, and a model is one
+config line: Claude, DeepSeek or anything else OpenRouter lists.
 
 ## How a question travels
 

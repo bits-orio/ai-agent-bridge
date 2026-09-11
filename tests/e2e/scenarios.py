@@ -101,15 +101,19 @@ def as_list(r) -> list:
     return r or []
 
 
-def ask_via_remote(conn, text: str, player_index: Optional[int] = None, force: Optional[str] = None) -> int:
+def ask_via_remote(conn, text: str, player_index: Optional[int] = None, force: Optional[str] = None,
+                   scope_lua: Optional[str] = None) -> int:
     """Submits a question through the ai-agent-bridge-v1 remote interface,
     the same call path any other mod uses (companion-mod/README.md "2.
-    Questions by interface"). Returns the new question id."""
+    Questions by interface"). Returns the new question id. `scope_lua` is a
+    Lua table literal for the optional `scope` field (seam 4)."""
     fields = ["text=%s" % lua_str(text)]
     if player_index is not None:
         fields.append("player_index=%d" % player_index)
     if force is not None:
         fields.append("force=%s" % lua_str(force))
+    if scope_lua is not None:
+        fields.append("scope=%s" % scope_lua)
     lua = 'rcon.print(tostring(remote.call("ai-agent-bridge-v1","ask",{%s})))' % ", ".join(fields)
     reply = conn.command("/sc " + lua)
     return int(reply.strip())
@@ -730,6 +734,87 @@ class Scenario:
     needs_client: bool = False
 
 
+def _answer_lines(ctx: Ctx, qid: int) -> List[str]:
+    entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    return list(entry.get("lines") or [])
+
+
+def _ask_lines(ctx: Ctx, text: str, force: str = "enemy", scope_lua: Optional[str] = None) -> Tuple[int, List[str]]:
+    """Asks as the enemy force: the per-player quota is keyed by force for a
+    question with no player, and scenario_quota spends the player force's
+    allowance for the hour. Sessions are keyed by scope, not force, so the
+    session checks read the same either way."""
+    qid = ask_via_remote(ctx.server_rcon, text, force=force, scope_lua=scope_lua)
+    return qid, _answer_lines(ctx, qid)
+
+
+def scenario_session_recall(ctx: Ctx) -> Tuple[Status, str]:
+    """Phase 3 sessions (docs/design/phase3-spec.md part 1). The fake model
+    answers "recall" with how many earlier exchanges the prompt carried and
+    the first of them, which is the session seen from outside: a second
+    question sees the first, "new" starts over, and "sessions" lists what is
+    open without calling the model."""
+    try:
+        _ask_lines(ctx, "new what forces are there")
+        _, recalled = _ask_lines(ctx, "recall")
+        if "earlier=1" not in recalled or not any(l.startswith("first=what forces are there") for l in recalled):
+            return "FAIL", "the follow-up did not see the first exchange: %r" % recalled
+        _, listed = _ask_lines(ctx, "sessions")
+        if not any("(default)" in l and "exchange" in l for l in listed):
+            return "FAIL", "sessions did not list the default session: %r" % listed
+        _, fresh = _ask_lines(ctx, "new recall")
+        if "earlier=0" not in fresh:
+            return "FAIL", "new did not start a fresh session: %r" % fresh
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    return "PASS", "follow-up saw 1 earlier exchange, sessions listed it, new started clean: %r" % listed
+
+
+def scenario_named_session(ctx: Ctx) -> Tuple[Status, str]:
+    """A #named session is its own transcript, shared by whoever uses the
+    name, and the default session never sees it."""
+    try:
+        _ask_lines(ctx, "new #iron what forces are there")
+        _, again = _ask_lines(ctx, "#iron recall")
+        if "earlier=1" not in again or not any(l.startswith("first=what forces are there") for l in again):
+            return "FAIL", "#iron did not carry its own exchange: %r" % again
+        _, default = _ask_lines(ctx, "new recall")
+        if "earlier=0" not in default:
+            return "FAIL", "the default session saw #iron's exchanges: %r" % default
+        _, listed = _ask_lines(ctx, "sessions")
+        if not any("#iron" in l for l in listed):
+            return "FAIL", "sessions did not list #iron: %r" % listed
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    return "PASS", "#iron carried 1 exchange, the default carried none: %r" % listed
+
+
+def scenario_private_scope(ctx: Ctx) -> Tuple[Status, str]:
+    """A question with a private scope (handed in through the interface's
+    scope field, as a privacy mod would) polls with scope and private set,
+    and its session never meets the global one."""
+    private = '{key="team-x", private=true, audience={force="player"}, tag="[TEAM]"}'
+    try:
+        qid = ask_via_remote(ctx.server_rcon, "new what forces are there", force="enemy", scope_lua=private)
+        row = aab_rpc(ctx.server_rcon, "poll", after=qid - 1, limit=1)
+        rows = as_list(row.get("r"))
+        if not rows or rows[0].get("scope") != "team-x" or rows[0].get("private") is not True:
+            return "FAIL", "poll row lacks the private scope: %r" % row
+        _answer_lines(ctx, qid)
+        _, private_recall = _ask_lines(ctx, "recall", scope_lua=private)
+        if "earlier=1" not in private_recall:
+            return "FAIL", "the private session did not carry its exchange: %r" % private_recall
+        _, global_recall = _ask_lines(ctx, "new recall")
+        if "earlier=0" not in global_recall:
+            return "FAIL", "the global session saw the private exchange: %r" % global_recall
+        _, listed = _ask_lines(ctx, "sessions")
+        if any("team" in l for l in listed):
+            return "FAIL", "the global listing showed a private session: %r" % listed
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    return "PASS", "qid=%d polled as scope=team-x private=true; its session stayed private" % qid
+
+
 SCENARIOS: List[Scenario] = [
     Scenario("status", scenario_status),
     Scenario("providers + manifest ops: companion's own provider", scenario_providers_and_manifest),
@@ -751,6 +836,9 @@ SCENARIOS: List[Scenario] = [
     Scenario("history: last death", scenario_last_death, needs_client=True),
     Scenario("per-player quota", scenario_quota),
     Scenario("provider error -> provider_error", scenario_provider_error),
+    Scenario("sessions: follow-up, sessions, new", scenario_session_recall),
+    Scenario("sessions: #named session", scenario_named_session),
+    Scenario("chat scope: private question stays private", scenario_private_scope),
 ]
 
 

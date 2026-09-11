@@ -30,8 +30,9 @@ messages and the portal page use them the same way.
   the companion's `storage` until the service polls it.
 - **Round**: one model turn in the agent loop. A round may call several tools
   in parallel. A question takes as many rounds as it needs, under a cap.
-- **Answer**: an artifact returned to the asker. Printed to chat or shown in a
-  popup, and raised as the `on_answer` event for any mod that subscribes.
+- **Answer**: an artifact returned for a question. Printed to chat for the
+  question's audience, and raised as the `on_answer` event for any mod that
+  subscribes.
 - **Artifact**: a typed, small answer shape (summary, comparison, list, table,
   notice) that the model fills and the companion renders. The model never
   formats text; the companion does.

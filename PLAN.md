@@ -40,7 +40,9 @@ Each decision has a fuller record in `docs/adr/`.
 - Shapes: summary, comparison, list, table, notice. Each has hard size caps.
 - Formatting leaves the model entirely. Output shrinks, every answer looks the
   same, and player-typed text inside a result cannot change the layout.
-- Chat rendering first, a popup frame second. Rich text with item icons.
+- Chat rendering only, with rich text item icons. A popup frame was built in
+  Phase 2 and removed in Phase 3: a window opening over the player is an
+  interruption, and chat is where the question was asked.
 
 **4. History lives in the service.**
 - The companion appends deaths, alerts, chat, joins, research and rockets to
@@ -146,7 +148,9 @@ without touching this repository, and "since I last died" answers correctly.
 keyed by chat scope and an optional `#name`, ended by idle time, a cap or
 `new`; a `chat_scope_v1` probe any privacy mod may answer, fixed on the
 question when it is asked, with the channel tag on the answer line; the
-model backend moved to OpenRouter with the reported cost as the cost.
+model backend moved to OpenRouter with the reported cost as the cost,
+DeepSeek V4 Pro as the default model; answers in chat only, the popup
+removed.
 Validates: two players pile follow-ups onto one session and a team in
 private mode never sees its session continue in the open; the same question
 answered on Claude and on DeepSeek with the operator's config line as the

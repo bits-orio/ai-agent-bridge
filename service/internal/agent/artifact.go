@@ -60,7 +60,42 @@ type Artifact struct {
 	Columns []string // table, comparison
 	Rows    [][]string
 	Pairs   []Pair
+	Session *SessionMark // set by the loop: which session answered, and whether it is new
 }
+
+// Rendered is the artifact as the companion prints it, line for line: the
+// title first, then the shape's own lines, a table as its column names and
+// one row per line with " | " between cells. It is what a session keeps,
+// so the model later reads exactly what the players read.
+func (a Artifact) Rendered() []string {
+	var out []string
+	if a.Title != "" {
+		out = append(out, a.Title)
+	}
+	switch a.Shape {
+	case ShapeNotice:
+		out = append(out, a.Text)
+	case ShapeList:
+		for _, item := range a.Items {
+			out = append(out, "- "+item)
+		}
+	case ShapeTable:
+		out = append(out, strings.Join(a.Columns, " | "))
+		for _, row := range a.Rows {
+			out = append(out, strings.Join(row, " | "))
+		}
+	case ShapeComparison:
+		for _, p := range a.Pairs {
+			out = append(out, fmt.Sprintf("- %s: %s vs %s", p.Label, p.A, p.B))
+		}
+	default:
+		out = append(out, a.Lines...)
+	}
+	return out
+}
+
+// Plain is Rendered joined with newlines.
+func (a Artifact) Plain() string { return strings.Join(a.Rendered(), "\n") }
 
 // Summary builds the plainest artifact there is, used whenever the loop has
 // to answer for itself.
@@ -132,6 +167,9 @@ func (a Artifact) MarshalJSON() ([]byte, error) {
 	default:
 		out["lines"] = orEmpty(a.Lines)
 	}
+	if a.Session != nil {
+		out["session"] = a.Session
+	}
 	return json.Marshal(out)
 }
 
@@ -145,6 +183,7 @@ func (a *Artifact) UnmarshalJSON(b []byte) error {
 		Items   []string        `json:"items"`
 		Columns []string        `json:"columns"`
 		Rows    json.RawMessage `json:"rows"`
+		Session *SessionMark    `json:"session"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -152,6 +191,7 @@ func (a *Artifact) UnmarshalJSON(b []byte) error {
 	*a = Artifact{
 		Shape: raw.Shape, Title: raw.Title, Lines: raw.Lines,
 		Text: raw.Text, Level: raw.Level, Items: raw.Items, Columns: raw.Columns,
+		Session: raw.Session,
 	}
 	if len(raw.Rows) == 0 {
 		return nil

@@ -12,7 +12,6 @@ local remote_iface = require("scripts.remote")
 local engine_tools = require("scripts.tools.engine")
 local events       = require("scripts.events")
 local chat         = require("scripts.chat")
-local popup        = require("scripts.popup")
 
 -- Console commands. commands.add_command must run every time this mod's Lua
 -- state starts (nothing about a command registration persists across a
@@ -25,9 +24,8 @@ ask_command.register()
 remote_iface.register()
 engine_tools.register()
 
--- Event handlers feeding events.jsonl, plus the popup's GUI handlers.
+-- Event handlers feeding events.jsonl.
 events.register()
-popup.register()
 
 -- One handler per event per mod: a second script.on_event for the same event
 -- replaces the first. on_console_chat has two readers, so the fan-out is here

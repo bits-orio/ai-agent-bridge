@@ -117,6 +117,7 @@ func renderEffective(c *Config, m Meta) ([]byte, error) {
 func secretLines(c *Config) []string {
 	lines := []string{
 		secretLine(c.Factorio.RCON.PasswordEnv, "factorio.rcon.password_env", c.Factorio.RCON.Password),
+		secretLine(c.OpenRouter.APIKeyEnv, "openrouter.api_key_env", c.OpenRouter.APIKey),
 		secretLine(c.Anthropic.APIKeyEnv, "anthropic.api_key_env", c.Anthropic.APIKey),
 		secretLine(c.ControlAPI.TokenEnv, "control_api.token_env", c.ControlAPI.Token),
 	}

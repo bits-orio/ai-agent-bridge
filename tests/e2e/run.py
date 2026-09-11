@@ -77,7 +77,7 @@ def build_service() -> Path:
 
 
 def write_config(run_root: Path, server: "rig.Server") -> Path:
-    """Writes tests/e2e/.run/aab.e2e.yaml: model "fake" (the scripted,
+    """Writes tests/e2e/.run/aab.e2e.yaml: provider "fake" (the scripted,
     deterministic model, docs/design/phase1-2-spec.md "Fake model"), RCON
     at the rig server, events file inside its own write-data, history and
     control API local to this run."""
@@ -96,14 +96,14 @@ def write_config(run_root: Path, server: "rig.Server") -> Path:
         transport: local
         poll_interval: %s
 
-        anthropic:
-          api_key_env: ANTHROPIC_API_KEY
-          model: fake
+        model:
+          provider: fake
+          id: fake
 
         agent:
           max_rounds: 6
           max_tokens_per_question: 20000
-          memory_ttl: 10m
+          session_idle: 3m
           questions_per_player_per_hour: 20
 
         history:

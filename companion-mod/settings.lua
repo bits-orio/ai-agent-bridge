@@ -24,14 +24,15 @@ data:extend({
         order = "a-b",
     },
     {
-        -- Where an answer appears. "auto" puts the shapes that want columns
-        -- or room into a popup and everything else in chat; see
+        -- Who reads a global answer: everyone on the server (the session is
+        -- shared, so others can follow up) or the asker alone. A private
+        -- question always prints to its audience regardless; see
         -- scripts/render.lua.
         type = "string-setting",
-        name = "aab-answer-style",
+        name = "aab-answer-audience",
         setting_type = "runtime-global",
-        default_value = "auto",
-        allowed_values = { "auto", "chat", "popup" },
+        default_value = "server",
+        allowed_values = { "server", "asker" },
         order = "a-c",
     },
 })
