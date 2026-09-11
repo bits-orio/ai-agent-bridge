@@ -13,6 +13,9 @@
 # Runtime state written by the service
 /service/history.sqlite
 /service/history.sqlite-*
+/service/history.*.sqlite
+/service/history.*.sqlite-*
+/service/*.log
 
 # Git worktrees for feature branches
 /.worktrees/
