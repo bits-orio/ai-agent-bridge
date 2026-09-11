@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bits-orio/ai-agent-bridge/service/internal/arith"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
@@ -73,12 +74,13 @@ func (r *runner) install(providers rpc.ToolsReply) {
 	fresh := make([]tools.Tool, 0, len(game)+len(stored))
 	fresh = append(fresh, game...)
 	fresh = append(fresh, stored...)
+	fresh = append(fresh, arith.Tools()...)
 
 	r.tools = fresh
 	r.builtAt = time.Now()
 	r.caller.stale.Store(false)
 	r.catalogWaiting = false
-	log.Printf("catalog: %d tool(s) from %d provider(s), %d history tool(s)", len(game), len(providers), len(stored))
+	log.Printf("catalog: %d tool(s) from %d provider(s), %d history tool(s), %d ranking tool(s)", len(game), len(providers), len(stored), len(arith.Tools()))
 }
 
 // cannotRead reports a rebuild that did not happen. A snapshot already in hand is
