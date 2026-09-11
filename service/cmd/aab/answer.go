@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"time"
@@ -96,6 +97,11 @@ func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 		log.Printf("answer %d shape=%s rounds=%d tokens=%d/%d cached=%d/%d cost=$%.4f",
 			q.ID, state.result.Artifact.Shape, state.result.Rounds,
 			u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, state.result.CostUSD)
+		// The artifact as sent, so an odd answer in game can be traced to
+		// what the model wrote rather than guessed at. At most 6 KB.
+		if raw, err := json.Marshal(state.result.Artifact); err == nil {
+			log.Printf("answer %d artifact %s", q.ID, raw)
+		}
 	case rpc.HasCode(err, rpc.CodeBadArtifact):
 		r.refused(ctx, q, state, err)
 	case state.attempts >= maxDeliveries:

@@ -38,6 +38,11 @@ func validate(a Artifact) (Artifact, error) {
 		if len(out.Columns) == 0 {
 			return Artifact{}, fmt.Errorf("a table needs at least one column name in columns")
 		}
+		for _, name := range out.Columns {
+			if name == "" {
+				return Artifact{}, fmt.Errorf("every table column needs a name; one of them is empty")
+			}
+		}
 		out.Rows = tableRows(a.Rows, len(out.Columns))
 		if len(out.Rows) == 0 {
 			return Artifact{}, fmt.Errorf("a table needs at least one row, each row an array of strings")
@@ -46,6 +51,9 @@ func validate(a Artifact) (Artifact, error) {
 		out.Columns = cells(a.Columns, 2)
 		if len(out.Columns) != 2 {
 			return Artifact{}, fmt.Errorf("a comparison needs exactly two column names in columns")
+		}
+		if out.Columns[0] == "" || out.Columns[1] == "" {
+			return Artifact{}, fmt.Errorf("a comparison's two column names must not be empty: name the two things compared, force names for forces")
 		}
 		out.Pairs = pairs(a.Pairs)
 		if len(out.Pairs) == 0 {

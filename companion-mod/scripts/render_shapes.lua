@@ -104,7 +104,12 @@ end
 -- { shape="comparison", columns={"A","B"}, rows={{label=,a=,b=},...} }: up to five rows.
 function M.comparison(a)
   local cols = a.columns or {}
-  local out = { line((cols[1] or "A") .. "  vs  " .. (cols[2] or "B")) }
+  local function name(value, fallback)
+    local text = line(value)
+    if text == "" then return fallback end
+    return text
+  end
+  local out = { name(cols[1], "A") .. "  vs  " .. name(cols[2], "B") }
   for _, row in ipairs(clip(a.rows or {}, 5)) do
     out[#out + 1] = string.format("- %s: %s vs %s", line(row.label), line(row.a), line(row.b))
   end

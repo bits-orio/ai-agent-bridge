@@ -532,6 +532,8 @@ end
 local n, text = answer_as_bob({ shape = "comparison", columns = { "north", "south" },
                                 rows = { { label = "iron", a = "1", b = "2" } } })
 check("a comparison prints once, one line per row", n == 1 and text:find("- iron: 1 vs 2", 1, true) ~= nil, text)
+n, text = answer_as_bob({ shape = "comparison", columns = { "", "team-3" }, rows = { { label = "iron", a = "1", b = "2" } } })
+check("a blank comparison column falls back to a letter", n == 1 and text:find("A  vs  Team Losers", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } })
 check("a list of four prints once", n == 1 and text:find("- d", 1, true) ~= nil, text)
 n = answer_as_bob({ shape = "summary", lines = { "one" } })
