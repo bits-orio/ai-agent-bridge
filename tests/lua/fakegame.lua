@@ -392,10 +392,16 @@ function F.install(opts)
   -- qualities a game actually has.
   _G.prototypes = {
     entity = { lab = { name = "lab" }, ["assembling-machine-2"] = { name = "assembling-machine-2" } },
-    item = { ["iron-ore"] = { name = "iron-ore" }, ["iron-plate"] = { name = "iron-plate" }, coal = { name = "coal" } },
+    item = { ["iron-ore"] = { name = "iron-ore" }, ["iron-plate"] = { name = "iron-plate" }, coal = { name = "coal" },
+             ["repair-pack"] = { name = "repair-pack" }, ["iron-gear-wheel"] = { name = "iron-gear-wheel" },
+             ["military-science-pack"] = { name = "military-science-pack" } },
     fluid = { ["crude-oil"] = { name = "crude-oil" } },
     technology = { ["logistics-2"] = { name = "logistics-2" } },
-    recipe = { ["repair-pack"] = { name = "repair-pack" }, ["iron-gear-wheel"] = { name = "iron-gear-wheel" } },
+    recipe = {
+      ["repair-pack"] = { name = "repair-pack", products = { { type = "item", name = "repair-pack", amount = 1 } } },
+      ["iron-gear-wheel"] = { name = "iron-gear-wheel", products = { { type = "item", name = "iron-gear-wheel", amount = 1 } } },
+      ["military-science-pack"] = { name = "military-science-pack", products = { { type = "item", name = "military-science-pack", amount = 2 } } },
+    },
     quality = { normal = { name = "normal", level = 0 }, uncommon = { name = "uncommon", level = 1 } },
   }
 

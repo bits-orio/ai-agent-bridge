@@ -349,7 +349,7 @@ service.
 | `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
 | `rockets` | `limit` | rockets launched by that force, and the items it sent up, largest first |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
-| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type or the recipe a crafting machine is set to, with `scanned`, `truncated`, `total` and `shown` |
+| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type, the recipe a crafting machine is set to or the item or fluid that recipe makes, with `scanned`, `truncated`, `total` and `shown`; an unknown name comes back with up to five close names |
 | `locate_player` | `player` | where one player is: surface, x, y, a ready `[gps=...]` tag, and whether they are connected |
 
 Every tool that lists things is bounded, because a reply over the byte cap is

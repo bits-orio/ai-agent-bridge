@@ -324,8 +324,15 @@ check("find_entities by recipe keeps only the machine on that recipe", repair.ok
 local furnaces = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", type = "furnace", limit = 1 } })
 check("find_entities by type works and reports scanned", furnaces.ok and furnaces.r.total == 1 and furnaces.r.scanned == 1
       and furnaces.r.truncated == false, F.encode(furnaces))
-local no_recipe = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "no-such" } })
-check("an unknown recipe is found=false", no_recipe.ok and no_recipe.r.found == false and no_recipe.r.reason ~= nil, F.encode(no_recipe))
+local no_recipe = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-kit" } })
+check("an unknown recipe is found=false with close names suggested", no_recipe.ok and no_recipe.r.found == false
+      and no_recipe.r.suggestions[1] == "repair-pack", F.encode(no_recipe))
+local by_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "iron-gear-wheel" } })
+check("find_entities by product finds the machine whose recipe makes it", by_product.ok and by_product.r.total == 1
+      and by_product.r.entities[1].recipe == "iron-gear-wheel" and by_product.r.entities[1].x == -24, F.encode(by_product))
+local no_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "military science" } })
+check("an unknown product suggests item names", no_product.ok and no_product.r.found == false
+      and no_product.r.suggestions[1] == "military-science-pack", F.encode(no_product))
 local no_filter = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis" } })
 check("no filter at all is an error in the tool's own words", not no_filter.ok and tostring(no_filter.m):find("at least one", 1, true) ~= nil, F.encode(no_filter))
 local elsewhere = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "platform-1", name = "lab" } })
