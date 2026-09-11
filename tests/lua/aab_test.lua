@@ -346,6 +346,53 @@ check("locate_player finds Bob's character with a gps tag, and says what he is l
 local where_nobody = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Zed" } })
 check("locate_player on an unknown name is found=false", where_nobody.ok and where_nobody.r.found == false, F.encode(where_nobody))
 
+-- ── safety: the rpc command, ask rate limits, private refusals ─────────
+local replies_before = #S.rcon_replies
+before = #S.printed
+S.commands["aab-rpc"]({ parameter = F.encode({ v = 1, op = "status" }), player_index = 1, tick = S.tick })
+check("a player running /aab-rpc gets a refusal and no reply is produced",
+      #S.rcon_replies == replies_before and #S.printed == before + 1 and S.printed[#S.printed].who == "Bob"
+      and S.printed[#S.printed].text:find("over RCON", 1, true) ~= nil, S.printed[#S.printed].text)
+S.commands["aab-rpc"]({ parameter = F.encode({ v = 1, op = "answer", qid = 1, artifact = { shape = "notice", text = "forged" } }), player_index = 1, tick = S.tick })
+check("a player cannot forge an answer through /aab-rpc", S.printed[#S.printed].text:find("forged", 1, true) == nil)
+
+S.settings["aab-ask-cooldown-seconds"].value = 5
+S.tick = S.tick + 5 * 60  -- clear of Bob's earlier asks this tick
+local qcount_before = tonumber(rpc({ op = "status" }).r.last_id)
+before = #S.printed
+S.commands["ask"]({ parameter = "first", player_index = 1, tick = S.tick })
+S.commands["ask"]({ parameter = "second at once", player_index = 1, tick = S.tick })
+check("a second ask inside the cooldown is refused privately, with no echo and no question",
+      tonumber(rpc({ op = "status" }).r.last_id) == qcount_before + 1 and #S.printed == before + 2
+      and S.printed[#S.printed].who == "Bob" and S.printed[#S.printed].text:find("wait", 1, true) ~= nil,
+      S.printed[#S.printed].text)
+S.tick = S.tick + 5 * 60
+S.commands["ask"]({ parameter = "after the cooldown", player_index = 1, tick = S.tick })
+check("after the cooldown the ask goes through", tonumber(rpc({ op = "status" }).r.last_id) == qcount_before + 2)
+S.settings["aab-ask-cooldown-seconds"].value = 0
+
+S.settings["aab-asks-per-minute"].value = 2
+S.tick = S.tick + 60 * 60  -- a fresh minute
+local minute_before = tonumber(rpc({ op = "status" }).r.last_id)
+S.commands["ask"]({ parameter = "one", player_index = 1, tick = S.tick })
+S.commands["ask"]({ parameter = "two", player_index = 1, tick = S.tick })
+S.commands["ask"]({ parameter = "three", player_index = 1, tick = S.tick })
+check("the server-wide per-minute cap refuses the third ask",
+      tonumber(rpc({ op = "status" }).r.last_id) == minute_before + 2
+      and S.printed[#S.printed].text:find("this minute", 1, true) ~= nil, S.printed[#S.printed].text)
+S.tick = S.tick + 60 * 60
+S.commands["ask"]({ parameter = "next minute", player_index = 1, tick = S.tick })
+check("the next minute allows asking again", tonumber(rpc({ op = "status" }).r.last_id) == minute_before + 3)
+S.settings["aab-asks-per-minute"].value = 0
+
+local qid_private = tonumber(rpc({ op = "status" }).r.last_id)
+before = #S.printed
+rpc({ op = "answer", qid = qid_private, artifact = { shape = "notice", text = "over quota", to_asker = true } })
+check("a to_asker answer prints to the asker alone", #S.printed == before + 1 and S.printed[#S.printed].who == "Bob"
+      and S.printed[#S.printed].text:find("over quota", 1, true) ~= nil, S.printed[#S.printed].who)
+local bad_flag = rpc({ op = "answer", qid = qid_private, artifact = { shape = "notice", text = "x", to_asker = "yes" } })
+check("to_asker must be a boolean (already answered short-circuits after the check)", bad_flag.ok or bad_flag.e == "bad_artifact")
+
 -- A question from a mod, with no player and no scope, goes to the server.
 local qid6 = remote.call("ai-agent-bridge-v1", "ask", { text = "from a mod", force = "player" })
 before = #S.printed

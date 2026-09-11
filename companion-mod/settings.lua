@@ -35,4 +35,24 @@ data:extend({
         allowed_values = { "server", "asker" },
         order = "a-c",
     },
+    {
+        -- Rate limits on asking, checked before anything else happens; see
+        -- scripts/ask_rate.lua. Zero turns a limit off.
+        type = "int-setting",
+        name = "aab-ask-cooldown-seconds",
+        setting_type = "runtime-global",
+        default_value = 5,
+        minimum_value = 0,
+        maximum_value = 3600,
+        order = "a-d",
+    },
+    {
+        type = "int-setting",
+        name = "aab-asks-per-minute",
+        setting_type = "runtime-global",
+        default_value = 30,
+        minimum_value = 0,
+        maximum_value = 10000,
+        order = "a-e",
+    },
 })

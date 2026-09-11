@@ -41,6 +41,9 @@ const (
 	defaultSessionMaxExchanges  = 10
 	defaultSessionMaxBytes      = 8000
 	defaultQuestionsPerHour     = 20
+	defaultServerQuestionsHour  = 120
+	defaultMaxCostPerDay        = 5.0
+	defaultMaxToolCalls         = 12
 	defaultPollInterval         = time.Second
 	defaultHistoryPath          = "history.sqlite"
 	defaultControlAddr          = "127.0.0.1:8090"
@@ -92,6 +95,9 @@ type AgentConfig struct {
 	SessionMaxExchanges       int      `yaml:"session_max_exchanges"`         // oldest exchanges drop past this count
 	SessionMaxBytes           int      `yaml:"session_max_bytes"`             // and past this many bytes of question and answer text
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
+	QuestionsPerHour          int      `yaml:"questions_per_hour"`            // the whole server's rolling-hour quota, -1 for none
+	MaxCostPerDay             float64  `yaml:"max_cost_per_day"`              // USD the service may spend in a rolling day, -1 for no cap
+	MaxToolCalls              int      `yaml:"max_tool_calls"`                // tool calls one question may make across its rounds
 }
 
 // HistoryConfig points at the SQLite file the service keeps a save's whole
@@ -393,6 +399,27 @@ func loadFromEnv(m Meta) (*Config, error) {
 		}
 		c.Agent.SessionMaxBytes = n
 	}
+	if v := os.Getenv("AAB_QUESTIONS_PER_HOUR"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_QUESTIONS_PER_HOUR: invalid value %q", v)
+		}
+		c.Agent.QuestionsPerHour = n
+	}
+	if v := os.Getenv("AAB_MAX_COST_PER_DAY"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_MAX_COST_PER_DAY: invalid value %q", v)
+		}
+		c.Agent.MaxCostPerDay = f
+	}
+	if v := os.Getenv("AAB_MAX_TOOL_CALLS"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_MAX_TOOL_CALLS: invalid value %q", v)
+		}
+		c.Agent.MaxToolCalls = n
+	}
 	if v := os.Getenv("AAB_QUESTIONS_PER_PLAYER_PER_HOUR"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
@@ -441,6 +468,15 @@ func (c *Config) applyAgentDefaults() {
 	}
 	if c.Agent.QuestionsPerPlayerPerHour == 0 {
 		c.Agent.QuestionsPerPlayerPerHour = defaultQuestionsPerHour
+	}
+	if c.Agent.QuestionsPerHour == 0 {
+		c.Agent.QuestionsPerHour = defaultServerQuestionsHour
+	}
+	if c.Agent.MaxCostPerDay == 0 {
+		c.Agent.MaxCostPerDay = defaultMaxCostPerDay
+	}
+	if c.Agent.MaxToolCalls == 0 {
+		c.Agent.MaxToolCalls = defaultMaxToolCalls
 	}
 }
 

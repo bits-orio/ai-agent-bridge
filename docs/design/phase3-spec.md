@@ -362,6 +362,20 @@ Three things the first team-vs-team session showed, all built:
   force name, so slot numbers work unchanged; "team 3" typed with a space
   is swapped too.
 
+## Safety review (2026-09-11)
+
+The whole tree reviewed for what a player can run, what can lag the game
+and what can run up the bill; SECURITY.md is the result for operators.
+Found and fixed: `/aab-rpc` had no caller check, so any player could run
+every op from their own console, forge answers included; it now answers
+RCON and the server console only. Added as blanket guards: ask cooldown
+per player and asks per minute server-wide at the companion (before the
+echo, the ring and any cost), a server-wide hourly quota, a rolling daily
+USD budget and a tool-call cap per question at the service, a cap on live
+sessions, refusals printed to the asker alone through an additive
+`to_asker` artifact field, and a log line for any tool call over 100 ms on
+the game thread.
+
 ## Build order
 
 1. Sessions in the service, with `sessions` and `new`, unit tests for the

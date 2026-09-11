@@ -12,7 +12,7 @@ import (
 // validate clips an artifact to the caps and to the byte budget, and returns
 // the clipped copy or an error the model can act on.
 func validate(a Artifact) (Artifact, error) {
-	out := Artifact{Shape: a.Shape, Title: cell(a.Title)}
+	out := Artifact{Shape: a.Shape, Title: cell(a.Title), ToAsker: a.ToAsker}
 	switch a.Shape {
 	case ShapeSummary:
 		out.Lines = cells(a.Lines, MaxSummaryLines)

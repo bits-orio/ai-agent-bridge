@@ -12,6 +12,7 @@ local remote_iface = require("scripts.remote")
 local engine_tools = require("scripts.tools.engine")
 local events       = require("scripts.events")
 local chat         = require("scripts.chat")
+local ask_rate     = require("scripts.ask_rate")
 
 -- Console commands. commands.add_command must run every time this mod's Lua
 -- state starts (nothing about a command registration persists across a
@@ -35,6 +36,11 @@ events.register()
 script.on_event(defines.events.on_console_chat, function(e)
   events.on_console_chat(e)
   chat.on_console_chat(e)
+end)
+
+script.on_event(defines.events.on_player_left_game, function(e)
+  events.on_player_left_game(e)
+  ask_rate.forget(e.player_index)
 end)
 
 script.on_init(function()

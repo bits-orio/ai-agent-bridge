@@ -150,6 +150,9 @@ function F.install(opts)
       ["aab-events-enabled"] = { value = true },
       ["aab-chat-prefix"]    = { value = "" },
       ["aab-answer-audience"] = { value = "server" },
+      -- Off for the suite; the rate-limit section turns them on.
+      ["aab-ask-cooldown-seconds"] = { value = 0 },
+      ["aab-asks-per-minute"]      = { value = 0 },
     },
   }
 

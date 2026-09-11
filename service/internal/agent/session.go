@@ -113,7 +113,26 @@ func (s *sessions) open(scope, name string, now time.Time, fresh bool) ([]Exchan
 		return out, false
 	}
 	s.byKey[key] = &session{scope: scope, name: name, startedAt: now, lastAt: now}
+	s.trim()
 	return nil, true
+}
+
+// maxLiveSessions bounds the map: a player inventing a new #name on every
+// question would otherwise grow it until the idle sweep caught up.
+const maxLiveSessions = 200
+
+// trim drops the longest-idle sessions past the cap. Callers hold the lock.
+func (s *sessions) trim() {
+	for len(s.byKey) > maxLiveSessions {
+		var oldestKey string
+		var oldest time.Time
+		for key, live := range s.byKey {
+			if oldestKey == "" || live.lastAt.Before(oldest) {
+				oldestKey, oldest = key, live.lastAt
+			}
+		}
+		delete(s.byKey, oldestKey)
+	}
 }
 
 // end drops the session for scope and name, so the next question starts a

@@ -29,10 +29,14 @@ import (
 const defaultForce = "player"
 
 const (
-	quotaNotice   = "You have asked all the questions your hourly allowance covers. Try again a bit later."
-	roundsNotice  = "I ran out of rounds before I could answer that. Try asking something narrower."
-	tokenNotice   = "That question ran past its token budget before I could answer. Try asking something narrower."
-	stalledNotice = "The model stopped without answering. Try asking again."
+	quotaNotice       = "You have asked all the questions your hourly allowance covers. Try again a bit later."
+	serverQuotaNotice = "The server has asked all the questions its hourly allowance covers. Try again later."
+	budgetNotice      = "The server has spent its daily allowance for questions. Try again tomorrow."
+	toolCallsNotice   = "That question needed more lookups than one question is allowed. Ask a narrower one."
+	serverKey         = "server"
+	roundsNotice      = "I ran out of rounds before I could answer that. Try asking something narrower."
+	tokenNotice       = "That question ran past its token budget before I could answer. Try asking something narrower."
+	stalledNotice     = "The model stopped without answering. Try asking again."
 )
 
 // What the model is told when a round submits an answer it cannot mean yet. A
@@ -130,6 +134,20 @@ type Caps struct {
 	MaxToolResultBytes        int // a tool result longer than this is cut before the model sees it
 	Sessions                  SessionCaps
 	QuestionsPerPlayerPerHour int
+	QuestionsPerHour          int     // the whole server's rolling-hour cap; zero or less means none
+	MaxCostPerDay             float64 // USD in a rolling day; zero or less means none
+	MaxToolCalls              int     // tool calls one question may make across its rounds; zero means DefaultMaxToolCalls
+}
+
+// DefaultMaxToolCalls bounds what one question may ask of the game. Six
+// rounds of parallel calls could otherwise be dozens of surface scans.
+const DefaultMaxToolCalls = 12
+
+func (c Caps) maxToolCalls() int {
+	if c.MaxToolCalls <= 0 {
+		return DefaultMaxToolCalls
+	}
+	return c.MaxToolCalls
 }
 
 // DefaultMaxToolResultBytes is the cut applied when the caps leave it unset.
@@ -173,11 +191,13 @@ type SessionMark struct {
 // Agent answers questions with one model, one set of caps, and the memory and
 // quota that go with them. It is safe for concurrent use.
 type Agent struct {
-	mdl   model.Model
-	caps  Caps
-	sess  *sessions
-	quota *quota
-	now   func() time.Time
+	mdl    model.Model
+	caps   Caps
+	sess   *sessions
+	quota  *quota
+	server *quota  // one key for the whole server
+	budget *budget // USD spent in the rolling day
+	now    func() time.Time
 
 	// Trace, when set, gets one line per model round: what the round cost
 	// and what the model spent its output on. Nil means no per-round lines.
@@ -186,11 +206,13 @@ type Agent struct {
 
 func New(m model.Model, caps Caps) *Agent {
 	return &Agent{
-		mdl:   m,
-		caps:  caps,
-		sess:  newSessions(caps.Sessions),
-		quota: newQuota(caps.QuestionsPerPlayerPerHour),
-		now:   time.Now,
+		mdl:    m,
+		caps:   caps,
+		sess:   newSessions(caps.Sessions),
+		quota:  newQuota(caps.QuestionsPerPlayerPerHour),
+		server: newQuota(caps.QuestionsPerHour),
+		budget: newBudget(caps.MaxCostPerDay),
+		now:    time.Now,
 	}
 }
 
@@ -208,7 +230,16 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		return a.command(q, req, mark, now), nil
 	}
 	if !a.quota.take(q.key(), now) {
-		return Result{Artifact: Notice(LevelWarning, quotaNotice), Session: mark}, nil
+		return Result{Artifact: refusal(quotaNotice), Session: mark}, nil
+	}
+	if !a.server.take(serverKey, now) {
+		a.quota.refund(q.key(), now)
+		return Result{Artifact: refusal(serverQuotaNotice), Session: mark}, nil
+	}
+	if a.budget.exhausted(now) {
+		a.quota.refund(q.key(), now)
+		a.server.refund(serverKey, now)
+		return Result{Artifact: refusal(budgetNotice), Session: mark}, nil
 	}
 	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
 	mark.Fresh = fresh
@@ -224,6 +255,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	}}
 
 	var usage model.Usage
+	toolCalls := 0
 	for round := 1; round <= a.caps.maxRounds(); round++ {
 		step, err := a.mdl.Step(ctx, system, msgs, defs)
 		if err != nil {
@@ -239,6 +271,10 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		calls := model.ToolUses(step.Blocks)
 		if len(calls) == 0 {
 			return a.finish(q, fromText(step), round, usage, mark), nil
+		}
+		toolCalls += len(calls)
+		if toolCalls > a.caps.maxToolCalls() {
+			return a.finish(q, Notice(LevelWarning, toolCallsNotice), round, usage, mark), nil
 		}
 
 		results, artifact, submitted := runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
@@ -339,6 +375,7 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 		clipped = Notice(LevelWarning, stalledNotice)
 	}
 	clipped.Session = &mark
+	a.budget.spend(CostUSD(a.mdl.Name(), usage), a.now())
 	a.sess.record(q.scope(), mark.Name, Exchange{
 		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
 	})

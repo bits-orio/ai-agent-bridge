@@ -61,6 +61,14 @@ type Artifact struct {
 	Rows    [][]string
 	Pairs   []Pair
 	Session *SessionMark // set by the loop: which session answered, and whether it is new
+	ToAsker bool         // print to the asker alone: a refusal is nobody else's business
+}
+
+// refusal is a warning notice the asker alone will see.
+func refusal(text string) Artifact {
+	a := Notice(LevelWarning, text)
+	a.ToAsker = true
+	return a
 }
 
 // Rendered is the artifact as the companion prints it, line for line: the
@@ -170,6 +178,9 @@ func (a Artifact) MarshalJSON() ([]byte, error) {
 	if a.Session != nil {
 		out["session"] = a.Session
 	}
+	if a.ToAsker {
+		out["to_asker"] = true
+	}
 	return json.Marshal(out)
 }
 
@@ -184,6 +195,7 @@ func (a *Artifact) UnmarshalJSON(b []byte) error {
 		Columns []string        `json:"columns"`
 		Rows    json.RawMessage `json:"rows"`
 		Session *SessionMark    `json:"session"`
+		ToAsker bool            `json:"to_asker"`
 	}
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return err
@@ -191,7 +203,7 @@ func (a *Artifact) UnmarshalJSON(b []byte) error {
 	*a = Artifact{
 		Shape: raw.Shape, Title: raw.Title, Lines: raw.Lines,
 		Text: raw.Text, Level: raw.Level, Items: raw.Items, Columns: raw.Columns,
-		Session: raw.Session,
+		Session: raw.Session, ToAsker: raw.ToAsker,
 	}
 	if len(raw.Rows) == 0 {
 		return nil

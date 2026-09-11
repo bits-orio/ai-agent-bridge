@@ -62,6 +62,9 @@ func runService(cfg *config.Config, client *rpc.Client) {
 				MaxBytes:     cfg.Agent.SessionMaxBytes,
 			},
 			QuestionsPerPlayerPerHour: cfg.Agent.QuestionsPerPlayerPerHour,
+			QuestionsPerHour:          cfg.Agent.QuestionsPerHour,
+			MaxCostPerDay:             cfg.Agent.MaxCostPerDay,
+			MaxToolCalls:              cfg.Agent.MaxToolCalls,
 		}),
 	}
 

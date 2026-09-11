@@ -15,6 +15,9 @@ is multi-force from the start: every tool takes a force, and any player may ask
 about any force. Follow-ups pile onto a shared session, and a model is one
 config line: Claude, DeepSeek or anything else OpenRouter lists.
 
+What players can do, what it can cost and the guards on each are in
+[SECURITY.md](SECURITY.md).
+
 ## How a question travels
 
 1. A player types `/ask what is my iron plate rate on nauvis`.

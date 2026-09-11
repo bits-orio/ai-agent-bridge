@@ -64,7 +64,7 @@ end
 --- Renders `artifact` for `question` (a row from scripts/questions.lua).
 function M.render(question, artifact)
   local rendered = compose(artifact)
-  audience.deliver(question, chat_text(question, artifact, rendered))
+  audience.deliver(question, chat_text(question, artifact, rendered), artifact.to_asker == true)
   return rendered
 end
 

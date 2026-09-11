@@ -68,6 +68,9 @@ configuration from `AAB_*` environment variables instead:
 | `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
 | `agent.session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
+| `agent.questions_per_hour` | `AAB_QUESTIONS_PER_HOUR` | `120` |
+| `agent.max_cost_per_day` | `AAB_MAX_COST_PER_DAY` | `5.0` |
+| `agent.max_tool_calls` | `AAB_MAX_TOOL_CALLS` | `12` |
 | `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
 | `control_api.addr` | `AAB_CONTROL_ADDR` | `127.0.0.1:8090` |
 | `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |

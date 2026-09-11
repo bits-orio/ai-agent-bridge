@@ -9,6 +9,7 @@ local events        = require("scripts.events")
 local player_lookup = require("scripts.player_lookup")
 local scope         = require("scripts.scope")
 local audience      = require("scripts.audience")
+local ask_rate      = require("scripts.ask_rate")
 
 local RING_SIZE = 64
 
@@ -142,6 +143,11 @@ end
 --- before any prefix was stripped, handed to the scope providers as is, and
 --- its presence says the question was already visible as chat.
 function M.ask_as_player(player, text, line)
+  local refused = ask_rate.check(player)
+  if refused then
+    player.print("[AI Agent Bridge] " .. refused)
+    return nil
+  end
   local qid = M.ask({ text = text, player_index = player.index, force = player.force.name, line = line })
   if qid and not line then
     -- A /ask command is not a chat line, so nobody else saw it. Echo it to

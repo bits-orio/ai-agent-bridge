@@ -112,8 +112,17 @@ type toolCaller struct {
 	stale  atomic.Bool
 }
 
+// slowTool is the RCON round trip past which a tool call is logged: the
+// companion runs tools on the game thread, so a slow one is a stutter every
+// player felt.
+const slowTool = 100 * time.Millisecond
+
 func (t *toolCaller) CallTool(ctx context.Context, iface, fn string, args any) (json.RawMessage, error) {
+	started := time.Now()
 	out, err := t.client.CallTool(ctx, iface, fn, args)
+	if took := time.Since(started); took > slowTool {
+		log.Printf("tool %s.%s took %s on the game thread; players felt that", iface, fn, took.Round(time.Millisecond))
+	}
 	if rpc.HasCode(err, rpc.CodeNoProvider) || rpc.HasCode(err, rpc.CodeNoTool) {
 		t.stale.Store(true)
 	}

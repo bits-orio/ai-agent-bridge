@@ -86,6 +86,9 @@ messages and the portal page use them the same way.
 3. Nothing derived from `remote.interfaces` is ever stored. The catalog is
    rebuilt from scratch on every call and sorted so its JSON is byte-stable.
 4. Oversized tool results are refused with an error, never truncated.
-5. The protocol, the remote interface `ai-agent-bridge-v1` and the probe name
+5. The rpc command runs for RCON and the server console only; a player's
+   console never reaches an op. Asking is rate limited at the companion
+   before anything else happens, and a refusal is private to the asker.
+6. The protocol, the remote interface `ai-agent-bridge-v1` and the probe name
    `agent_tools_v1` are frozen. Additive changes are safe. Breaking changes
    ship under a new name beside the old one.

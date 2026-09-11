@@ -31,14 +31,16 @@ others can join, and `/ask sessions` lists what is open.
 
 ## Settings
 
-All three are runtime-global: change them from Settings > Mod settings while
-the server runs, no restart needed.
+All of them are runtime-global: change them from Settings > Mod settings
+while the server runs, no restart needed.
 
 | setting | default | what it does |
 |---|---|---|
 | `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Turn it off and the file stops growing. |
 | `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks a question. Set it and any chat line starting with those exact characters becomes a question, with the rest of the line as the text. |
 | `aab-answer-audience` | server | `server` prints every global answer to the whole server, so anyone can follow up on it. `asker` prints only to the player who asked. A question a chat privacy mod marked private always prints to its own audience, whatever this says. |
+| `aab-ask-cooldown-seconds` | 5 | A player who asks again sooner is told to wait, privately; no echo, no question, no cost. 0 turns it off. |
+| `aab-asks-per-minute` | 30 | When the whole server has asked this many times in a minute, further asks are refused privately until the minute turns. 0 turns it off. |
 
 The chat prefix is matched literally, spaces included, and never as a pattern.
 Pick something no ordinary sentence starts with, `?` or `@ai ` for example, or
@@ -215,6 +217,9 @@ script.on_load(register_handler) -- no remote.call here; reuses the cached id
 ---
 
 ## The protocol, `aab-rpc-v1`
+
+The `/aab-rpc` command answers RCON and the server console only. A player
+typing it into their own console gets one private line and nothing runs.
 
 One console command, `/aab-rpc <json>`. One JSON object in, one JSON object
 out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or

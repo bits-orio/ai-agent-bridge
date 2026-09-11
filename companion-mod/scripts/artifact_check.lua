@@ -83,6 +83,7 @@ function M.problem(a)
   end
   if a.title ~= nil and type(a.title) ~= "string" then return "title must be a string" end
   if a.session ~= nil and type(a.session) ~= "table" then return "session must be an object" end
+  if a.to_asker ~= nil and type(a.to_asker) ~= "boolean" then return "to_asker must be a boolean" end
   return check(a)
 end
 

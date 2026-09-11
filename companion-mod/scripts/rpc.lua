@@ -125,6 +125,17 @@ local M = {}
 
 --- The aab-rpc command handler. `cmd` is Factorio's CustomCommandData.
 function M.handle(cmd)
+  -- The service's command, over RCON, and the server console: both arrive
+  -- with no player_index. A player typing it into their own console gets a
+  -- one-line refusal and nothing runs. Without this a player could forge an
+  -- answer in the bot's name, run any tool, or build a multi-megabyte reply
+  -- on the server thread.
+  if cmd.player_index then
+    local player = game.get_player(cmd.player_index)
+    if player and player.valid then player.print("[AI Agent Bridge] /aab-rpc is the service's command, over RCON.") end
+    return
+  end
+
   local parsed_ok, req = pcall(helpers.json_to_table, cmd.parameter or "")
   local reply
 

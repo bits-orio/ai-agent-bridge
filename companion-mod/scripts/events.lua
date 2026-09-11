@@ -53,6 +53,14 @@ function M.on_console_chat(e)
   M.write("console_chat", { player = player.name, force = player.force.name, message = e.message })
 end
 
+--- Logs a player leaving. Public because control.lua fans on_player_left_game
+--- out to two readers, this one and the ask rate limiter.
+function M.on_player_left_game(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  M.write("player_left", { player = player.name, force = player.force.name })
+end
+
 function M.register()
   script.on_event(defines.events.on_player_died, function(e)
     local player = game.get_player(e.player_index)
@@ -66,11 +74,6 @@ function M.register()
     M.write("player_joined", { player = player.name, force = player.force.name })
   end)
 
-  script.on_event(defines.events.on_player_left_game, function(e)
-    local player = game.get_player(e.player_index)
-    if not player then return end
-    M.write("player_left", { player = player.name, force = player.force.name })
-  end)
 
   script.on_event(defines.events.on_research_finished, function(e)
     local research = e.research

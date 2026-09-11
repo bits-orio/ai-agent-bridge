@@ -27,7 +27,7 @@ func (a *Agent) command(q Question, req Request, mark SessionMark, now time.Time
 		art.Session = &mark
 		return Result{Artifact: art, Session: mark}
 	default:
-		return Result{Artifact: Notice(LevelWarning, emptyQuestionNotice), Session: mark}
+		return Result{Artifact: refusal(emptyQuestionNotice), Session: mark}
 	}
 }
 

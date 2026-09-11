@@ -41,8 +41,16 @@ local function print_to_players(indices, text)
   return reached
 end
 
---- Prints `text` to the question's audience.
-function M.deliver(question, text)
+--- Prints `text` to the question's audience, or to the asker alone when
+--- `to_asker` is set: a refusal (over quota, over budget) is between the
+--- service and the one who asked, and printing it to everyone would turn a
+--- player's spam into the server's.
+function M.deliver(question, text, to_asker)
+  if to_asker then
+    local player = M.asker(question)
+    if player then player.print(text) end
+    return
+  end
   if question.private then
     local audience = type(question.audience) == "table" and question.audience or {}
     if audience.force then

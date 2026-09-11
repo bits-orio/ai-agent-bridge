@@ -86,6 +86,9 @@ agent:
   session_max_exchanges: 10
   session_max_bytes: 8000
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota
+  questions_per_hour: 120             # the whole server's rolling-hour quota, -1 for none
+  max_cost_per_day: 5.0               # USD in a rolling day, whoever asks; -1 for no cap
+  max_tool_calls: 12                  # tool calls one question may make across its rounds
 
 # The event history for this save. A relative path is resolved against this file, so
 # moving the config moves the database with it.
