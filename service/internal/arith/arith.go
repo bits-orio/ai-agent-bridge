@@ -115,7 +115,7 @@ func rankByRate(_ context.Context, args json.RawMessage) (json.RawMessage, error
 
 func rank(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
-		Rows           []struct {
+		Rows []struct {
 			Name  string  `json:"name"`
 			Value float64 `json:"value"`
 		} `json:"rows"`
