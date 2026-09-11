@@ -47,7 +47,11 @@ func systemPrompt(q Question) string {
 	b.WriteString("The one exception: when the player asks about the thing itself, what an item is, what a recipe needs, a technology to look at, write the clickable tag instead, [item=iron-plate], [recipe=repair-pack], [technology=logistics-2], [fluid=crude-oil], [entity=lab], which opens it in game. ")
 	b.WriteString("Wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them. ")
 	b.WriteString("Forces are named by their force name here and in tool arguments; the game shows players the name they know. ")
-	b.WriteString("game_time is the server's clock. When a tool reports a force's own clock, its online or elapsed time, compare forces by that, never by game time: forces start at different times and keep their own clocks.\n\n")
+	b.WriteString("game_time is the server's clock. When a tool reports a force's own clock, its online or elapsed time, compare forces by that, never by game time: forces start at different times and keep their own clocks. ")
+	b.WriteString("How much or how many of an item a force has made is a total: production_since, with since_tick 0 for the whole game or the force's own start tick when a clock tool gives one. ")
+	b.WriteString("How fast is a rate: item_rate over the shortest window that covers the question, one_minute for right now. Never answer a total with a rate. ")
+	b.WriteString("To say which force is ahead on anything cumulative, production, research, rockets, take each force's total since its own start tick divided by its own online hours from the clock tool, and show both figures; ")
+	b.WriteString("a rate over a server window counts the time a force was offline as nothing and is not a comparison.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")

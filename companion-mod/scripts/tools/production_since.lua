@@ -35,11 +35,11 @@ local M = {}
 
 M.manifest = {
   production_since = {
-    desc = "Produced, consumed and net of one item for one force on one surface since a tick, e.g. the tick of a death, over all qualities. covered_ticks rounds up to whole samples; compare it with elapsed_ticks. Unknown surface: found=false.",
+    desc = "How much of one item one force has made: produced, consumed and net on one surface since a tick, over all qualities. since_tick 0 counts the whole game; a death's tick counts since then; a force's own start tick from a clock tool counts its whole run. The answer to how much or how many, never a rate. covered_ticks rounds up to whole samples; compare it with elapsed_ticks. Unknown surface: found=false.",
     params = {
       surface    = "string! surface name or index, e.g. nauvis",
       item       = "string! item prototype name",
-      since_tick = "integer! tick to count from, not after the current tick",
+      since_tick = "integer! tick to count from, 0 for the whole game, not after the current tick",
     },
   },
 }

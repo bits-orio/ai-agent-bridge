@@ -369,9 +369,9 @@ The mod is a provider like any other, on the interface
 | `current_research` | force only | what that force is researching, and its progress |
 | `research_queue` | `limit` | the running technology and the queue behind it: name, level, research units, progress |
 | `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, missing prerequisites |
-| `item_rate` | `surface`, `item`, `window` | production and consumption of one item per minute, summed over every quality |
+| `item_rate` | `surface`, `item`, `window` | how fast one item is made and used, per minute over the window, summed over every quality; a rate, never a total |
 | `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked, each summed over every quality |
-| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
+| `production_since` | `surface`, `item`, `since_tick` | how much of one item that force produced and consumed since a tick, 0 for the whole game; the answer to "how much" |
 | `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robots, idle robots, cells, the eight largest item counts |
 | `entity_count` | `surface`, `name` | how many entities of one prototype that force has on one surface, counted by the engine |
 | `evolution` | `surface` | the evolution factor on one surface and its time, pollution and spawner-kill parts |

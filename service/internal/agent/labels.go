@@ -35,14 +35,8 @@ func substituteLabels(text string, labels []ForceLabel) string {
 		if l.Label == "" || !substitutable(l.Name) {
 			continue
 		}
-		rules = append(rules, rule{l.Label, l.Name})
-		if rest, ok := teamRemainder(l.Label); ok {
-			rules = append(rules, rule{rest, l.Name})
-		}
-		// A label players type with spaces where it has hyphens: an unnamed
-		// team's label is its force name, "team-3", and a player says team 3.
-		if spaced := strings.ReplaceAll(l.Label, "-", " "); spaced != l.Label {
-			rules = append(rules, rule{spaced, l.Name})
+		for _, from := range aliases(l) {
+			rules = append(rules, rule{from, l.Name})
 		}
 	}
 	sort.SliceStable(rules, func(i, j int) bool { return len(rules[i].from) > len(rules[j].from) })
@@ -52,6 +46,37 @@ func substituteLabels(text string, labels []ForceLabel) string {
 	}
 	return text
 }
+
+// aliases is every spelling a player may use for one force: the label, the
+// X of a "Team X" label, the label and the force name with spaces for
+// hyphens, and the label with the zeros stripped from a trailing number, so
+// "Team 02", "team 2" and "team-2" all reach the model as team-2.
+func aliases(l ForceLabel) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		key := strings.ToLower(s)
+		if s == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, s)
+	}
+	add(l.Label)
+	if rest, ok := teamRemainder(l.Label); ok {
+		add(rest)
+	}
+	add(strings.ReplaceAll(l.Label, "-", " "))
+	add(strings.ReplaceAll(l.Name, "-", " "))
+	if m := trailingNumber.FindStringSubmatch(l.Label); m != nil && m[2] != m[3] {
+		add(m[1] + m[3])
+	}
+	return out
+}
+
+// trailingNumber splits "Team 02" into "Team ", "02" and "2".
+var trailingNumber = regexp.MustCompile(`^(.*?\s)0*((?:0*)(\d+))$`)
 
 // teamRemainder is the X of a "Team X" label when X is long enough to be a
 // name on its own.

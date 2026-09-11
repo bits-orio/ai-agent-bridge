@@ -372,6 +372,25 @@ two engine passes under one cap, reads a ghost's real name and type, reads
 the recipe set on a crafting-machine ghost the same way as on a built one,
 marks rows `ghost = true`, and takes a `ghost` filter to narrow either way.
 
+## Team spellings and totals (2026-09-11)
+
+A live session on an MTS server showed two misses. "team 2" never became
+`team-2` before the model read it: MTS labels an unnamed slot "Team 02",
+and the swap knew the exact label and a hyphenated form only. The alias
+set is now the label, the X of "Team X", the label and the force name with
+spaces for hyphens, and the label with zeros stripped from a trailing
+number, so "Team 02", "team 2", "team-2" and "TEAM 04" all reach the model
+as force names. And "how much iron has team 2 produced" was answered with
+a rate over the largest window, "0/min, effectively none", for a team with
+23 plates; the prompt now says a total is `production_since` (since_tick 0
+for the whole game, or the force's own start tick from a clock tool) and a
+rate is `item_rate` over the shortest window that covers the question, and
+the two tools' descriptions say the same. The same session compared two
+teams by produced-per-minute over the server's last hour, which counts the
+time a team was offline as nothing; the prompt now says a comparison on
+anything cumulative is each force's total since its own start tick divided
+by its own online hours from the clock tool, both figures shown.
+
 ## Safety review (2026-09-11)
 
 The whole tree reviewed for what a player can run, what can lag the game
