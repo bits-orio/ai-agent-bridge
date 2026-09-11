@@ -49,11 +49,22 @@ end
 ---
 --- Anything that is not a number comes back untouched, so an absent progress
 --- stays absent rather than becoming 0.
+---
+--- Rounding the double is not enough: the engine's JSON writer prints any
+--- non-integer double at full precision, so a rounded 0.79 still leaves as
+--- 0.79000000000000003552713678800500929355621337890625 (measured on 2.0.77).
+--- A whole number leaves as a number; anything else leaves as the short
+--- decimal string, "1.79", which a model reads as the figure it is.
 function M.round(value, places)
   if type(value) ~= "number" then return value end
-  local scale = 10 ^ (places or 2)
-  if value < 0 then return -math.floor(-value * scale + 0.5) / scale end
-  return math.floor(value * scale + 0.5) / scale
+  places = places or 2
+  local scale = 10 ^ places
+  local rounded
+  if value < 0 then rounded = -math.floor(-value * scale + 0.5) / scale
+  else rounded = math.floor(value * scale + 0.5) / scale end
+  if rounded == math.floor(rounded) then return math.floor(rounded) end
+  local text = string.format("%." .. places .. "f", rounded)
+  return (text:gsub("0+$", ""))
 end
 
 return M

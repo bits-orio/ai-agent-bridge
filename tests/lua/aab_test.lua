@@ -809,14 +809,16 @@ check("an `a` that is not an object is bad_json, not a traceback",
 -- model as fifty-odd digits and spends a third of the reply's budget on them.
 S.force.research_progress = 1 / 3
 local rounded = call("ai-agent-bridge-tools", "current_research", { force = "player" })
-check("current_research rounds progress to two decimals", rounded.ok and rounded.r.progress == 0.33,
+check("current_research rounds progress to two decimals", rounded.ok and rounded.r.progress == "0.33",
       F.encode(rounded))
 local queue_rounded = call("ai-agent-bridge-tools", "research_queue", { force = "player" })
 check("research_queue rounds the force's progress too",
-      queue_rounded.ok and queue_rounded.r.progress == 0.33 and queue_rounded.r.queue[1].progress == 0.33,
+      queue_rounded.ok and queue_rounded.r.progress == "0.33" and queue_rounded.r.queue[1].progress == "0.33",
       F.encode(queue_rounded.r))
+-- A fraction leaves as the quoted short string, six bytes for "0.33", never
+-- the fifty-digit expansion the engine's JSON writer gives a double.
 check("a rounded figure is short on the wire",
-      #F.encode(rounded.r.progress) <= 4, F.encode(rounded.r.progress))
+      #F.encode(rounded.r.progress) <= 6, F.encode(rounded.r.progress))
 S.force.research_progress = 0.25
 
 -- ── the big selftest op is clamped ────────────────────────────────────

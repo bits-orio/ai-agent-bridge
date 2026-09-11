@@ -385,8 +385,9 @@ Every list is bounded and sorted before it is cut, and reports `total`
 beside `shown`, so an agent can say "12 online of 214 known" instead of
 believing it saw everyone. `find_entities` asks the engine for at most 2,000
 entities in one pass and returns 5 positions by default, 10 at most;
-`truncated` says when the pass hit its cap. Every double is rounded before
-it is sent. Every `surface` argument takes a name or an index and answers
+`truncated` says when the pass hit its cap. Every fraction is rounded and
+sent as a short decimal string, `"1.79"`, because the engine's JSON writer
+would otherwise print fifty digits of it; whole numbers stay numbers. Every `surface` argument takes a name or an index and answers
 `found = false` with a reason for one this game does not have, as
 `tech_status`, `entity_count` and `find_entities` do for a name.
 

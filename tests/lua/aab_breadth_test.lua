@@ -66,9 +66,9 @@ check("research_queue names the running technology", queue.ok and queue.r.resear
 check("research_queue reports both entries", queue.ok and queue.r.queued == 2 and #queue.r.queue == 2)
 check("research_queue keeps engine order", queue.ok and queue.r.queue[1].tech == "logistics"
       and queue.r.queue[2].tech == "logistics-2")
-check("the head's progress comes from the force", queue.ok and queue.r.queue[1].progress == 0.25,
+check("the head's progress comes from the force", queue.ok and queue.r.queue[1].progress == "0.25",
       queue.ok and queue.r.queue[1].progress)
-check("a queued entry keeps its saved progress", queue.ok and queue.r.queue[2].progress == 0.5,
+check("a queued entry keeps its saved progress", queue.ok and queue.r.queue[2].progress == "0.5",
       queue.ok and queue.r.queue[2].progress)
 check("research_queue carries research unit counts", queue.ok and queue.r.queue[2].units == 200)
 
@@ -93,7 +93,7 @@ check("only the first repeat carries units",
       levels.ok and levels.r.queue[2].units == 2000 and levels.r.queue[3].units == nil
       and levels.r.queue[4].units == nil, levels.ok and F.encode(levels.r.queue))
 check("only the first repeat carries progress",
-      levels.ok and levels.r.queue[2].progress == 0.2 and levels.r.queue[3].progress == nil,
+      levels.ok and levels.r.queue[2].progress == "0.2" and levels.r.queue[3].progress == nil,
       levels.ok and F.encode(levels.r.queue))
 check("a summed unit count cannot double-count a repeat", (function()
   if not levels.ok then return false end
@@ -125,7 +125,7 @@ check("tech_status carries level and units", blocked.ok and blocked.r.level == 1
 local ready = call("tech_status", { force = "player", tech = "logistics" })
 check("a technology with every prerequisite met is available", ready.ok and ready.r.available == true,
       F.encode(ready))
-check("the running technology's progress comes from the force", ready.ok and ready.r.progress == 0.25)
+check("the running technology's progress comes from the force", ready.ok and ready.r.progress == "0.25")
 
 local no_tech = call("tech_status", { force = "player", tech = "wizardry" })
 check("an unknown technology is a found=false result, not an error",
@@ -201,9 +201,9 @@ check("a missing name argument is a provider_error",
 -- ── evolution ─────────────────────────────────────────────────────────
 local evo = call("evolution", { force = "player", surface = "nauvis" })
 check("evolution ok", evo.ok and evo.r.found == true, F.encode(evo))
-check("evolution reports the factor", evo.ok and evo.r.evolution_factor == 0.42)
+check("evolution reports the factor", evo.ok and evo.r.evolution_factor == "0.42")
 check("evolution reports all three parts",
-      evo.ok and evo.r.by_time == 0.2 and evo.r.by_pollution == 0.15 and evo.r.by_killing_spawners == 0.07,
+      evo.ok and evo.r.by_time == "0.2" and evo.r.by_pollution == "0.15" and evo.r.by_killing_spawners == "0.07",
       evo.ok and F.encode(evo.r))
 check("evolution asks about the surface it was given", S.last_evolution_surface == "nauvis")
 
@@ -213,20 +213,20 @@ check("evolution asks about the surface it was given", S.last_evolution_surface 
 S.force.get_evolution_factor = function() return 1 / 3 end
 local long_evo = call("evolution", { force = "player", surface = "nauvis" })
 check("evolution rounds the factor to four decimals",
-      long_evo.ok and long_evo.r.evolution_factor == 0.3333, long_evo.ok and long_evo.r.evolution_factor)
+      long_evo.ok and long_evo.r.evolution_factor == "0.3333", long_evo.ok and long_evo.r.evolution_factor)
 check("a rounded factor is short on the wire",
-      #F.encode(long_evo.r.evolution_factor) <= 6, F.encode(long_evo.r.evolution_factor))
+      #F.encode(long_evo.r.evolution_factor) <= 8, F.encode(long_evo.r.evolution_factor))
 
 -- ── pollution ─────────────────────────────────────────────────────────
 local poll = call("pollution", { force = "player", surface = "nauvis" })
 check("pollution ok", poll.ok and poll.r.found == true, F.encode(poll))
-check("pollution totals the surface", poll.ok and poll.r.total_pollution == 1234.5)
+check("pollution totals the surface", poll.ok and poll.r.total_pollution == "1234.5")
 check("pollution names the pollutant", poll.ok and poll.r.pollutant == "pollution"
       and poll.r.pollution_enabled == true)
 S.pollution.nauvis = 1234.56789
 local long_pollution = call("pollution", { force = "player", surface = "nauvis" })
 check("pollution rounds its total to two decimals",
-      long_pollution.ok and long_pollution.r.total_pollution == 1234.57,
+      long_pollution.ok and long_pollution.r.total_pollution == "1234.57",
       long_pollution.ok and long_pollution.r.total_pollution)
 S.pollution.nauvis = 1234.5
 
@@ -249,7 +249,7 @@ check("rockets cuts to limit and keeps the total",
 S.ticks_played = 216000 * 3 + 108000 -- three and a half hours
 local clock = call("game_time", { force = "player" })
 check("game_time ok", clock.ok, F.encode(clock))
-check("game_time turns ticks into hours", clock.ok and clock.r.hours == 3.5, clock.ok and clock.r.hours)
+check("game_time turns ticks into hours", clock.ok and clock.r.hours == "3.5", clock.ok and clock.r.hours)
 check("game_time reports the tick and the ticks played",
       clock.ok and clock.r.tick == S.tick and clock.r.ticks_played == S.ticks_played)
 check("game_time counts connected players",
