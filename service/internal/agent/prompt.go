@@ -34,9 +34,10 @@ func systemPrompt(q Question) string {
 		MaxSummaryLines, MaxCellChars, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows)
 	b.WriteString("The game renders the artifact, so send values, not formatting.\n\n")
 
-	b.WriteString("Answers print in the game's chat. Where you name a thing the game can draw, write it as Factorio rich text so it shows its icon: ")
-	b.WriteString("[item=iron-plate], [fluid=crude-oil], [entity=assembling-machine-2], [technology=logistics-2], [planet=nauvis]; ")
-	b.WriteString("wrap a warning in [color=red]...[/color]. Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
+	b.WriteString("Answers print in the game's chat. Where you name a thing the game can draw, write its sprite tag and nothing else, no name beside it: ")
+	b.WriteString("[img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=planet.nauvis], [img=quality.rare]. ")
+	b.WriteString("Never [item=...] or [entity=...], which print a label too. Wrap a warning in [color=red]...[/color]. ")
+	b.WriteString("Use the internal prototype names the tools return. Numbers keep the units the tool gave them.\n\n")
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")

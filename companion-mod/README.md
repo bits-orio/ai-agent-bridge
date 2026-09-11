@@ -300,8 +300,10 @@ Every string has its control characters replaced by spaces, so a player name
 echoed back into an answer cannot forge an extra line, and is clipped to 640
 bytes on a UTF-8 boundary. That clip is a backstop for a client that sends
 something silly: the service clips every cell to 160 characters first, and 160
-characters of Japanese or emoji is up to 640 bytes. Factorio rich text such as
-`[item=iron-plate]` passes through untouched.
+characters of Japanese or emoji is up to 640 bytes. Factorio rich text passes
+through untouched; the service sends icons as sprites alone, `[img=item.iron-plate]`
+rather than `[item=iron-plate]`, so an answer reads as icons and numbers the way a
+player's own line does.
 
 The first chat line is laid out like a player's own: the companion's name,
 the channel tag the scope provider gave, the session marker, a colon, then

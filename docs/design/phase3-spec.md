@@ -170,11 +170,14 @@ global mid-question still gets that answer privately, and the reverse.
   removed: a window opening over whatever the player was doing is an
   interruption, and chat is where the question was asked. Tables render as
   one line per row with ` | ` between cells, the column names first, as the
-  chat renderer already does. The system prompt asks the model for
-  Factorio rich text where it names a thing the game can draw: `[item=...]`,
-  `[fluid=...]`, `[entity=...]`, `[technology=...]`, `[planet=...]`, plus
-  `[color=...]` for a warning, so answers carry icons the way players' own
-  chat does.
+  chat renderer already does. Icons are sprites alone, never sprite plus
+  label (owner decision, 2026-09-11): the system prompt asks for
+  `[img=item.iron-plate]`, `[img=fluid.crude-oil]`, `[img=entity.x]`,
+  `[img=technology.x]`, `[img=planet.x]`, `[img=quality.x]`, and the
+  service rewrites any `[item=x]`, `[fluid=x]`, `[entity=x]`,
+  `[technology=x]`, `[recipe=x]`, `[tile=x]`, `[virtual-signal=x]` or
+  `[planet=x]` the model writes anyway into the img form, a quality suffix
+  into its own quality icon. `[color=...]` still marks a warning.
 - The "Got it, thinking about" echo stays asker-only.
 - The first answer line is laid out like a player's own chat line, name
   then badge then colon: `[AI Agent Bridge] [TEAM]: Forces: ...`, with the
