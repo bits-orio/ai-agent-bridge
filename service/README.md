@@ -213,7 +213,7 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
 ```json
 {
   "connected": true,
-  "mod_version": "0.1.0",
+  "mod_version": "1.0.0",
   "questions_answered": 12,
   "tokens_in": 21840,
   "tokens_out": 1130,
