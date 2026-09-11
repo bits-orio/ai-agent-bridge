@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/entity_count.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- entity_count: how many of one entity a force owns on one surface. The count
 -- happens inside the engine, over the whole surface, so this is one C++ pass and
 -- not a Lua walk over entities however large the base is.

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/audience.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Who reads a line about a question: its audience (docs/design/phase3-spec.md
 -- part 2). Shared by the answer renderer and the question echo, so the two
 -- can never disagree about who was allowed to hear what.

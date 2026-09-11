@@ -1,3 +1,7 @@
+-- AI Agent Bridge - tests/lua/fakegame.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- A stand-in for enough of the Factorio control-stage API to load the AI
 -- Agent Bridge companion and drive its protocol. Not a simulator: every value
 -- is the smallest thing the mod's own code touches.

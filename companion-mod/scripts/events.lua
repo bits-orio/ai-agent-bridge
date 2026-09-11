@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/events.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Append-only event log the service tails into history (CONTEXT.md "Event
 -- file", "History"; PLAN.md decision 4). Truncated once per session, then
 -- appended, written by the server copy only.

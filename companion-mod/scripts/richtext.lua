@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/richtext.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- One helper for every pass that rewrites chat text: apply a function to
 -- the stretches outside [..] tags and leave the tags themselves alone, so a
 -- sprite, a colour or a gps tag is never rewritten by a later pass.

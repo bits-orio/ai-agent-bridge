@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/flow.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Shared window resolution for every tool that reads LuaFlowStatistics, the
 -- quality summing all three of them need, and the sample arithmetic
 -- production_since needs. Surfaces are not resolved here: every surface-taking

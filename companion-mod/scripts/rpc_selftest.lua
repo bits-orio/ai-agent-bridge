@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/rpc_selftest.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Phase 0 diagnostic ops for aab-rpc (PLAN.md "Phase 0, checks"): the
 -- transport assumptions the whole design rests on. Kept apart from rpc.lua
 -- so the frozen Phase 1 protocol ops stay easy to read on their own; merged

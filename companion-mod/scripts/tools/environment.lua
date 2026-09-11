@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/environment.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- evolution and pollution: what the surface itself is doing to a force. They
 -- share a file because they share a subject and an argument, and because one
 -- feeds the other: pollution is one of the three inputs the engine adds up into

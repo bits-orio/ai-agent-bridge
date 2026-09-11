@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/basics.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The three tools that need nothing but game state: who the forces are, who
 -- plays on one, and what one is researching. Registered on the companion's own
 -- provider interface by scripts/tools/engine.lua.

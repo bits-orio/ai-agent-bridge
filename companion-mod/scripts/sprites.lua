@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/sprites.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Bare internal names become sprites at render time. The model is asked to
 -- write [img=item.iron-ore] and never "iron-ore" or "Iron ore", but a model
 -- that writes the internal name anyway still gets an icon: the companion

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - tests/provider-mod/aab-test-provider/control.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- A provider, and nothing else. It exists so the end-to-end harness can prove
 -- two things about a mod the companion has never heard of: that its tools turn
 -- up in the catalog through the agent_tools_v1 probe, and that an error inside

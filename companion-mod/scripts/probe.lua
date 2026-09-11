@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/probe.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Finds every provider's agent_tools_v1 probe in remote.interfaces
 -- (CONTEXT.md "Probe"), reads one provider's manifest, and routes the aab-rpc
 -- `call` op to one tool on one provider. Nothing here is ever stored: a

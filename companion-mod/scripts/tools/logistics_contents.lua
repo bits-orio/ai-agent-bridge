@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/logistics_contents.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- What one logistic network is holding, aggregated the way a player thinks
 -- about it: by item name, with the qualities folded in.
 --

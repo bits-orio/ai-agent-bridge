@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/production.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- item_rate and top_items: both read LuaFlowStatistics for one force and one
 -- surface. get_flow_count without a sample_index returns the average across
 -- the whole precision window, already normalised to per-minute for item

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/surface_lookup.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Shared "resolve a surface" helper for every engine tool that takes one. The
 -- one contract: a name or an index goes in, a LuaSurface or a found = false
 -- reply comes out. No surface-taking tool resolves its own argument.

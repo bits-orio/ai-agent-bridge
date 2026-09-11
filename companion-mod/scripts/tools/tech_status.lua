@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/tech_status.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- tech_status: where one named technology stands for one force, and what is
 -- blocking it. The other half of the research pair is
 -- scripts/tools/research.lua.

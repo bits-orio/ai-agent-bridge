@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/surfaces.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- list_surfaces: what places exist in this game, and where one force's players
 -- are standing. The agent needs it before any tool that takes a surface name,
 -- because a modded game can have surfaces nobody would guess.

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/ask_command.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The /ask console command, the way a player asks without any setting being
 -- touched. PLAN.md open question 1: /ask may already belong to another mod, so
 -- this registers it under pcall and falls back to /aab-ask, then remembers

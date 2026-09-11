@@ -281,3 +281,10 @@ internal/agent/        the loop, the grammar, sessions, artifacts, validation,
                        label substitution, quotas, the daily budget, the price table
 internal/controlapi/   /healthz and /v1/status
 ```
+
+## Licence
+
+MIT, see [LICENSE](../LICENSE) at the repository root, which covers the
+service, the companion mod and the tooling alike. The Go dependencies are
+all permissive: the Anthropic SDK and yaml.v3 under MIT, pkg/sftp and
+golang.org/x/crypto under BSD, modernc.org/sqlite under BSD.

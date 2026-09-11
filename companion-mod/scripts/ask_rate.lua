@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/ask_rate.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Rate limits on asking, at the companion, before anything else happens:
 -- before the echo to the audience, before the ring, before the service
 -- pays for a model call. The service has its own per-player quota for

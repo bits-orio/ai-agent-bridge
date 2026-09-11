@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/locate.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Where things are: find_entities and locate_player, the two reads behind a
 -- "where" question, each answering with positions the model writes as
 -- [gps=x,y,surface] so a player can click the ping.

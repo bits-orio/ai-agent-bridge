@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/tech_progress.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Where a technology's progress fraction lives, which is two places: the
 -- running technology's progress is on the force, and everything else keeps the
 -- fraction it had when it was last worked on, on the technology itself. Shared

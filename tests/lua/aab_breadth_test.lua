@@ -1,3 +1,7 @@
+-- AI Agent Bridge - tests/lua/aab_breadth_test.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The eight breadth-addendum engine tools, driven through the aab-rpc call op
 -- against the fake game. Companion to aab_test.lua, which covers the protocol
 -- and the original tools; this file only exercises the new ones.

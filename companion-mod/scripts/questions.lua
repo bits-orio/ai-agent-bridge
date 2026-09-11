@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/questions.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The question ring (CONTEXT.md "Question"), write side. The /ask command
 -- (scripts/ask_command.lua), the chat prefix (scripts/chat.lua) and the
 -- ai-agent-bridge-v1 remote interface all create one; the service drains them

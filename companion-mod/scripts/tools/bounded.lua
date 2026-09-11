@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/bounded.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Shared row bounds for the enumerating tools. Every tool that lists things
 -- has to say how many it will return and stop there: the rpc reply is refused
 -- whole once it passes the byte cap (CONTEXT.md invariant 4), so an unbounded

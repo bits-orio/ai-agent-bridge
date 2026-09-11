@@ -1,3 +1,7 @@
+-- AI Agent Bridge - tests/lua/aab_test.lua
+-- Author: bits-orio
+-- License: MIT
+--
 local SP = TEST_DIR
 local MOD = REPO_DIR .. "companion-mod/"
 local PROVIDER = REPO_DIR .. "tests/provider-mod/aab-test-provider/"

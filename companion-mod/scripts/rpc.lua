@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/rpc.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The aab-rpc-v1 protocol command (CONTEXT.md "Protocol", PLAN.md's op
 -- table). One JSON object in, one JSON object out via rcon.print, always
 -- exactly one reply, {ok=true,r=...} or {ok=false,e=...,m=...}. Phase 1 ops

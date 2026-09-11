@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/render_shapes.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Pure formatters: one artifact table -> an array of display-line strings, one
 -- shape each (ADR 0003, PLAN.md "Artifacts, v1 shapes"). Every cap is
 -- enforced by clipping, never by erroring: rendering is best-effort

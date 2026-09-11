@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/render.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Renders one answered question's artifact into chat (ADR 0003: "the model
 -- fills a shape; the companion renders it"). Chat is the one destination:
 -- the question was asked there, and a window opening over whatever the

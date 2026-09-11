@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/logistics.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- logistics_summary: the logistic networks one force has on one surface, read
 -- off the force's own list of them. The engine already groups its networks by
 -- surface, so nothing here walks entities.

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/remote.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The frozen remote interface CONTEXT.md calls the "Protocol" companion:
 -- ai-agent-bridge-v1. ask() lets any other mod submit a question the same
 -- way /ask does; get_event_id() lets any mod resolve on_answer.

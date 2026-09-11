@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/force_lookup.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Shared "resolve a force by name" helper for engine tools. Every engine
 -- tool except list_forces requires `force` and should error() on an unknown
 -- one, so scripts/probe.lua's call() maps it to a plain provider_error reply

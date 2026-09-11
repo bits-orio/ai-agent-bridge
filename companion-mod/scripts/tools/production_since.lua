@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/production_since.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- production_since: how much of one item a force made and used since a given
 -- tick. The service pairs it with a tick out of the event history, so
 -- "how much iron have we made since I last died" is one tool call.

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/research.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- research_queue: what a force is researching now and what is lined up behind
 -- it. tech_status, the other half of the research pair, lives in
 -- scripts/tools/tech_status.lua.

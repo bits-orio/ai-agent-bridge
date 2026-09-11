@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/rockets.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- rockets: how many rockets one force has launched, and what went up in them.
 -- Both are counters the engine keeps on the force, so this costs nothing however
 -- long the save has been running.

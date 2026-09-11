@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/labels.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Force labels: what players call a force (docs/design/phase3-spec.md,
 -- "Force labels"). A team mod knows that "team-1" is Team Ace; the companion
 -- does not, and a player must never read team-1 for a team they know as

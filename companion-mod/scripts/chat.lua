@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/chat.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The chat trigger (PLAN.md open question 2). Off until an operator sets
 -- aab-chat-prefix, so ordinary chat never reaches the model by accident.
 -- A line a player types that starts with the prefix becomes a question, with

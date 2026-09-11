@@ -1,3 +1,7 @@
+-- AI Agent Bridge - control.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- AI Agent Bridge, companion mod, control stage.
 --
 -- Wiring only. Every concern lives under scripts/; this file requires each

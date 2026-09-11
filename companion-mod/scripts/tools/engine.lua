@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/engine.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The companion's own tool provider: engine reads exposed as agent_tools_v1
 -- tools on the "ai-agent-bridge-tools" interface. Discovered by
 -- scripts/probe.lua the same way any other mod's tools are, because the

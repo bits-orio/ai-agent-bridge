@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/artifact_check.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Artifact validation for the `answer` op. The renderer clips and sanitises,
 -- it does not judge: anything that reaches it is presented somehow. This
 -- module is the judge, so a client that sends the wrong shape of data gets

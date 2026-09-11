@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/scope.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- Chat scope: who may hear an answer (docs/design/phase3-spec.md, part 2).
 --
 -- The companion never knows who is on which team. It asks, once per

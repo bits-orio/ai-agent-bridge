@@ -430,3 +430,8 @@ and the agent side keeps its own quotas and a daily budget.
 The full design lives in the repository: [CONTEXT.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/CONTEXT.md)
 for the words, [PLAN.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/PLAN.md)
 for the decisions.
+
+## Licence
+
+MIT, the mod and the whole repository alike: [LICENSE](https://github.com/bits-orio/ai-agent-bridge/blob/main/LICENSE)
+ships inside the mod zip, and every Lua file carries the notice in its header.

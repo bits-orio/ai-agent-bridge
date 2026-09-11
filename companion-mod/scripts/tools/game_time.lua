@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/tools/game_time.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- game_time: the clock, and who is on right now. The tool an agent reaches for
 -- before it quotes any tick at a player, because a tick means nothing to anyone
 -- until it is hours.

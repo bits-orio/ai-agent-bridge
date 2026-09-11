@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/probe_manifest.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- What a provider's manifest has to look like before the companion passes it
 -- on (CONTEXT.md "Manifest"). A manifest comes from another mod, so it is
 -- checked here rather than trusted: the tools reply is one JSON object, and a

@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/question_reads.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The read side of the question ring: the `poll` and `answers` ops. Both are
 -- pure reads, both take a cursor and a bounded row count, and both walk the
 -- ring oldest first so a caller can page through it with the id of the last

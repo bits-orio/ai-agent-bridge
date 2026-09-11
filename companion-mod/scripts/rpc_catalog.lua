@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/rpc_catalog.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- The catalog ops of aab-rpc-v1, all three pure reads, merged into rpc.lua's
 -- op table at load time the way scripts/rpc_selftest.lua is.
 --

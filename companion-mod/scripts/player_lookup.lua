@@ -1,3 +1,7 @@
+-- AI Agent Bridge - scripts/player_lookup.lua
+-- Author: bits-orio
+-- License: MIT
+--
 -- One guarded player lookup, shared by every path that resolves an asker's
 -- player_index (scripts/questions.lua, scripts/render.lua).
 --
