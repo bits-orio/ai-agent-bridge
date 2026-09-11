@@ -1,7 +1,7 @@
 {
   "mod": "ai-agent-bridge",
   "title": "AI Agent Bridge",
-  "summary": "Ask your running game a question in chat and get the answer in-game from an AI agent. The agent pulls only what each question needs over RCON, works for every force on a multiplayer server, and other mods can add tools to it. Needs the AI Agent Bridge service running beside the server (see source).",
+  "summary": "Ask your running game a question in chat and read the AI answer in chat, with item icons and map pings. Works on any multiplayer server for every force, other mods add lookups. The mod is the game side of an open protocol over RCON; run the agent from GitHub with your own model key, or write your own.",
   "category": "utilities",
   "tags": [],
   "tags_intentionally_empty": "No tag in the live portal vocabulary is honestly true of an AI question bridge; it is a gameplay-domain vocabulary. Discovery rests on title and summary.",

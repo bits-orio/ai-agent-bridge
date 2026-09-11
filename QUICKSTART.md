@@ -1,72 +1,60 @@
 # Quickstart
 
-The operator path from a fresh server to answering `/ask` in game. See
-[README.md](README.md) for what the two halves do and [PLAN.md](PLAN.md) for
-the phases; this page is only the steps.
-
-Status: the `run` subcommand this page describes is Phase 1, built alongside
-this page (see PLAN.md). Until it lands, `./aab status`, `./aab probe`,
-`./aab rpc` and `./aab poll` work against a server running the companion
-mod; there is no agent loop answering questions yet.
+From a server with nothing to a question answered in chat. Six steps; the
+two that matter are where the event log is and how to reach RCON.
 
 ## 1. Install the companion mod
 
-Get `ai-agent-bridge` from the in-game mod browser, or from
-[the GitHub repo](https://github.com/bits-orio/ai-agent-bridge), on every
-server and client that should see its answers. It needs nothing else: on
-its own it just holds questions in a ring buffer and waits for the service.
+`ai-agent-bridge` from the in-game mod browser or the
+[mod portal](https://mods.factorio.com/mod/ai-agent-bridge), on the server
+and on every client. It needs nothing else.
 
-## 2. Enable RCON on your server
+## 2. Turn on RCON
 
-The service is the only thing that polls, and it polls over RCON. Add to
-your launch command:
+The service talks to the mod over RCON. On a command line:
 
 ```sh
 --rcon-port 27015 --rcon-password <a password you pick>
 ```
 
-Most hosting panels (Pterodactyl and similar) expose these as fields in the
-server settings instead of launch flags; use whatever port and password the
-panel shows you.
+Hosting panels show the port and the password as fields in the server's
+startup settings; AleForge does under **Startup**. RCON is off while the
+password is blank.
 
-## 3. Get the service
+## 3. Build the service
 
-No prebuilt binary yet. Build it with Docker, no Go install needed:
+No prebuilt binary yet. Docker builds it, no Go install needed:
 
 ```sh
 git clone https://github.com/bits-orio/ai-agent-bridge
 cd ai-agent-bridge
 make service      # -> service/aab
-```
-
-## 4. Configure it
-
-```sh
 cd service
-cp aab.yaml.example aab.yaml
 ```
 
-Edit `aab.yaml`: point `factorio.rcon.address` at your server's host and
-RCON port, and pick `model.id`, any model OpenRouter lists that supports
-tool calling. The default, DeepSeek V4 Pro, answers a simple question for
-a fraction of a cent; `anthropic/claude-opus-5` costs a few cents. The
-example file lists a few with their prices.
-
-Put your secrets in a `.env` file next to `aab.yaml`, never in the YAML
-itself:
+## 4. Tell it the two things it needs
 
 ```sh
-cat > .env <<'EOF'
-FACTORIO_RCON_PASSWORD=<the password from step 2>
-OPENROUTER_API_KEY=<your OpenRouter API key>
-EOF
+cp aab.yaml.example aab.yaml
+cp ../.env.example .env
 ```
 
-Bring your own key from [openrouter.ai](https://openrouter.ai/keys). To talk
-to the Anthropic API directly instead, set `model.provider: anthropic`, put
-an Anthropic model id in `model.id` and `ANTHROPIC_API_KEY` in `.env`.
-The service brings the model and pays for every question; nothing else in
-this repository ever holds a key.
+In `aab.yaml`, fill in `factorio.rcon.address` and `factorio.events_file`.
+
+- **Service on the same machine as the server:** the address is
+  `127.0.0.1:<rcon port>` and the events file is the server's
+  `script-output/ai-agent-bridge/events.jsonl`; leave `transport: local`.
+- **Server on a host:** the address is `<host>:<rcon port>`, the events
+  file is the same path on the host's SFTP, and `factorio.sftp` gets the
+  SFTP host, port and user, with `transport: sftp`. On AleForge the SFTP
+  details are on the server's settings page and the password is your panel
+  password. [service/README.md](service/README.md) has both blocks to copy.
+
+In `.env`, fill in `FACTORIO_RCON_PASSWORD`, `SFTP_PASSWORD` when SFTP is
+in use, and `OPENROUTER_API_KEY` from [openrouter.ai](https://openrouter.ai/keys).
+The default model is DeepSeek V4 Pro; `model.id` in `aab.yaml` picks any
+other model OpenRouter lists that supports tool calling, and the example
+file names a few with their prices.
 
 ## 5. Run it
 
@@ -74,61 +62,43 @@ this repository ever holds a key.
 ./aab -config aab.yaml run
 ```
 
-Leave it running alongside your server: a systemd unit, a sidecar
-container, or a second terminal all work. It logs one line per question it
-answers, including the cost.
+It refuses to start until the two things are there and says which is
+missing. Leave it running: a second terminal, a systemd unit or a container
+all work, on any machine that can reach the server.
 
 ## 6. Ask in game
 
-Type in chat:
-
 ```
-/ask what is my iron plate rate on nauvis
+/ask what is my iron plate rate
 ```
 
-The answer prints back a few seconds later. If another mod already owns
-`/ask`, the companion falls back to `/aab-ask` and says which one is live
-in its `status` reply.
+The question is echoed to everyone, the answer prints a few seconds later,
+and anyone can follow up. `/ask new` starts over, `/ask #iron ...` names a
+session, `/ask sessions` lists them.
 
-## Troubleshooting
+## When it does not work
 
-- **Nothing happens after `/ask`.** The service does not log every poll
-  (that would be a line every second or two for nothing); it logs one line
-  the moment it actually picks a question up:
-
-  ```
-  question 3 from Alice (player 1, force player): what forces are there?
-  answer 3 shape=summary rounds=1 tokens=100/20 cost=$0.0004
-  ```
-
-  With nothing to do it says so every five minutes, `idle, 7 questions
-  answered`, so a quiet log still tells you the service is alive.
-
-  If you never see a `question N from ...` line for what you typed, the
-  service is either not reaching the server or holding your question back,
-  and two other lines tell you which. `run: poll failed: <error>` once (not
-  on every retry) means it cannot reach the server at all, so confirm
-  `factorio.rcon.address` and `FACTORIO_RCON_PASSWORD` actually match it.
-  `question N: no catalog available, leaving it pending and trying again
-  next tick` means it has your question and is waiting to read the tool list
-  off the companion; the `catalog:` line just above it names the reason, and
-  the question runs by itself once the list arrives.
-
-  If the `question` line shows up but the `answer` line, or the reply in
-  game, doesn't, look for `answer N: could not deliver it, trying again next
-  tick: <error>` right after it. `answer N: the companion refused the
-  artifact, sending a notice instead` means the answer itself was a shape
-  the game cannot render, so the asker gets a short notice in its place.
-- **The service refuses to start.** It writes `aab.effective.yaml` next to
-  itself on every run: the fully-resolved config with each secret marked
-  `SET (n chars)` or `MISSING`. Read that before re-reading the YAML.
-- **A question comes back as a short refusal instead of an answer.** Check
-  `agent.questions_per_player_per_hour` in `aab.yaml`; the default caps one
-  player at 20 questions an hour.
+- **Nothing happens after `/ask`.** The service logs one line the moment it
+  picks a question up: `question 3 from Alice (player 1, force player): ...`.
+  Without it, `poll failed: ...` in the log means it cannot reach RCON, so
+  the address or the password is wrong. `question 3: no catalog available`
+  means it has the question and is waiting to read the tool list; the line
+  above it says why.
+- **The service refuses to start.** Read `aab.effective.yaml` next to it:
+  every setting as resolved, each secret marked `SET (n chars)` or `MISSING`.
+- **The question is refused with a short notice.** The asker hit a cap: five
+  seconds between asks, 20 questions an hour per player, 120 an hour for the
+  server, five dollars a day. [SECURITY.md](SECURITY.md) lists them all and
+  where each is set.
+- **Answers name the wrong surface, or ask which one.** The service tells
+  the model which surface the asker is looking at and searches there; name
+  the surface or the team in the question for anything else.
 
 ## Links
 
 - Source and issues: https://github.com/bits-orio/ai-agent-bridge
 - Discord: https://discord.gg/tWz4FT74pH
-- Full protocol and design: [CONTEXT.md](CONTEXT.md), [PLAN.md](PLAN.md),
-  [docs/design/phase1-2-spec.md](docs/design/phase1-2-spec.md)
+- The protocol, for writing another agent:
+  [companion-mod/README.md](companion-mod/README.md)
+- The design: [CONTEXT.md](CONTEXT.md), [PLAN.md](PLAN.md),
+  [docs/design/](docs/design/)

@@ -1,72 +1,228 @@
-# AI Agent Bridge, Companion Mod
+# AI Agent Bridge, the companion mod
 
-Ask your running game a question in chat and get the answer back in-game from
-an AI agent. Any player can ask about any force. Other mods can add their own
-tools to the agent without this mod knowing anything about them.
+Ask your running game a question in chat and read the answer in chat, from an
+AI agent that looks up only what the question needs, the moment it is asked.
+Anyone can follow up. Any player can ask about any force. Other mods add their
+own lookups without this mod knowing they exist.
 
-> ### ⚠️ This mod needs a companion program to actually answer anything.
-> On its own the mod just holds questions in a ring buffer and waits. The piece
-> that reads them, calls an AI model, and answers back is the **AI Agent
-> Bridge service**, a small program you run alongside your server. It brings
-> its own API key and picks the model, this mod never talks to any AI
-> provider directly. Downloads and setup instructions are on GitHub:
->
-> # → https://github.com/bits-orio/ai-agent-bridge
+**This mod is not an AI.** It is the game side of a protocol. It holds the
+questions players ask, publishes the lookups an agent may run, renders the
+answers an agent sends back, and writes an event log. The thinking happens in
+a separate program, an *agent*, that talks to the mod over RCON. The
+repository ships one such agent, the [AI Agent Bridge service](https://github.com/bits-orio/ai-agent-bridge),
+but the mod is not tied to it: anything that speaks the protocol on this page
+can drive it, in any language, with any model, and the mod cannot tell the
+difference.
 
-## Setup in three steps
+Contents:
 
-1. **Install this mod** (you've done this, or get it from the in-game mod browser).
-2. **Enable RCON** on your server, the service uses it to poll questions and
-   send answers. The repo shows exactly how for each hosting style.
-3. **Run the service** from [the GitHub repo](https://github.com/bits-orio/ai-agent-bridge)
-   and point it at your server. Bring your own OpenRouter key and pick the
-   model in its config.
+1. [Setup](#setup)
+2. [Asking](#asking)
+3. [Settings](#settings)
+4. [For agent authors: the protocol](#for-agent-authors-the-protocol)
+5. [For mod authors: the five seams](#for-mod-authors-the-five-seams)
+6. [Tools this mod provides](#tools-this-mod-provides)
+7. [The events file](#the-events-file)
+8. [Safety](#safety)
 
-Once it's running, type `/ask <question>` in chat. The question is echoed to
-everyone who will see the answer, since a command is not a chat line, and the
-answer comes back a few seconds later, in chat, to everyone on the server so
-anyone can follow up.
-`/ask new ...` starts a fresh session, `/ask #iron ...` uses a named one that
+## Setup
+
+1. **Install the mod** on the server and on every client, from the in-game
+   mod browser or the [mod portal](https://mods.factorio.com/mod/ai-agent-bridge).
+   It needs nothing else and changes nothing about the game on its own.
+2. **Turn on RCON** on the server. Every agent talks to the mod over RCON, so
+   the server needs a port and a password: `--rcon-port 27015
+   --rcon-password <yours>` on the command line, or the RCON fields most
+   hosting panels show in their startup settings.
+3. **Run an agent.** The bundled service needs two things from you, where the
+   mod's event log is (a local path, or an SFTP path on a remote host) and the
+   RCON address and password, plus a model key. Its own page has the steps:
+   [service/README.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/service/README.md).
+   Or write your own; the protocol is below.
+
+## Asking
+
+Type `/ask` and a question. The mod echoes the question to everyone who will
+see the answer, since a command is not a chat line, and the answer arrives a
+few seconds later:
+
+```
+/ask what is my iron plate rate
+/ask where am I making repair packs
+/ask how is Team Ace doing on science
+```
+
+Follow-ups pile onto a shared **session**: whoever asks next in the same
+scope continues the same conversation, until three minutes pass with no
+question. `/ask new ...` starts over, `/ask #iron ...` uses a named session
 others can join, and `/ask sessions` lists what is open.
+
+Answers print to the whole server by default, with the same channel tag a
+player's own line carries when a chat privacy mod is installed. A team in
+team-only chat gets its answers privately, in a session nobody else sees.
+
+Items, fluids, machines and technologies show as icons, positions as
+clickable map pings, and forces by the name players use for them when a mod
+supplies it.
+
+If another mod already owns `/ask`, this mod registers `/aab-ask` instead
+and says so in its `status` reply. A chat prefix can ask as well, see the
+settings.
 
 ## Settings
 
-All of them are runtime-global: change them from Settings > Mod settings
-while the server runs, no restart needed.
+All runtime-global: change them under Settings, Mod settings, while the
+server runs.
 
 | setting | default | what it does |
 |---|---|---|
-| `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Turn it off and the file stops growing. |
-| `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks a question. Set it and any chat line starting with those exact characters becomes a question, with the rest of the line as the text. |
-| `aab-answer-audience` | server | `server` prints every global answer to the whole server, so anyone can follow up on it. `asker` prints only to the player who asked. A question a chat privacy mod marked private always prints to its own audience, whatever this says. |
-| `aab-ask-cooldown-seconds` | 5 | A player who asks again sooner is told to wait, privately; no echo, no question, no cost. 0 turns it off. |
+| `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Off stops the file growing. |
+| `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks. Set it and any chat line starting with those exact characters becomes a question, the rest of the line being the text. Matched literally, spaces included; pick something no sentence starts with, `?` or `@ai `. |
+| `aab-answer-audience` | server | `server` prints every global answer to everyone, so anyone can follow up. `asker` prints only to the player who asked. A question a chat privacy mod marked private always prints to its own audience. |
+| `aab-ask-cooldown-seconds` | 5 | A player who asks again sooner is told to wait, privately: no echo, no question, no cost. 0 turns it off. |
 | `aab-asks-per-minute` | 30 | When the whole server has asked this many times in a minute, further asks are refused privately until the minute turns. 0 turns it off. |
 
-The chat prefix is matched literally, spaces included, and never as a pattern.
-Pick something no ordinary sentence starts with, `?` or `@ai ` for example, or
-a prefix like `ai` will also fire on "airlocks are cheaper".
+## For agent authors: the protocol
 
-A question asked by another mod, or by a player who has since left, prints
-to the server (or to its private audience) like any other.
+Everything an agent needs is one console command, `aab-rpc-v1`, sent over
+RCON, plus the events file for history. The bundled Go service is one client
+of it; this section is enough to write another.
 
----
+### What an agent does
 
-## For mod authors, the five seams
+1. **Poll.** Every second or so, send `poll` and take the unanswered
+   questions it returns, oldest first.
+2. **Read the catalog.** `providers`, then one `manifest` per provider, gives
+   every lookup the server offers: this mod's own tools and any other mod's.
+   Rebuild it now and then; nothing about it is stored on either side.
+3. **Answer.** Run a model with those tools. Each tool call is one `call`;
+   the reply is plain JSON the model reads. When the model has an answer,
+   send it as an **artifact**, one of five small shapes, with `answer`.
+4. **Remember**, if you like. The events file carries deaths, research and
+   the rest, so "how much iron since I last died" is answerable.
 
-The companion knows nothing about any other mod. Five frozen, additive-only
-seams let other mods add tools, submit questions, receive answers, say who
-may hear an answer, and say what players call a force.
+The mod does the rendering, the audience, the icons and the safety. An
+agent never prints to chat, never chooses who reads an answer, and never
+runs anything that is not in the catalog.
+
+### The command
+
+`/aab-rpc <json>`. One JSON object in, one JSON object out through
+`rcon.print`. Every request carries `"v":1`. Every reply is
+`{"ok":true,"r":...}` or `{"ok":false,"e":"<code>","m":"<detail>"}`. The
+command answers RCON and the server console only; a player typing it into
+their own console gets one private line and nothing runs.
+
+| op | request | reply `r` | writes storage |
+|---|---|---|---|
+| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, which `/ask` command name is live | no |
+| `providers` | `{}` | sorted list of `{iface, v, tools}`, one per provider, `tools` being the sorted tool names | no |
+| `manifest` | `{i}` | one provider's manifest verbatim, `{v, tools}` | no |
+| `tools` | `{}` | every provider's manifest at once, for small servers and tests | no |
+| `call` | `{i, f, a?}` | the tool's return value, plain data | no |
+| `labels` | `{}` | sorted `{name, label}` rows: what players call each force, from any labels provider | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id above `after`, oldest first, each `{id, text, player_index, player_name, force, tick, scope, private, surface, physical_surface}` | no |
+| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, marks answered, raises `on_answer` |
+| `answers` | `{after?, limit?}` | answered questions with id above `after`, oldest first, each `{id, shape, lines, player_index}` | no |
+
+Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
+`provider_error`, `bad_artifact`, `bad_result`, `too_large`, `no_question`.
+
+Replies are capped: 8,000 bytes for `call` and `tools`, 32,768 for
+`manifest`, 65,536 for the rest. A reply over its cap is refused whole as
+`too_large`, never cut. That is why the catalog is read as `providers` then
+one `manifest` each: a mod with forty wordy tools costs itself its tools and
+nobody else theirs.
+
+### Questions
+
+`poll` returns questions nobody has answered yet, so `after` of 0 means
+everything still waiting, and an agent that restarts re-answers nothing.
+`last_id` on `status` is the highest id issued, the cursor for "from here
+on". `after` defaults to 0 and `limit` to 16, at most 64; page with the last
+id seen. Question text is capped at 400 bytes.
+
+A row carries who asked (`player_name`, kept after they leave), their force,
+the surface they were looking at and, in remote view, the one their
+character stands on, and the chat **scope**: `scope` is the session pool the
+question belongs to and `private` says its answer stays inside an audience
+the mod keeps to itself. An agent uses `scope` to keep conversations apart
+and never needs the audience.
+
+### Tool calls
+
+`call` takes the interface name `i`, the function `f` and one JSON object
+`a`. Every tool takes `force`: the agent fills it with the asker's force
+unless the question named another. `a` may be left out for a tool that
+needs nothing. A tool that fails answers `provider_error` with the first
+line of its message, which is written for a model to read and try again.
+
+Tools are described in a manifest with one grammar per parameter,
+`"<type>[!] <description>"`, the type one of `string`, `integer`, `number`,
+`boolean`, a trailing `!` for required. Turn that into whatever schema your
+model wants.
+
+### Artifacts
+
+The model fills one of five shapes; the mod renders it. Every shape but
+`notice` may carry a `title`, which becomes the first line.
+
+| shape | fields | caps |
+|---|---|---|
+| `summary` | `lines: string[]` | 3 lines |
+| `notice` | `text`, `level?` (`warning` or `confirmation`) | 1 line |
+| `list` | `items: string[]` | 10 items |
+| `table` | `columns: string[]`, `rows: string[][]` | 5 columns, 8 rows |
+| `comparison` | `columns: [a, b]`, `rows: {label, a, b}[]` | 5 rows |
+
+Two optional fields on any shape: `session: {name, fresh}` renders a
+`(new session)` marker when `fresh` is true, and `to_asker: true` prints the
+answer to the asker alone, for a refusal that is nobody else's business.
+
+Strings have their control characters replaced and are clipped to 640 bytes
+on a UTF-8 boundary, so a player name echoed into an answer cannot forge a
+line. Factorio rich text passes through: `[img=item.iron-plate]` for an
+icon, `[item=iron-plate]` for a clickable one, `[gps=x,y,surface]` for a
+map ping, `[color=red]...[/color]`. A bare hyphenated prototype name the
+model writes anyway, `iron-ore`, is turned into its icon at render time, and
+a force name is turned into the label players use when a mod supplies one.
+
+The first chat line is laid out like a player's own: the mod's name, the
+channel tag, the session marker, a colon, the answer. A table prints its
+column names and one row per line with ` | ` between cells.
+
+`answer` validates before it touches anything: an unknown shape or a
+mistyped field is `bad_artifact` and the question stays pending. Rendering
+happens before the question is marked answered, so a question is never
+marked done with nothing shown. Answering an already answered question
+succeeds and changes nothing, so a lost reply can be sent again.
+
+### Diagnostic ops
+
+Kept from the transport checks; not part of the frozen surface.
+
+| op | request | reply `r` |
+|---|---|---|
+| `ping` | `{}` | `{player_index, tick, has_player}` as the command received them |
+| `big` | `{kb}` | a JSON string of about `kb` kilobytes, `kb` clamped to 4096 |
+| `write` | `{}` | increments a counter in storage and raises `on_answer` with a test payload |
+| `pcall_test` | `{}` | calls a self-test provider that always errors, reports whether `pcall` caught it |
+
+## For mod authors: the five seams
+
+This mod knows nothing about any other mod. Five frozen, additive-only seams
+let a mod add tools, ask questions, receive answers, say who may hear an
+answer, and say what players call a force. Each is a function name the mod
+looks for on every remote interface, or one function on its own interface;
+nothing is registered and nothing is stored.
 
 ### 1. Tools by probe, `agent_tools_v1`
 
-Add a zero-argument `agent_tools_v1` function to any remote interface your
-mod already owns. The companion scans `remote.interfaces` for it on every
-agent turn, nothing to register, no dependency in either direction, and a
-removed mod just vanishes from the catalog on the next scan.
+Add a zero-argument `agent_tools_v1` to any remote interface you own. The
+mod scans `remote.interfaces` for it on every catalog read; a removed mod
+vanishes from the catalog on the next scan.
 
 ```lua
--- Everything a provider needs to write, in full, no change to its own
--- frozen API, no dependency on this mod.
 remote.add_interface("my-mod-tools", {
   agent_tools_v1 = function()
     return {
@@ -90,34 +246,22 @@ remote.add_interface("my-mod-tools", {
 })
 ```
 
-Notes:
-
-- `force` is reserved. The service injects it into every tool call's
-  argument table; a provider declares it nowhere in its own manifest.
-- Parameters use one grammar: `<type>[!] <description>`, type one of
-  `string`, `integer`, `number`, `boolean`, trailing `!` for required.
-- Tools return plain data only, a Lua table leaks through `remote.call`
-  intact, and a value that can't be serialised to JSON breaks the caller.
-- Your tool is always handed a table, even when the caller sent no arguments,
-  so `args.force` is safe to read without checking the table itself.
-- Raise a message a model should read with `error(message, 0)`. Level 0 keeps
-  your mod's file and line out of the sentence the agent sees.
-- Keep each tool bounded. A result over the size cap the service enforces is
-  refused, never truncated.
-- Your manifest is checked before it reaches the agent. An entry whose `desc`
-  is not a string, or whose `params` is not a map of strings, is dropped with
-  one line in the log, and a probe that errors or returns no `tools` table
-  costs you every tool but nobody else theirs. A dropped tool cannot be
-  called either, so a typo in a manifest shows up as `no_tool` rather than as
-  a broken catalog.
-- Keep your manifest small enough to send on its own. It is fetched one
-  provider at a time, so wordy descriptions cost you your own tools and
-  nobody else's, but they do still cost you yours.
+- `force` is reserved: the agent injects it into every call; declare it
+  nowhere.
+- Return plain data only; a Lua object leaks through `remote.call` intact
+  and a value that cannot be JSON breaks the caller.
+- Your tool is always handed a table, so `args.force` is safe to read.
+- Raise a message a model should read with `error(message, 0)`; level 0
+  keeps your file and line out of it.
+- Keep every tool bounded; a reply over the cap is refused, never cut.
+- A manifest entry whose `desc` is not a string, or whose `params` is not a
+  map of strings, is dropped with one line in the log, and cannot be called
+  either. A probe that errors costs you every tool but nobody else theirs.
 
 ### 2. Questions by interface, `ai-agent-bridge-v1`
 
-Frozen, owned by this mod. Guard every call the way you'd guard a call into
-any optional dependency:
+Frozen, owned by this mod. Guard every call the way you would guard any
+optional dependency:
 
 ```lua
 if remote.interfaces["ai-agent-bridge-v1"] then
@@ -135,64 +279,19 @@ end
 | `ask` | `{ text, player_index?, force?, scope? }` | the new question's id, or `nil` if `text` was missing |
 | `get_event_id` | `"on_answer"` | this session's event id for `on_answer`, or `nil` |
 
-`text` must be a non-empty string. `force` must be the force's *name*, a
-string, and `player_index` a number; pass a `LuaForce` or a name where an index
-belongs and that field is dropped rather than stored, because one unencodable
-question would break every later poll for everybody. Nothing here errors: a
-mistake in your spec costs you the question, never a crash.
-
-### 4. Chat scope by probe, `chat_scope_v1`
-
-A mod with a chat privacy feature, team-only chat for instance, decides who
-may hear an answer. Add a `chat_scope_v1(player_index, text)` function to any
-remote interface you own; the companion scans for it when a question is
-created, the way it scans for tools, and stores nothing.
-
-```lua
-chat_scope_v1 = function(player_index, text)
-  local player = game.get_player(player_index)
-  if not (player and my_channel_is_team_only(player)) then
-    return { key = "global", private = false, tag = GLOBAL_BADGE }
-  end
-  return {
-    key = player.force.name,                   -- equal keys share sessions
-    private = true,                            -- the answer stays inside the audience
-    audience = { force = player.force.name },  -- or { players = { 1, 5, 9 } }
-    label = "Team 3",                          -- optional, shown by /ask sessions
-    tag = TEAM_BADGE,                          -- optional rich text, printed verbatim
-  }
-end
-```
-
-`text` is the line as typed, so a "shout" rule can apply. A nil return means
-global. When several mods answer, a private answer wins over a global one. The
-result is fixed on the question when it is asked: an answer prints to that
-audience however the channel has changed since, so a team leaving private
-mode never sees its private session continue in the open. The `scope` table
-`ask` accepts has the same shape, for a mod asking on behalf of a channel of
-its own.
-
-### 5. Force labels by probe, `force_labels_v1`
-
-A mod that names forces, a team mod calling `team-1` "Team Ace" for instance,
-adds a zero-argument `force_labels_v1` to any interface it owns, returning
-`{ ["team-1"] = "Team Ace", ... }`. The companion scans for it and strips rich
-text. The swap happens at the edges and costs the model nothing: the service
-turns a label in a question into the force name before the model reads it
-("how is Team Ace doing" becomes "how is team-1 doing", and a bare "Ace" works
-too), and the renderer turns force names in an answer back into labels. Only
-force names with a digit, hyphen or underscore take part, so `player` stays a
-word. The `labels` op lists the merged map.
+`text` must be a non-empty string; `force` a force *name*; `player_index` a
+number. A field of the wrong type is dropped rather than stored, because one
+unencodable question would break every later poll. Nothing here errors.
+Questions asked this way are exempt from the ask rate limits, a mod being
+server code, and still count against the agent's own caps.
 
 ### 3. Answers by event, `on_answer`
 
-Raised once per answered question, for any subscriber. `e.artifact` is what
-the model submitted; `e.shape` and `e.lines` are what this mod rendered from
-it, the same lines the `answers` op returns. `get_event_id` must
-be resolved fresh every session, a `generate_event_name()` id is only valid
-in the session that generated it, so fetch it from `on_init` and
-`on_configuration_changed` (where `remote.call` is legal), cache it in
-`storage`, and read the cached value back in `on_load` (where it isn't):
+Raised once per answered question. `e.artifact` is what the agent sent;
+`e.shape` and `e.lines` are what this mod rendered, the same lines the
+`answers` op returns. A `generate_event_name()` id is only valid in the
+session that made it, so fetch it in `on_init` and
+`on_configuration_changed`, cache it in `storage`, and reuse it in `on_load`:
 
 ```lua
 local function on_answer(e) --[[ e.qid, e.question, e.artifact, e.shape, e.lines ]] end
@@ -211,228 +310,99 @@ end
 
 script.on_init(function() fetch_event_id(); register_handler() end)
 script.on_configuration_changed(function() fetch_event_id(); register_handler() end)
-script.on_load(register_handler) -- no remote.call here; reuses the cached id
+script.on_load(register_handler)
 ```
 
----
+### 4. Chat scope by probe, `chat_scope_v1`
 
-## The protocol, `aab-rpc-v1`
+A mod with a chat privacy feature decides who may hear an answer. Add
+`chat_scope_v1(player_index, text)` to any interface you own; the mod calls
+it when a question is created and stores the result on the question.
 
-The `/aab-rpc` command answers RCON and the server console only. A player
-typing it into their own console gets one private line and nothing runs.
+```lua
+chat_scope_v1 = function(player_index, text)
+  local player = game.get_player(player_index)
+  if not (player and my_channel_is_team_only(player)) then
+    return { key = "global", private = false, tag = GLOBAL_BADGE }
+  end
+  return {
+    key = player.force.name,                   -- equal keys share sessions
+    private = true,                            -- the answer stays inside the audience
+    audience = { force = player.force.name },  -- or { players = { 1, 5, 9 } }
+    label = "Team 3",                          -- optional, shown by /ask sessions
+    tag = TEAM_BADGE,                          -- optional rich text, printed verbatim
+  }
+end
+```
 
-One console command, `/aab-rpc <json>`. One JSON object in, one JSON object
-out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
-`{"ok":false,"e":"<code>","m":"<detail>"}`. Every request needs `{"v":1, ...}`.
+`text` is the line as typed, so a "shout" rule can apply. A nil return means
+global. When several mods answer, a private answer wins. The result is fixed
+when the question is asked, so an answer prints to that audience however
+the channel has changed since, and a team leaving private mode never sees
+its private session continue in the open. [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support)
+answers this from its team chat mode.
 
-| op | request | reply `r` | writes storage |
-|---|---|---|---|
-| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, which `/ask` command name is live | no |
-| `providers` | `{}` | sorted list of `{iface, v, tools}`, one per provider, `tools` being the sorted tool names | no |
-| `manifest` | `{i}` | one provider's manifest verbatim, `{v, tools}` | no |
-| `tools` | `{}` | sorted list of `{iface, v, tools}`, one per provider, manifests and all | no |
-| `call` | `{i, f, a?}` | the provider's return value, plain data | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after`, oldest first, each `{id, text, player_index, player_name, force, tick}` | no |
-| `answer` | `{qid, artifact}` | `true` | yes: marks answered, renders it, raises `on_answer` |
-| `answers` | `{after?, limit?}` | answered questions with id greater than `after`, oldest first, each `{id, shape, lines, player_index}` | no |
+### 5. Force labels by probe, `force_labels_v1`
 
-Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
-`provider_error`, `bad_artifact`, `bad_result`, `too_large`, `no_question`.
-
-### Reading the catalog in two steps
-
-`providers` then one `manifest` per provider is how a client should read the
-catalog. Every reply this command sends has a byte cap, and `tools` puts every
-provider on the server under one of them: install one mod with forty wordy tool
-descriptions and the whole catalog comes back `too_large`, which leaves an agent
-answering with no tools at all, the companion's own included. `providers` is
-names only, so it stays small however much anyone had to say, and a `manifest`
-too large to send costs that one provider its tools and nobody else theirs.
-`tools` stays for small servers and for the test harness.
-
-`manifest` takes `i`, the provider's interface name, and answers `no_provider`
-when nothing by that name carries a probe. Both ops drop exactly what the
-catalog drops: an entry whose `desc` is not a string, a provider whose probe
-errors.
-
-`a` is optional on `call`. A tool always receives a table, so a tool that takes
-no arguments can be called with none and a tool that needs `force` answers
-"force is required" in its own words rather than erroring on a nil argument. An
-`a` that is not an object is `bad_json`.
-
-`after` defaults to 0 and `limit` to 16, with 64 the most any one reply
-carries. Page by sending the id of the last row you saw as the next `after`.
-
-`poll` returns questions nobody has answered yet, so `after` 0 means
-"everything still waiting" and a client that restarts and forgets its cursor
-re-answers nothing. `last_id` on `status` is the highest id the game has
-issued, which is the cursor a client wants for "tell me about questions from
-here on". Nothing about a cursor is stored in the save.
-
-`player_name` is the asker's name as it was when they asked, kept on the row
-even after they leave, because history is keyed by player name rather than by
-index. It is absent for a question another mod asked with no player.
-
-`answer` validates the artifact before it touches anything: a shape it does
-not know, or a field of the wrong type, comes back as `bad_artifact` and the
-question stays pending and answerable. Rendering happens before the question
-is marked answered, so an artifact that cannot be drawn never leaves a
-question marked done with nothing behind it. Answering a question that is
-already answered succeeds and changes nothing, so a client whose reply went
-missing can safely send the same answer again.
-
-`lines` on an `answers` row is exactly what the asker saw, title first when
-the artifact had one, already clipped to the shape's caps and stripped of
-control characters. The `answer` op stores them; `answers` only reads them.
-
-This mod never writes `storage` from the `aab-rpc` command except on
-`answer`. A lost RCON reply costs nothing, the service re-polls the same
-cursor.
-
-### Phase 0 diagnostic ops
-
-Used to measure the transport assumptions the design rests on; not part of
-the frozen v1 surface above.
-
-| op | request | reply `r` |
-|---|---|---|
-| `ping` | `{}` | `{player_index, tick, has_player}` as received by the command |
-| `big` | `{kb}` | a JSON string of roughly `kb` kilobytes, to find where RCON truncates a reply, `kb` clamped to 4096 |
-| `write` | `{}` | increments a counter in storage, raises `on_answer` with a test payload, returns the new counter |
-| `pcall_test` | `{}` | calls a self-test provider that always errors, returns whether `pcall` caught it |
-
-## Answer artifacts
-
-The model fills one of five shapes; this mod renders it, never the other way
-round. Every shape but `notice` may carry a `title`, which becomes the first
-chat line. Every shape may carry `session = { name, fresh }`, rendered as a
-`(new session)` or `(new session #name)` marker after the channel tag when
-`fresh` is true.
-
-- `summary`, up to three lines.
-- `comparison`, two named columns, up to five rows.
-- `list`, up to ten rows, one line each.
-- `table`, up to five columns, up to eight rows.
-- `notice`, one line, a warning or confirmation.
-
-Every string has its control characters replaced by spaces, so a player name
-echoed back into an answer cannot forge an extra line, and is clipped to 640
-bytes on a UTF-8 boundary. That clip is a backstop for a client that sends
-something silly: the service clips every cell to 160 characters first, and 160
-characters of Japanese or emoji is up to 640 bytes. Factorio rich text passes
-through untouched; the service sends icons as sprites alone, `[img=item.iron-plate]`
-rather than `[item=iron-plate]`, so an answer reads as icons and numbers the way a
-player's own line does. A bare hyphenated prototype name the model writes anyway,
-`iron-ore` or `assembling-machine-2`, is turned into its sprite at render time; the
-companion knows every prototype, so the lookup is exact.
-
-The first chat line is laid out like a player's own: the companion's name,
-the channel tag the scope provider gave, the session marker, a colon, then
-the answer. A `table` prints its column names and one row per line with
-` | ` between cells.
+A mod that names forces adds a zero-argument `force_labels_v1` to any
+interface it owns, returning `{ ["team-1"] = "Team Ace", ... }`. The mod
+strips rich text and swaps at the edges: the agent turns a label in a
+question into the force name before the model reads it, and this mod turns
+force names in an answer back into labels. Only force names with a digit,
+hyphen or underscore take part, so `player` stays a word. The `labels` op
+lists the merged map.
 
 ## Tools this mod provides
 
-The companion is a provider like any other mod, on the interface
-`ai-agent-bridge-tools`. `force` is injected into every one of these by the
-service.
+The mod is a provider like any other, on the interface
+`ai-agent-bridge-tools`. `force` is injected into every one of these.
 
 | tool | arguments | returns |
 |---|---|---|
 | `list_forces` | `limit` | the forces: name, player count, connected player count, with `total` and `shown` |
 | `list_players` | `connected`, `limit` | that force's players: name, connected, admin, with `known`, `total` and `shown` |
-| `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it, with `total` and `shown` |
+| `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it |
 | `current_research` | force only | what that force is researching, and its progress |
-| `research_queue` | `limit` | the running technology and the queue behind it, in engine order: name, level, research units, progress, with `queued` and `shown` |
-| `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, and which prerequisites are still missing |
-| `item_rate` | `surface`, `item`, `window` | production and consumption of one item, per minute, summed over every quality |
+| `research_queue` | `limit` | the running technology and the queue behind it: name, level, research units, progress |
+| `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, missing prerequisites |
+| `item_rate` | `surface`, `item`, `window` | production and consumption of one item per minute, summed over every quality |
 | `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked, each summed over every quality |
-| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick, over every quality |
-| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robot totals, robots available, cells, and the eight largest item counts, busiest network first |
-| `entity_count` | `surface`, `name` | how many entities of one prototype name that force has on one surface, counted by the engine |
-| `evolution` | `surface` | the evolution factor on one surface, and its time, pollution and spawner-kill parts |
-| `pollution` | `surface` | total pollution on one surface, and which pollutant it uses |
-| `rockets` | `limit` | rockets launched by that force, and the items it sent up, largest first |
+| `production_since` | `surface`, `item`, `since_tick` | how many of one item that force produced and consumed since a tick |
+| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robots, idle robots, cells, the eight largest item counts |
+| `entity_count` | `surface`, `name` | how many entities of one prototype that force has on one surface, counted by the engine |
+| `evolution` | `surface` | the evolution factor on one surface and its time, pollution and spawner-kill parts |
+| `pollution` | `surface` | total pollution on one surface and which pollutant it uses |
+| `rockets` | `limit` | rockets launched by that force and the items it sent up, largest first |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
-| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`, `ghost`, `limit` | where that force's entities are on one surface: name, x, y and a ready `[gps=x,y,surface]` tag per row, filtered by prototype name, entity type, the recipe a crafting machine is set to or the item or fluid that recipe makes; ghosts match by what they will become and rows carry `ghost = true`, `ghost` narrows to ghosts or built; with `scanned`, `truncated`, `total` and `shown`; an unknown name comes back with up to five close names |
-| `locate_player` | `player` | where one player's character is: surface, x, y, a ready `[gps=...]` tag, whether they are connected, and `viewing` when they are looking at another surface in remote view |
+| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`; `ghost`, `limit` | where that force's entities are on one surface, each with a ready `[gps=x,y,surface]` tag: by prototype name, entity type, the recipe a crafting machine is set to, or the item or fluid that recipe makes; ghosts match by what they will become and say `ghost = true`; an unknown name comes back with up to five close names |
+| `locate_player` | `player` | where one player's character is, with a gps tag, whether they are connected, and `viewing` when they look at another surface |
 
-Every tool that lists things is bounded, because a reply over the byte cap is
-refused whole rather than cut short. `list_players` shows connected players
-only unless you pass `connected = false`, and returns 20 rows by default, 50 at
-most. `list_surfaces` returns 20 by default and 50 at most; `list_forces` 50 by
-default and 100 at most. All three sort by name before they cut and report
-`total` beside `shown`, so an agent can say "12 online of 214 known" instead of
-believing it saw everyone. `research_queue` and `tech_status` return 10 rows by
-default and 25 at most, `rockets` the same, and `logistics_summary` 5 networks,
-which is also its maximum, with eight item rows inside each. Contents and items
-are ranked by count before the cut, so what survives is the part worth reading.
-`find_entities` asks the engine for at most 2,000 entities of one force on one
-surface, one bounded pass however large the base, then keeps the ones on the
-recipe asked for and returns 5 positions by default, 10 at most; `truncated`
-says when the pass hit its cap.
+Every list is bounded and sorted before it is cut, and reports `total`
+beside `shown`, so an agent can say "12 online of 214 known" instead of
+believing it saw everyone. `find_entities` asks the engine for at most 2,000
+entities in one pass and returns 5 positions by default, 10 at most;
+`truncated` says when the pass hit its cap. Every double is rounded before
+it is sent. Every `surface` argument takes a name or an index and answers
+`found = false` with a reason for one this game does not have, as
+`tech_status`, `entity_count` and `find_entities` do for a name.
 
-Every double in a reply is rounded before it is sent: four decimals for an
-evolution factor, two for a progress fraction, a rate, an hour count or a
-pollution total. A raw double reaches a reader as fifty-odd digits of
-`0.3100000000000000088817841970012523233890533447265625`, which spends the
-reply's budget on nothing and invites a model to quote precision that was never
-measured.
+Rates and totals are summed over every quality, because the engine treats a
+bare item name as normal quality alone. `window` is one of the engine's own
+precisions: `five_seconds`, `one_minute`, `ten_minutes`, `one_hour`,
+`ten_hours`, `fifty_hours`, `two_hundred_fifty_hours`, `one_thousand_hours`.
+`production_since` sums flow samples from the smallest window that covers
+the elapsed ticks and reports `elapsed_ticks`, `covered_ticks` and
+`covers_full_period`, since the engine keeps 300 samples per window.
 
-Every tool that takes a `surface` takes either a name or the index
-`list_surfaces` publishes, resolves it the same way as every other, and answers
-`found = false` with a reason when this game has no such surface. `tech_status`
-does the same for a technology name and `entity_count` for an entity prototype
-name. Those three arguments are the ones a model guesses from memory, and a
-guess that costs a whole round teaches it nothing; a reply that says "no surface
-by that name or index, call `list_surfaces`" gets the next call right. "Surface
-is required" is reserved for an argument that was genuinely absent. A force name that does
-not exist is still an error, because the service injects that one rather than
-guessing it.
+## The events file
 
-`logistics_summary` reads the force's own list of networks, `entity_count` asks
-the engine to count, and `rockets`, `game_time` and `evolution` read counters the
-engine already keeps. None of them walks entities in Lua, so they cost the same
-on a thousand-hour base as on a fresh map. `pollution` is the exception worth
-knowing about: it is the engine's whole-surface sum, which visits every chunk
-holding pollution.
-
-`item_rate`, `top_items` and `production_since` read one figure per quality and
-add them up, because the engine treats a bare item name as normal quality alone:
-a force making the same plate at five qualities would otherwise be told its own
-production was a fifth of what it is. `logistics_summary` aggregates a network's
-contents by item name for the same reason, reports `distinct_items` as the number
-of names, and adds a `qualities` breakdown to a row held at more than one. A row
-held at a single quality other than normal says which one.
-
-`research_queue` gives a level-based technology one row per queue entry, because
-three queued levels of mining productivity are three entries resolving to one
-technology. Each row reports the level it will research, the current level plus
-the repeats ahead of it. `units` and `progress` belong to the first row only, so
-never sum `units` over the repeats: the later levels cost more and the engine
-keeps that in a count formula this does not evaluate.
-
-`window` is one of the engine's own precisions: `five_seconds`, `one_minute`,
-`ten_minutes`, `one_hour`, `ten_hours`, `fifty_hours`,
-`two_hundred_fifty_hours`, `one_thousand_hours`.
-
-`production_since` pairs with a tick out of the event history, so "how much
-iron since I last died" is one call. It sums the engine's flow samples from the
-smallest precision window that covers the elapsed ticks. The engine keeps 300
-samples per window, so the sum rounds up to a whole number of samples. The
-reply reports `elapsed_ticks`, `covered_ticks` and `covers_full_period` so you
-can see by how much, and the newest sample is still filling as you read it.
-Both errors shrink as the period grows.
-
-## `events.jsonl` line shape
-
-Appended to `script-output/ai-agent-bridge/events.jsonl`, gated by the
-`aab-events-enabled` setting, truncated once per session and appended to after
-that. The server writes it, never a client. One JSON object per line:
+Appended to `script-output/ai-agent-bridge/events.jsonl` while
+`aab-events-enabled` is on, truncated once per session. The server writes
+it, never a client. One JSON object per line:
 
 ```json
 {"event":"player_died","tick":1234,"data":{"player":"Bob","force":"player","cause":"small-biter"}}
-{"event":"question","tick":1240,"data":{"qid":7,"player":"Bob","force":"player","text":"how much iron since I died"}}
+{"event":"question","tick":1240,"data":{"qid":7,"player":"Bob","force":"player","text":"how much iron since I died","scope":"global","private":false}}
 {"event":"answer","tick":1512,"data":{"qid":7,"shape":"summary"}}
 ```
 
@@ -443,14 +413,20 @@ that. The server writes it, never a client. One JSON object per line:
 | `console_chat` | `player`, `force`, `message` |
 | `research_finished` | `force`, `tech`, `level` |
 | `rocket_launched` | `force`, `surface` |
-| `question` | `qid`, `player`, `force`, `text` |
+| `question` | `qid`, `player`, `force`, `text`, `scope`, `private` |
 | `answer` | `qid`, `shape` |
 
-A question a player asked with the chat prefix appears twice, once as the
-`console_chat` line they typed and once as the `question` it became.
+An agent on the same machine reads the file; one elsewhere reads it over
+SFTP. The bundled service does either.
 
-See the [GitHub repo](https://github.com/bits-orio/ai-agent-bridge) for the
-full design (`CONTEXT.md`, `PLAN.md`) and the service that drives this
-protocol.
+## Safety
 
-Question text is kept to 400 bytes, cut on a UTF-8 boundary, so a full poll page of sixteen questions always fits one reply. The service halves its page size if a reply is still refused as too large.
+What players can do, what an agent can do, what it can cost and the guards
+on each are in [SECURITY.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/SECURITY.md).
+In short: the rpc command runs for RCON only, asking is rate limited before
+anything else happens, refusals are private, every tool is a bounded read,
+and the agent side keeps its own quotas and a daily budget.
+
+The full design lives in the repository: [CONTEXT.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/CONTEXT.md)
+for the words, [PLAN.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/PLAN.md)
+for the decisions.

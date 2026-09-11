@@ -1,46 +1,49 @@
 # AI Agent Bridge
-> Ask your server a question in chat. An AI agent reads the live game state and answers you.
+> Ask your server a question in chat. An AI agent reads the live game and answers you there.
 
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/tWz4FT74pH) [![GitHub](https://img.shields.io/badge/GitHub-source-181717?logo=github&logoColor=white)](https://github.com/bits-orio/ai-agent-bridge)
 
-You type a question in chat and get an answer back in the game, pulled fresh from your running save. Nothing is exported or scanned ahead of time: the agent reads only what your question needs, the moment you ask it. It works on any multiplayer server, answers about any force, and other mods can hand it new things to look up.
+Type `/ask` and a question in chat. The answer comes back in chat a few seconds later, pulled fresh from your running save, with item icons and clickable map pings. Anyone can follow up. It works on any multiplayer server, vanilla or modded, one force or twenty, and other mods can hand it new things to look up.
+
+This mod is the game side of an open protocol, not an AI. It holds questions, publishes lookups, renders answers and writes an event log; an agent program you run beside the server does the thinking, over RCON. The one on GitHub uses your own OpenRouter key and any model you pick. Anyone can write another.
 
 ## Status
 
-Design stage. Nothing here is installable or playable yet. The protocol and the phase plan are written and public on GitHub; the companion mod and the service that drives it are still being built. Watch the Discord or the GitHub repo for the first runnable release.
+First release. The protocol is frozen and additive from here. Tested on 2.0 headless servers and with Multi-Team Support.
 
 ## Quick start
 
-Once the first release ships, running it looks like this:
-
-1. Install the companion mod on your Factorio server.
-2. Run the AI Agent Bridge service next to the server (one small program, you keep your own OpenRouter key and pick the model).
-3. Point the service at your server over RCON.
-4. Type `/ask` followed by your question in game chat.
-5. Read the answer in chat, with item icons rendered inline, and ask a follow-up; anyone can.
+1. Install this mod on the server and every client.
+2. Turn on RCON on the server (a port and a password, in your launch settings or your hosting panel).
+3. Run the agent from GitHub, telling it where the mod's event log is and how to reach RCON, with your model key: https://github.com/bits-orio/ai-agent-bridge/blob/main/QUICKSTART.md
+4. Type `/ask what is my iron plate rate` in chat.
 
 ## Features
 
-- Pulls only what a question needs, when it's asked. No standing export, no background scan.
-- Every tool takes a force, so any player can ask about any force on the server, not just their own.
-- Answers come back as small typed shapes, a summary, a comparison, a list, a table, rendered by the mod, never raw model text.
-- Other mods add their own tools by exposing one function. The companion never needs to know they exist.
-- You bring your own Anthropic API key and pick the model. Cost per question is visible, never hidden.
-- History of what happened on your save (deaths, research, rockets) is kept by the service, so "since I last died" is a real question you can ask.
+- Pulls only what a question needs, when it is asked. No standing export, no background scan.
+- Follow-ups share a session; `/ask #iron` names one that others can join, `/ask new` starts over.
+- Every lookup takes a force, so any player can ask about any force on the server.
+- "Where" questions answer with map pings you can click, ghosts included.
+- Answers are small typed shapes rendered by the mod, never raw model text; items show as icons.
+- Team chat privacy and team names come from mods that have them, through two small probes.
+- Other mods add their own lookups by exposing one function; this mod never needs to know them.
+- You bring your own key and pick the model. Every question's cost is visible and capped.
 
 ## Compatibility
 
-Needs Factorio 2.0 or later and the AI Agent Bridge service running beside your server with your own Anthropic API key. Works on a plain vanilla server: it has no mod-specific code of its own.
-
-Multi-force from the start. Every tool takes a force as a parameter, so it works the same whether your server runs one force or twenty.
+Factorio 2.0. Works on a plain vanilla server. Needs RCON on the server and an agent running beside it.
 
 ## Works with
 
-Runs well alongside [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge), which already needs RCON on the same server. Neither one depends on the other.
+- [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support): answers stay inside a team's private chat and teams are named the way players name them.
+- [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge): shares the same RCON and the same event log layout. Neither depends on the other.
+
+Part of the MTS family: [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support), [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge).
 
 ## Links
 
 - [Source on GitHub](https://github.com/bits-orio/ai-agent-bridge)
+- [The protocol, for writing your own agent](https://github.com/bits-orio/ai-agent-bridge/blob/main/companion-mod/README.md)
 - [Report a bug](https://github.com/bits-orio/ai-agent-bridge/issues)
 - [Community Discord](https://discord.gg/tWz4FT74pH)
 
