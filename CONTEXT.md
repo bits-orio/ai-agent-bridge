@@ -58,6 +58,17 @@ messages and the portal page use them the same way.
   chat, joins, research and rockets. Never rewritten, truncated once per session.
 - **History**: the service's SQLite store fed by tailing the event file. The
   service keeps the whole history of a save; the companion keeps none.
+- **Session**: the short shared transcript of questions and rendered answers
+  that follow-ups see. Keyed by scope key plus an optional `#name`; ends by
+  idle time, by a cap, or on `new`. Never holds a tool result.
+- **Scope**: who may hear an answer. Global by default; a scope provider may
+  make a question private to an audience. Fixed on the question row when the
+  question is created.
+- **Scope provider**: any mod exposing `chat_scope_v1(player_index, text)` on
+  a remote interface. Found by scan like a tool provider, never stored.
+- **Audience**: the force or player list a private answer prints to.
+- **Tag**: the channel badge a scope provider hands back, printed verbatim
+  after the companion's name on the first answer line.
 - **Flow statistics**: the engine's own production history, read live. Never
   copied into history.
 

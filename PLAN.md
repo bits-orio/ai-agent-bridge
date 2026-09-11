@@ -83,7 +83,7 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 | `providers` | `{}` | sorted list of `{iface, v, tools: [names]}`, one small row per provider | no |
 | `manifest` | `{i}` | one provider's manifest verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64) | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope` and `private` (Phase 3) | no |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
 | `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer` |
 
@@ -115,6 +115,8 @@ Player-facing: `/ask <question>`. A chat prefix is a setting, off by default.
 - `list`: up to ten rows, one line each.
 - `table`: up to five columns, up to eight rows.
 - `notice`: one line, a warning or confirmation.
+- Every shape may carry `session: {name, fresh}` (Phase 3), rendered as a
+  `(new session)` marker; older companions ignore it.
 
 ## Phases
 
@@ -139,7 +141,18 @@ history and the history tools. Per-player follow-up context with a TTL.
 Round and token caps, per-player quota. Validates: a third mod adds a tool
 without touching this repository, and "since I last died" answers correctly.
 
-**Phase 3, operators.** The wizard, sidecar and egg, compose, the AleForge
+**Phase 3, sessions, scope and OpenRouter. Specified 2026-09-10,
+[docs/design/phase3-spec.md](docs/design/phase3-spec.md).** Shared sessions
+keyed by chat scope and an optional `#name`, ended by idle time, a cap or
+`new`; a `chat_scope_v1` probe any privacy mod may answer, fixed on the
+question when it is asked, with the channel tag on the answer line; the
+model backend moved to OpenRouter with the reported cost as the cost.
+Validates: two players pile follow-ups onto one session and a team in
+private mode never sees its session continue in the open; the same question
+answered on Claude and on DeepSeek with the operator's config line as the
+only difference.
+
+**Phase 4, operators.** The wizard, sidecar and egg, compose, the AleForge
 guide, the portal page, `1.0`. Validates: an operator with no shell installs
 it from the hosting panel.
 
@@ -171,9 +184,11 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    chat are player-typed and flow into the model as data. Current plan: the
    system prompt labels every tool result as untrusted, and artifacts are
    structured so injected text cannot change layout or trigger actions.
-7. **Model providers.** Current plan: the Anthropic SDK only through `1.0`,
-   behind a small interface in the agent package so a second provider is an
-   addition rather than a rewrite.
+7. **Model providers.** Resolved 2026-09-10 the other way round: models go
+   through OpenRouter (ADR 0007), which is what makes Claude and DeepSeek a
+   config line apart. The direct Anthropic client stays selectable and
+   frozen. The `model.Model` boundary the agent package was built on is what
+   made this an addition.
 8. **Runtime-global settings cannot be written from RCON.** `settings.global`
    writes from a console command are refused by the engine (measured 2026-09-10).
    Current plan: the harness seeds `mod-settings.dat` before the map exists;
