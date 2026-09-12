@@ -363,10 +363,10 @@ The mod is a provider like any other, on the interface
 
 | tool | arguments | returns |
 |---|---|---|
-| `list_forces` | `limit` | the forces: name, player count, connected player count, with `total` and `shown` |
+| `list_forces` | `include_empty`, `limit` | the forces that have ever had a player: name, player count, connected player count, with `total`, `empty` (left out as never-joined slots) and `shown`; `include_empty=true` lists every force |
 | `list_players` | `connected`, `limit` | that force's players: name, connected, admin, with `known`, `total` and `shown` |
 | `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it |
-| `current_research` | force only | what that force is researching, and its progress |
+| `current_research` | `all` | what that force is researching, and its progress; `all=true` gives one row per force that has players or research, in one call |
 | `research_queue` | `limit` | the running technology and the queue behind it: name, level, research units, progress |
 | `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, missing prerequisites |
 | `item_rate` | `surface`, `item`, `window` | how fast one item is made and used, per minute over the window, summed over every quality; a rate, never a total |

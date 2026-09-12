@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rcon"
 )
@@ -76,8 +77,13 @@ func HasCode(err error, code string) bool {
 
 // Client sends aab-rpc-v1 requests over an RCON connection.
 type Client struct {
-	rc RCON
+	rc    RCON
+	trips latency
 }
+
+// Floor is the fastest recent RCON round trip: the part of any call's time
+// that the wire costs rather than the game. Zero before the first reply.
+func (c *Client) Floor() time.Duration { return c.trips.floor() }
 
 func New(rc RCON) *Client {
 	return &Client{rc: rc}
@@ -111,10 +117,12 @@ func (c *Client) Call(ctx context.Context, op string, payload any) (json.RawMess
 		}
 	}
 
+	started := time.Now()
 	resp, err := c.rc.Execute(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("aab-rpc: %s: %w", op, err)
 	}
+	c.trips.add(time.Since(started))
 
 	var env envelope
 	if err := json.Unmarshal([]byte(resp), &env); err != nil {

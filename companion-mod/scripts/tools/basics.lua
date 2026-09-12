@@ -18,9 +18,10 @@ local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "Forces on the server: name, players, connected players, by name. total beside shown says if there are more.",
+    desc = "Forces on the server: name, players, connected players, by name. Forces that have never had a player are left out as empty slots unless include_empty=true; empty beside shown says how many were left out. total beside shown says if there are more.",
     params = {
-      limit = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
+      include_empty = "boolean default false: also list forces that never had a player, the team slots a scenario mod made in advance and the engine's own",
+      limit         = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
     },
   },
   list_players = {
@@ -31,7 +32,10 @@ M.manifest = {
     },
   },
   current_research = {
-    desc = "The technology one force is researching now, if any, and its progress.",
+    desc = "The technology one force is researching now, if any, and its progress. all=true answers for every force that has players or is researching, one row each in a single call: use it for any each-team or every-force question instead of one call per force.",
+    params = {
+      all = "boolean default false: one row per force with players or research; the force argument is ignored",
+    },
   },
 }
 
@@ -39,19 +43,30 @@ M.manifest = {
 -- force, so a single force name would make no sense (CONTEXT.md: force is
 -- reserved and injected on every OTHER tool). A scenario mod can run dozens of
 -- forces, so the row count is bounded like every other enumeration.
+--
+-- A force nobody has ever joined is scaffolding, not a team: a team mod makes
+-- one per slot when the map starts, and the engine has its own. They are left
+-- out unless asked for, and counted in `empty` so the reply still says how many
+-- forces the game holds. A team whose players are all offline has had players,
+-- so it stays in.
 local function list_forces(a)
   a = a or {} -- the only tool that is useful with no arguments at all
-  local rows = {}
+  local rows, empty = {}, 0
   for _, force in pairs(game.forces) do
-    rows[#rows + 1] = {
-      name = force.name,
-      player_count = #force.players,
-      connected_player_count = #force.connected_players,
-    }
+    local ever = #force.players
+    if ever > 0 or a.include_empty == true then
+      rows[#rows + 1] = {
+        name = force.name,
+        player_count = ever,
+        connected_player_count = #force.connected_players,
+      }
+    else
+      empty = empty + 1
+    end
   end
   bounded.by_name(rows)
   local shown = bounded.cut(rows, bounded.limit(a.limit, DEFAULT_FORCES, MAX_FORCES))
-  return { total = #rows, shown = #shown, forces = shown }
+  return { total = #rows, empty = empty, shown = #shown, forces = shown }
 end
 
 -- force.players holds every player the force has ever had, not the ones online
@@ -78,8 +93,7 @@ local function list_players(a)
   }
 end
 
-local function current_research(a)
-  local force = force_lookup.require_force(a.force)
+local function research_row(force)
   local tech = force.current_research
   if not tech then
     return { force = force.name, researching = false }
@@ -88,6 +102,25 @@ local function current_research(a)
     force = force.name, researching = true, tech = tech.name,
     level = tech.level, progress = bounded.round(force.research_progress, 2),
   }
+end
+
+-- all=true is the every-team question in one call. The rows are the forces
+-- that have players or research going; an empty slot has neither, and a force
+-- that is researching with nobody online is still worth a row.
+local function current_research(a)
+  a = a or {}
+  if a.all == true then
+    local rows = {}
+    for _, force in pairs(game.forces) do
+      if #force.players > 0 or force.current_research then
+        rows[#rows + 1] = research_row(force)
+      end
+    end
+    table.sort(rows, function(x, y) return x.force < y.force end)
+    local shown = bounded.cut(rows, MAX_FORCES)
+    return { total = #rows, shown = #shown, forces = shown }
+  end
+  return research_row(force_lookup.require_force(a.force))
 end
 
 M.functions = {

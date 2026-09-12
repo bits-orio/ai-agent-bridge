@@ -195,6 +195,10 @@ lines to look at when a question cost more than expected.
 
 - `poll failed: ...` once per failure streak, and `poll recovered` when the
   server is back.
+- `tool mts-v1.team_clocks took 310ms, about 190ms of it on the game thread;
+  players felt that` when a lookup held the game for longer than a tenth of a
+  second. The RCON round trip is taken off first, so a server across the
+  internet is not mistaken for a slow tool.
 - `answer 7: could not deliver it, trying again next tick` when the answer
   did not land; it is offered again with no second model run, three times.
 - `answer 7: the companion refused the artifact, sending a notice instead`
