@@ -52,7 +52,7 @@ func TestSystemPromptRules(t *testing.T) {
 	if without := prompt(Question{Text: "x", Force: "team-1"}, nil); strings.Contains(without, "standing on surface") {
 		t.Errorf("a question without a surface must not claim one:\n%s", without)
 	}
-	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time", "Never answer a total with a rate", "divided by its own online hours", "production_since with no surface, which counts every surface", "Numbers alone are not an answer", "always write the force name", "nobody online is still a force", "write the leader it names"} {
+	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time", "Never answer a total with a rate", "divided by its own online hours", "production_since with no surface, which counts every surface", "Numbers alone are not an answer", "always write the force name", "nobody online is still a force", "never had a player is an empty slot", "Zero online does not make a force empty", "write the leader it names"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, got)
 		}
