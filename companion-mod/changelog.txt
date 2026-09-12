@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.3
+Date: 2026-09-11
+  Changes:
+    - list_forces leaves out forces that have never had a player, the team slots a scenario mod
+      makes in advance and the engine's own, unless asked with include_empty; the reply counts
+      what it left out. An agent asked about "each team" no longer sees twenty empty slots.
+    - current_research takes all=true and answers for every force that has players or is
+      researching in one call, so "what is each team researching" is one lookup, not one per
+      force.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.2
 Date: 2026-09-11
   Changes:
