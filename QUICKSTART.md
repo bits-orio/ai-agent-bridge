@@ -69,8 +69,11 @@ file names a few with their prices.
 ./aab -config aab.yaml run
 ```
 
-The check tries RCON, the events file and the model key one line each and
-says what is wrong, before anything costs money.
+The check tries RCON, the events file, and the model key with the OpenRouter
+balance behind it, one line each, and says what is wrong before anything
+costs money. OpenRouter is prepaid: a key on an account with no credit is
+refused on every request, so the check fails that line until credits are
+added.
 
 It refuses to start until the two things are there and says which is
 missing. Leave it running: a second terminal, a systemd unit or a container
@@ -100,6 +103,11 @@ session, `/ask sessions` lists them.
   seconds between asks, 20 questions an hour per player, 120 an hour for the
   server, five dollars a day. [SECURITY.md](SECURITY.md) lists them all and
   where each is set.
+- **Every answer is "The model account is out of credit".** The OpenRouter
+  balance is gone; the service log names it beside each refused question.
+  Add credits at https://openrouter.ai/settings/credits and the next
+  question works, no restart needed. The key's own spending limit, set on
+  the key itself, is separate from the balance.
 - **Answers name the wrong surface, or ask which one.** The service tells
   the model which surface the asker is looking at and searches there; name
   the surface or the team in the question for anything else.

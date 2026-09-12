@@ -38,6 +38,15 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	if err != nil {
 		log.Fatalf("run: %v", err)
 	}
+	if cfg.Model.Provider != "fake" && cfg.Model.Provider != "anthropic" {
+		// Said once here and never fatal: credits added while the service
+		// runs take effect on the next question without a restart.
+		if v := checkBalance(ctx, cfg); v.level == "ok" {
+			log.Printf("run: %s", v.text)
+		} else {
+			log.Printf("run: WARNING %s", v.text)
+		}
+	}
 	store, err := history.Open(cfg.History.Path)
 	if err != nil {
 		log.Fatalf("run: history %s: %v", cfg.History.Path, err)

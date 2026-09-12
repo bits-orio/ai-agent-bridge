@@ -102,7 +102,10 @@ Before the first run, and whenever something is off, run the preflight:
 
 It tries each of the three things on its own line: RCON and whether the
 companion answers, the events file over the configured transport, and the
-model key. A file that is not there yet is a warning, not a failure, since
+model key together with the OpenRouter balance behind it. An account with
+no credit fails that line, since OpenRouter answers every request with HTTP
+402 until credits are added, and a balance under a dollar is a warning. A
+file that is not there yet is a warning, not a failure, since
 the mod writes it on the first event; the line then lists what the folder
 holds, which is how a wrong SFTP path shows itself. The service also
 refuses to start until both pieces are there and says which is missing,
@@ -198,6 +201,11 @@ lines to look at when a question cost more than expected.
   when the game cannot render that shape.
 - `question 7: no catalog available, leaving it pending` while the tool list
   cannot be read; the question waits rather than being answered blind.
+- `question 7: the model failed: ... HTTP 402 ...` followed by `OpenRouter
+  has no credit left` when the account balance is gone. The asker is told
+  the account is out of credit rather than to try again; credits added at
+  openrouter.ai take effect on the next question, no restart needed. The
+  startup log prints the balance once, and `check` fails on an empty one.
 - `question 7: new session global` when a question started a session.
 - `tool ai-agent-bridge-tools.find_entities took 230ms on the game thread`
   for any tool call over 100 ms.

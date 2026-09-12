@@ -81,7 +81,22 @@ func runCheck(ctx context.Context, cfg *config.Config, client *rpc.Client) {
 	case "anthropic":
 		say(cfg.Anthropic.APIKey != "", "model", keyLine(cfg.Anthropic.APIKeyEnv, cfg.Anthropic.APIKey, "anthropic", cfg.Model.ID))
 	default:
-		say(cfg.OpenRouter.APIKey != "", "model", keyLine(cfg.OpenRouter.APIKeyEnv, cfg.OpenRouter.APIKey, "openrouter", cfg.Model.ID))
+		line := keyLine(cfg.OpenRouter.APIKeyEnv, cfg.OpenRouter.APIKey, "openrouter", cfg.Model.ID)
+		if cfg.OpenRouter.APIKey == "" {
+			say(false, "model", line)
+			break
+		}
+		// The key alone is not enough: an account with nothing on it takes
+		// every request and answers 402.
+		switch v := checkBalance(ctx, cfg); v.level {
+		case "fail":
+			say(false, "model", line+"; "+v.text)
+		case "warn":
+			say(true, "model", line)
+			warn("model", v.text)
+		default:
+			say(true, "model", line+"; "+v.text)
+		}
 	}
 
 	if failed {

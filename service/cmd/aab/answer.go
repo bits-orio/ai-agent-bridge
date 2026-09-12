@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/agent"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/model/openrouter"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -20,6 +21,23 @@ import (
 const maxDeliveries = 3
 
 const modelFailedNotice = "I could not reach the model just now. Try again in a moment."
+
+// outOfCreditNotice is what the asker is told when OpenRouter answers 402:
+// trying again cannot help, and the one person who can fix it is the owner.
+const outOfCreditNotice = "The model account is out of credit. The server owner needs to top it up before I can answer."
+
+// creditsURL is where the owner adds credit. The log says so beside every
+// refused question, since an in-game notice cannot carry a link.
+const creditsURL = "https://openrouter.ai/settings/credits"
+
+// failureNotice is the notice for a model error: most are transient, a 402
+// is not.
+func failureNotice(err error) string {
+	if openrouter.IsOutOfCredit(err) {
+		return outOfCreditNotice
+	}
+	return modelFailedNotice
+}
 
 // badArtifactNotice is what the asker is told when the companion cannot render
 // the answer. Something has to reach the player: the round was paid for, and
@@ -66,7 +84,10 @@ func (r *runner) run(ctx context.Context, q rpc.Question, game []tools.Tool) age
 	result, err := r.agent.Answer(ctx, question, game)
 	if err != nil {
 		log.Printf("question %d: the model failed: %v", q.ID, err)
-		result.Artifact = agent.Notice(agent.LevelWarning, modelFailedNotice)
+		if openrouter.IsOutOfCredit(err) {
+			log.Printf("question %d: OpenRouter has no credit left; add some at %s", q.ID, creditsURL)
+		}
+		result.Artifact = agent.Notice(agent.LevelWarning, failureNotice(err))
 	}
 	if result.Session.Fresh {
 		log.Printf("question %d: new session %s", q.ID, result.Session.Key)

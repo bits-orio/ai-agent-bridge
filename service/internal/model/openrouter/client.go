@@ -13,9 +13,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -23,6 +25,38 @@ import (
 
 // Endpoint is the chat completions URL. Tests point a client elsewhere.
 const Endpoint = "https://openrouter.ai/api/v1/chat/completions"
+
+// HTTPError is a non-2xx answer from OpenRouter, carrying its own message.
+// The status matters to callers: 402 is an account with no credit left, 401
+// a key OpenRouter does not know.
+type HTTPError struct {
+	Status int
+	Model  string
+	Text   string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("openrouter: %s: HTTP %d: %s", e.Model, e.Status, e.Text)
+}
+
+// IsOutOfCredit says whether err is OpenRouter refusing to spend: HTTP 402,
+// which every request gets until credits are added to the account.
+func IsOutOfCredit(err error) bool {
+	var he *HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusPaymentRequired
+}
+
+// Credits is the account balance OpenRouter reports, in USD: what was bought
+// and what has been spent. A key may carry its own limit as well; a 402 is
+// about the account.
+type Credits struct {
+	Total float64 `json:"total_credits"`
+	Used  float64 `json:"total_usage"`
+}
+
+// Remaining is what is left to spend. Zero or less means every question is
+// refused with HTTP 402 until credits are added.
+func (c Credits) Remaining() float64 { return c.Total - c.Used }
 
 // Referer and Title identify the app to OpenRouter, which lists apps by
 // them; both are public already.
@@ -97,7 +131,7 @@ func (c *Client) send(ctx context.Context, body []byte) (*response, error) {
 			if err != nil {
 				return nil, err
 			}
-			return nil, fmt.Errorf("openrouter: %s: HTTP %d: %s", c.opts.Model, status, resp.errorText())
+			return nil, &HTTPError{Status: status, Model: c.opts.Model, Text: resp.errorText()}
 		}
 		select {
 		case <-ctx.Done():
@@ -135,4 +169,39 @@ func (c *Client) post(ctx context.Context, body []byte) (*response, int, error) 
 		out.rawError = string(raw)
 	}
 	return &out, res.StatusCode, nil
+}
+
+// Credits reads the account balance. The endpoint sits beside the chat one,
+// so the override a test uses for one serves the other.
+func (c *Client) Credits(ctx context.Context) (Credits, error) {
+	url := strings.TrimSuffix(c.opts.Endpoint, "/chat/completions") + "/credits"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return Credits{}, fmt.Errorf("openrouter: credits: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return Credits{}, fmt.Errorf("openrouter: credits: %w", err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return Credits{}, fmt.Errorf("openrouter: credits: read reply: %w", err)
+	}
+	if res.StatusCode/100 != 2 {
+		var out response
+		_ = json.Unmarshal(raw, &out)
+		if out.errorText() == "" {
+			out.rawError = string(raw)
+		}
+		return Credits{}, &HTTPError{Status: res.StatusCode, Model: "credits", Text: out.errorText()}
+	}
+	var out struct {
+		Data Credits `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return Credits{}, fmt.Errorf("openrouter: credits: bad reply: %w", err)
+	}
+	return out.Data, nil
 }
