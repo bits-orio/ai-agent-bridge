@@ -32,7 +32,6 @@ const (
 	quotaNotice       = "You have asked all the questions your hourly allowance covers. Try again a bit later."
 	serverQuotaNotice = "The server has asked all the questions its hourly allowance covers. Try again later."
 	budgetNotice      = "The server has spent its daily allowance for questions. Try again tomorrow."
-	toolCallsNotice   = "That question needed more lookups than one question is allowed. Ask a narrower one."
 	serverKey         = "server"
 	roundsNotice      = "I ran out of rounds before I could answer that. Try asking something narrower."
 	tokenNotice       = "That question ran past its token budget before I could answer. Try asking something narrower."
@@ -141,7 +140,7 @@ type Caps struct {
 
 // DefaultMaxToolCalls bounds what one question may ask of the game. Six
 // rounds of parallel calls could otherwise be dozens of surface scans.
-const DefaultMaxToolCalls = 12
+const DefaultMaxToolCalls = 30
 
 func (c Caps) maxToolCalls() int {
 	if c.MaxToolCalls <= 0 {
@@ -272,18 +271,24 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		if len(calls) == 0 {
 			return a.finish(q, fromText(step), round, usage, mark), nil
 		}
-		toolCalls += len(calls)
-		if toolCalls > a.caps.maxToolCalls() {
-			return a.finish(q, Notice(LevelWarning, toolCallsNotice), round, usage, mark), nil
-		}
-
-		results, artifact, submitted := runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
-		if submitted {
-			return a.finish(q, artifact, round, usage, mark), nil
+		var results []model.Block
+		if reads, left := countReads(calls), a.caps.maxToolCalls()-toolCalls; reads > left {
+			// The round is refused, not the question: the model is told what
+			// is left and answers from what it has, or asks for less.
+			results = refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls())
+			a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
+		} else {
+			toolCalls += reads
+			var artifact Artifact
+			var submitted bool
+			results, artifact, submitted = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
+			if submitted {
+				return a.finish(q, artifact, round, usage, mark), nil
+			}
 		}
 		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
 
-		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Total() >= budget {
+		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Budgeted() >= budget {
 			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark), nil
 		}
 	}
@@ -320,6 +325,31 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 		return results, artifact, true
 	}
 	return results, Artifact{}, false
+}
+
+// countReads is how many of a round's calls are lookups; a submission is
+// not one, so a model that has used its lookups can still answer.
+func countReads(calls []model.Block) int {
+	_, reads := partition(calls)
+	return len(reads)
+}
+
+// refuseLookups is a round's results when its reads would pass the cap: every
+// call gets the same refusal, which says what is left, so the model answers
+// from what it has or asks for less. A submission beside the reads is refused
+// with them, as it would have been anyway.
+func refuseLookups(calls []model.Block, asked, left, used, cap int) []model.Block {
+	text := fmt.Sprintf("Refused: this round asked for %d lookups but only %d remain for this question (%d of %d used). "+
+		"Answer now from what you already have, saying what you could not check, or ask for at most %d.", asked, left, used, cap, left)
+	if left <= 0 {
+		text = fmt.Sprintf("Refused: no lookups remain for this question (%d of %d used). "+
+			"Answer now from what you already have and say what you could not check.", used, cap)
+	}
+	results := make([]model.Block, len(calls))
+	for i, call := range calls {
+		results[i] = failed(call.ID, errors.New(text))
+	}
+	return results
 }
 
 // partition splits one round's calls into submissions and reads, keeping the

@@ -27,9 +27,9 @@ asker's own quota on odd tool calls.
 | questions per player per hour | service, `agent.questions_per_player_per_hour` | 20 | one player's cost |
 | questions per hour, whole server | service, `agent.questions_per_hour` | 120 | everyone's cost together |
 | USD per rolling day | service, `agent.max_cost_per_day` | 5.00 | the bill, whatever the model turns out to cost |
-| tokens per question | service, `agent.max_tokens_per_question` | 20,000 | one runaway question |
+| tokens per question | service, `agent.max_tokens_per_question` | 20,000, a cached input token counting a tenth | one runaway question |
 | rounds per question | service, `agent.max_rounds` | 6 | a model that never submits |
-| tool calls per question | service, `agent.max_tool_calls` | 12 | dozens of surface scans from one question |
+| lookups per question | service, `agent.max_tool_calls` | 30; a round over the cap is refused and the model answers from what it has | dozens of surface scans from one question |
 | output tokens per turn | service, `agent.max_output_tokens` | 4,096 | a model that writes essays |
 | tool result bytes | service, `agent.max_tool_result_bytes` | 4,096 | a result that floods the context |
 | answer size | service and companion | 6,000 bytes, 8 rows | chat spam per answer |

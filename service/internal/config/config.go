@@ -43,7 +43,7 @@ const (
 	defaultQuestionsPerHour     = 20
 	defaultServerQuestionsHour  = 120
 	defaultMaxCostPerDay        = 5.0
-	defaultMaxToolCalls         = 12
+	defaultMaxToolCalls         = 30
 	defaultPollInterval         = time.Second
 	defaultHistoryPath          = "history.sqlite"
 	defaultControlAddr          = "127.0.0.1:8090"

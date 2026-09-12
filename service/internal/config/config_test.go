@@ -244,7 +244,7 @@ func TestAgentDefaults(t *testing.T) {
 	if c.Agent.QuestionsPerPlayerPerHour != 20 {
 		t.Errorf("quota = %d, want 20", c.Agent.QuestionsPerPlayerPerHour)
 	}
-	if c.Agent.QuestionsPerHour != 120 || c.Agent.MaxCostPerDay != 5.0 || c.Agent.MaxToolCalls != 12 {
+	if c.Agent.QuestionsPerHour != 120 || c.Agent.MaxCostPerDay != 5.0 || c.Agent.MaxToolCalls != 30 {
 		t.Errorf("safety defaults = %+v, want 120 an hour, $5 a day, 12 tool calls", c.Agent)
 	}
 	if c.History.Path != "history.sqlite" {

@@ -112,10 +112,24 @@ func (u *Usage) Add(other Usage) {
 	u.Cost += other.Cost
 }
 
-// Total is every token the question has spent so far, which is what the
-// per-question budget is measured against.
+// Total is every token the question has spent so far, cached reads at full
+// count; the raw number for reporting.
 func (u Usage) Total() int {
 	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
+// CacheReadWeight is what a cached input token counts for against the
+// per-question budget. Every route this service knows bills a cache read at
+// a tenth of a fresh token or less, so the budget follows the bill rather
+// than the raw count: a five-thousand-token prefix re-read every round
+// would otherwise spend a 20,000-token budget in four rounds while costing
+// a few hundredths of a cent.
+const CacheReadWeight = 0.1
+
+// Budgeted is what the question has spent in fresh-token terms, which is
+// what the per-question budget is measured against.
+func (u Usage) Budgeted() int {
+	return u.InputTokens + u.OutputTokens + u.CacheWriteTokens + int(float64(u.CacheReadTokens)*CacheReadWeight)
 }
 
 // Step is one assistant turn: the blocks it produced, why it stopped, and

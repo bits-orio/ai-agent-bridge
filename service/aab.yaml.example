@@ -77,7 +77,7 @@ anthropic:
 # Per-question limits. A question that hits one still answers, with a notice saying why.
 agent:
   max_rounds: 6                       # model turns per question
-  max_tokens_per_question: 20000      # token budget across those turns
+  max_tokens_per_question: 20000      # token budget across those turns; a cached input token counts a tenth
   max_output_tokens: 4096             # cap on one turn's output, thinking included
   max_tool_result_bytes: 4096         # a longer tool result is cut before the model sees it
   # Sessions: the shared transcript follow-up questions see. One per chat scope
@@ -91,7 +91,7 @@ agent:
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota
   questions_per_hour: 120             # the whole server's rolling-hour quota, -1 for none
   max_cost_per_day: 5.0               # USD in a rolling day, whoever asks; -1 for no cap
-  max_tool_calls: 12                  # tool calls one question may make across its rounds
+  max_tool_calls: 30                  # lookups one question may make; a round over it is refused, the question goes on
 
 # The event history for this save. A relative path is resolved against this file, so
 # moving the config moves the database with it.

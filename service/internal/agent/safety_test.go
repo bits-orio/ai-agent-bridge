@@ -66,7 +66,9 @@ func TestDailyBudget(t *testing.T) {
 	}
 }
 
-// One question may make only so many tool calls across its rounds.
+// One question may make only so many lookups across its rounds. A round that
+// would pass the cap is refused and the model told what is left, so it can
+// still answer from what it has; a submission on its own is never blocked.
 func TestToolCallCap(t *testing.T) {
 	call := func(id string) model.Step {
 		return model.Step{StopReason: model.StopToolUse, Blocks: []model.Block{
@@ -74,16 +76,38 @@ func TestToolCallCap(t *testing.T) {
 			{Type: model.BlockToolUse, ID: id + "b", Name: "nothing", Input: json.RawMessage(`{}`)},
 		}}
 	}
-	m := &scriptedModel{steps: []model.Step{call("1"), call("2"), call("3"), submitStep("t", map[string]any{"shape": "summary", "lines": []string{"late"}})}}
+	late := submitStep("t", map[string]any{"shape": "summary", "lines": []string{"late"}})
 	c := caps()
 	c.MaxToolCalls = 4
-	a := New(m, c)
-	res, err := a.Answer(context.Background(), Question{ID: 1, Text: "q", PlayerIndex: player(1)}, nil)
+
+	m := &scriptedModel{steps: []model.Step{call("1"), call("2"), call("3"), late}}
+	res, err := New(m, c).Answer(context.Background(), Question{ID: 1, Text: "q", PlayerIndex: player(1)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Artifact.Shape != ShapeNotice || !strings.Contains(res.Artifact.Text, "more lookups") || res.Rounds != 3 {
-		t.Errorf("the fifth call should end the question with a notice: %+v rounds=%d", res.Artifact, res.Rounds)
+	if res.Artifact.Shape != ShapeSummary || res.Rounds != 4 || m.calls != 4 {
+		t.Errorf("the third round is refused and the fourth still answers: %+v rounds=%d calls=%d", res.Artifact, res.Rounds, m.calls)
+	}
+	last := m.msgs[len(m.msgs)-1]
+	if last.Role != model.RoleUser || len(last.Blocks) != 2 || !last.Blocks[0].IsError || !strings.Contains(last.Blocks[0].Content, "no lookups remain for this question (4 of 4 used)") {
+		t.Errorf("the model was not told the round was refused: %+v", last)
+	}
+
+	m2 := &scriptedModel{steps: []model.Step{call("1"), call("2"), late}}
+	res, err = New(m2, c).Answer(context.Background(), Question{ID: 2, Text: "q", PlayerIndex: player(1)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Artifact.Shape != ShapeSummary || res.Rounds != 3 {
+		t.Errorf("a submission alone passes a used-up cap: %+v rounds=%d", res.Artifact, res.Rounds)
+	}
+
+	refusal := refuseLookups([]model.Block{{ID: "x"}}, 20, 3, 9, 12)
+	if len(refusal) != 1 || !refusal[0].IsError || !strings.Contains(refusal[0].Content, "asked for 20 lookups but only 3 remain") || !strings.Contains(refusal[0].Content, "9 of 12 used") {
+		t.Errorf("refusal = %+v", refusal)
+	}
+	if none := refuseLookups([]model.Block{{ID: "y"}}, 1, 0, 12, 12); !strings.Contains(none[0].Content, "no lookups remain") {
+		t.Errorf("used-up refusal = %+v", none)
 	}
 }
 

@@ -161,7 +161,7 @@ from environment variables, which is what hosting panels want:
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
 | `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
 | `agent.max_tool_result_bytes` | `AAB_MAX_TOOL_RESULT_BYTES` | `4096` |
-| `agent.max_tool_calls` | `AAB_MAX_TOOL_CALLS` | `12` |
+| `agent.max_tool_calls` | `AAB_MAX_TOOL_CALLS` | `30` |
 | `agent.session_idle` | `AAB_SESSION_IDLE` | `3m` |
 | `agent.named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
 | `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
