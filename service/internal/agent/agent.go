@@ -276,7 +276,9 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// The round is refused, not the question: the model is told what
 			// is left and answers from what it has, or asks for less.
 			results = refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls())
-			a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
+			if a.Trace != nil {
+				a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
+			}
 		} else {
 			toolCalls += reads
 			var artifact Artifact
