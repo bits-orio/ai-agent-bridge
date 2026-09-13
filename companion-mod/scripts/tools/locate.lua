@@ -28,8 +28,13 @@ local SCAN_CAP      = 2000
 local DEFAULT_SHOWN = 5
 local MAX_SHOWN     = 10
 
--- Entity types that have a recipe to filter on.
-local CRAFTERS = { ["assembling-machine"] = true, furnace = true, ["rocket-silo"] = true }
+-- Entity types that have a recipe to filter on, as the list the engine filter
+-- takes and as the set recipe_of tests against. One source, two shapes.
+-- EntitySearchFilters::type and ::ghost_type each take a string or an array of
+-- strings (verified against the 2.0.77 docs).
+local CRAFTER_TYPES = { "assembling-machine", "furnace", "rocket-silo" }
+local CRAFTERS = {}
+for _, crafter in ipairs(CRAFTER_TYPES) do CRAFTERS[crafter] = true end
 
 --- A ghost is an entity of type entity-ghost whose real prototype sits in
 --- ghost_name and ghost_type; everything below asks these two so a ghost
@@ -52,7 +57,7 @@ local M = {}
 
 M.manifest = {
   find_entities = {
-    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). Ghosts match too, by what they will become, and rows say ghost=true; ghost=true or false narrows to ghosts or built. Give at least one filter. An unknown name comes back found=false with suggestions of close names.",
+    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). A recipe or product search covers every crafting machine on the surface by itself; a type beside it is not needed. Ghosts match too, by what they will become, and rows say ghost=true; ghost=true or false narrows to ghosts or built. Give at least one filter. truncated=true means the scan stopped before the end of the surface, so the rows are what it saw and nothing in the reply says a thing is absent. An unknown name comes back found=false with suggestions of close names.",
     params = {
       surface = "string! surface name or index, e.g. nauvis",
       name    = "string entity prototype name, e.g. lab, assembling-machine-2",
@@ -154,9 +159,20 @@ local function find_entities(a)
     if filter.limit <= 0 then return end
     for _, entity in ipairs(surface.find_entities_filtered(filter)) do scanned[#scanned + 1] = entity end
   end
-  if name or etype then
-    if ghost ~= true then scan({ name = name, type = etype }) end
-    if ghost ~= false then scan({ ghost_name = name, ghost_type = etype }) end
+  -- A recipe or product filter can only ever match a crafting machine, so a
+  -- search that names neither an entity nor a type asks the engine for the
+  -- three crafter types rather than for everything. An unfiltered pass spends
+  -- the whole SCAN_CAP on belts, inserters and poles and then reports zero
+  -- matches on a surface that has the machine: measured on a live server,
+  -- product=firearm-magazine scanned 2000 entities and found none of the six
+  -- assembling machines set to it, where the same search over the crafter
+  -- types scanned 335 and found all six.
+  local types = etype
+  if not (name or etype) and (recipe or product) then types = CRAFTER_TYPES end
+
+  if name or types then
+    if ghost ~= true then scan({ name = name, type = types }) end
+    if ghost ~= false then scan({ ghost_name = name, ghost_type = types }) end
   else
     scan({})
   end

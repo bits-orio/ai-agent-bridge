@@ -57,7 +57,10 @@ func systemPrompt(q Question) string {
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")
 	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
-	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer.\n\n")
+	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer. ")
+	b.WriteString("A search that comes back truncated stopped before it reached the end of the surface, so it shows what is there and never that something is absent: ")
+	b.WriteString("answer with what it did find and say the rest went unchecked, or search again with a narrower filter, a type beside a product for instance. ")
+	b.WriteString("Never answer that there are none of something from a truncated search.\n\n")
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
