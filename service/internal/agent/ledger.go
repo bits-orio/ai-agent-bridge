@@ -28,8 +28,11 @@ import (
 // fields docs/design/phase4-observability-spec.md's briefing/briefing_bytes/
 // briefing_tokens/briefing_ms rows describe; a caller with no briefing to
 // report passes ledger.BriefingOff and zero for the rest, the same absent
-// values NewQuestionRecord already defaults to.
-func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64) ledger.QuestionRecord {
+// values NewQuestionRecord already defaults to. askedBack and
+// awaitingReplyResolved are the ask-back loop's own two fields (section 12):
+// the caller computes both (isAskBack for the first, Answer's own
+// wasAwaiting for the second), this function only records them.
+func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64, askedBack, awaitingReplyResolved bool) ledger.QuestionRecord {
 	r := ledger.NewQuestionRecord()
 	r.QuestionID = q.ID
 	r.Asker = q.askerName()
@@ -49,6 +52,8 @@ func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, sha
 	r.BriefingBytes = briefingBytes
 	r.BriefingTokens = briefingTokens
 	r.BriefingMs = briefingMs
+	r.AskedBack = askedBack
+	r.AwaitingReplyResolved = awaitingReplyResolved
 	r.Refused = refused
 	r.RefusedReason = refusedReason
 	r.ModelError = modelError

@@ -43,6 +43,8 @@ func TestEffectiveDumpWrittenWithoutSecrets(t *testing.T) {
 		"poll_interval: 1s", // Duration must marshal as a string, not nanoseconds
 		"address: game:27015",
 		"id: deepseek/deepseek-v4-pro-0813",
+		"clarify_idle: 10m0s", // the ask-back window default, declared and defaulted like its neighbours
+		"max_round_tool_result_bytes: 24000",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("effective config missing %q:\n%s", want, out)

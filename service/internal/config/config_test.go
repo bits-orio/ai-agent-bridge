@@ -187,7 +187,9 @@ model:
 agent:
   max_rounds: 4
   max_tokens_per_question: 1234
+  max_round_tool_result_bytes: 30000
   session_idle: 90s
+  clarify_idle: 15m
   session_max_bytes: 4000
   questions_per_player_per_hour: 3
 history:
@@ -209,6 +211,12 @@ control_api:
 	}
 	if c.SessionIdle().String() != "1m30s" || c.Agent.SessionMaxBytes != 4000 {
 		t.Errorf("session caps = %+v, want idle 1m30s and 4000 bytes", c.Agent)
+	}
+	if c.ClarifyIdle() != 15*time.Minute {
+		t.Errorf("clarify_idle = %s, want 15m", c.ClarifyIdle())
+	}
+	if c.Agent.MaxRoundToolResultBytes != 30000 {
+		t.Errorf("max_round_tool_result_bytes = %d, want 30000", c.Agent.MaxRoundToolResultBytes)
 	}
 	if c.NamedSessionIdle() != 30*time.Minute || c.Agent.SessionMaxExchanges != 10 {
 		t.Errorf("unset session caps must default: %+v", c.Agent)
@@ -241,6 +249,12 @@ func TestAgentDefaults(t *testing.T) {
 	if c.SessionIdle() != 3*time.Minute || c.NamedSessionIdle() != 30*time.Minute {
 		t.Errorf("session idle defaults = %s and %s, want 3m and 30m", c.SessionIdle(), c.NamedSessionIdle())
 	}
+	if c.ClarifyIdle() != 10*time.Minute {
+		t.Errorf("clarify_idle default = %s, want 10m", c.ClarifyIdle())
+	}
+	if c.Agent.MaxRoundToolResultBytes != 24000 {
+		t.Errorf("max_round_tool_result_bytes default = %d, want 24000", c.Agent.MaxRoundToolResultBytes)
+	}
 	if c.Agent.QuestionsPerPlayerPerHour != 20 {
 		t.Errorf("quota = %d, want 20", c.Agent.QuestionsPerPlayerPerHour)
 	}
@@ -259,6 +273,8 @@ func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)
 	t.Setenv("AAB_SESSION_IDLE", "45s")
+	t.Setenv("AAB_CLARIFY_IDLE", "2m")
+	t.Setenv("AAB_MAX_ROUND_TOOL_RESULT_BYTES", "12000")
 	t.Setenv("AAB_QUESTIONS_PER_PLAYER_PER_HOUR", "-1")
 	t.Setenv("AAB_HISTORY_PATH", "/var/lib/aab/history.sqlite")
 	t.Setenv("AAB_CONTROL_ADDR", "0.0.0.0:9000")
@@ -269,6 +285,12 @@ func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	}
 	if c.SessionIdle().String() != "45s" {
 		t.Errorf("session_idle = %s, want 45s", c.SessionIdle())
+	}
+	if c.ClarifyIdle().String() != "2m0s" {
+		t.Errorf("clarify_idle = %s, want 2m0s", c.ClarifyIdle())
+	}
+	if c.Agent.MaxRoundToolResultBytes != 12000 {
+		t.Errorf("max_round_tool_result_bytes = %d, want 12000", c.Agent.MaxRoundToolResultBytes)
 	}
 	// A negative quota is a deliberate "no quota" and must survive the defaults.
 	if c.Agent.QuestionsPerPlayerPerHour != -1 {
@@ -289,6 +311,26 @@ func TestLoadFromEnvInvalidSessionIdle(t *testing.T) {
 
 	if _, err := Load("/no/such/aab.yaml"); err == nil {
 		t.Fatal("expected an error for an unparsable AAB_SESSION_IDLE")
+	}
+}
+
+func TestLoadFromEnvInvalidClarifyIdle(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_CLARIFY_IDLE", "ten minutes")
+
+	if _, err := Load("/no/such/aab.yaml"); err == nil {
+		t.Fatal("expected an error for an unparsable AAB_CLARIFY_IDLE")
+	}
+}
+
+func TestLoadFromEnvInvalidMaxRoundToolResultBytes(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_MAX_ROUND_TOOL_RESULT_BYTES", "not a number")
+
+	if _, err := Load("/no/such/aab.yaml"); err == nil {
+		t.Fatal("expected an error for an unparsable AAB_MAX_ROUND_TOOL_RESULT_BYTES")
 	}
 }
 

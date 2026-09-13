@@ -42,4 +42,7 @@ func TestContentWithNoCapPassesEverything(t *testing.T) {
 	if c := (Caps{}).toolResultBytes(); c != DefaultMaxToolResultBytes {
 		t.Errorf("unset cap = %d, want %d", c, DefaultMaxToolResultBytes)
 	}
+	if c := (Caps{}).roundToolResultBytes(); c != DefaultMaxRoundToolResultBytes {
+		t.Errorf("unset round cap = %d, want %d", c, DefaultMaxRoundToolResultBytes)
+	}
 }

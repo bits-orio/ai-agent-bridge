@@ -2,37 +2,30 @@ package history
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
 
-// eventRow is one events row as returned to the model: compact JSON, data
-// embedded as an object rather than a re-escaped string. Empty player and
-// force are omitted rather than sent as "".
-type eventRow struct {
-	ID     int64           `json:"id"`
-	Tick   int64           `json:"tick"`
-	Event  string          `json:"event"`
-	Player string          `json:"player,omitempty"`
-	Force  string          `json:"force,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
-}
-
 const defaultRecentLimit = 10
 const maxRecentLimit = 20
 
-// Tools returns the three history tools (docs/design/phase1-2-spec.md
-// "history"): recent_events, last_event and count_events. Each is bound to
-// this Store and safe to hand to the agent loop as-is.
+const eventHeader = "id\ttick\tevent\tplayer\tforce\tdata"
+
+// Tools returns the service's five list tools (docs/design/phase4-spec.md
+// sections 13 and 15): recent_events, last_event, count_events, recent_chat
+// and catch_up. None sweeps an axis, so none carries the sweep envelope a
+// tier 1 sweep tool does; each returns a header line plus tab-separated
+// rows instead (section 13). Every one is bound to this Store and safe to
+// hand to the agent loop as-is.
 func (s *Store) Tools() []tools.Tool {
 	return []tools.Tool{
 		{
 			Name: "recent_events",
-			Description: "Recorded history events, newest first: tick, event key, player, force, data. " +
+			Description: "Recorded history events, newest first: one header line (id, tick, event, player, force, data) then one tab-separated row per event; data is that event's own JSON payload. " +
 				"Filter by event, force or player. At most 20 rows; use count_events for a total.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
@@ -58,8 +51,8 @@ func (s *Store) Tools() []tools.Tool {
 		},
 		{
 			Name: "last_event",
-			Description: "The newest recorded occurrence of one event key, optionally for one player or " +
-				"force: when a player last died, when research last finished. Says so when there is none.",
+			Description: "The newest recorded occurrence of one event key, optionally for one player or force: when a player last died, when research last finished. " +
+				"One header line (id, tick, event, player, force, data) then the one matching row, or the plain line \"none recorded\" when there is none.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -79,7 +72,7 @@ func (s *Store) Tools() []tools.Tool {
 		{
 			Name: "count_events",
 			Description: "How many times one event key was recorded, optionally for one force and only " +
-				"from since_tick on. Use it for totals instead of listing rows.",
+				"from since_tick on. One header line \"count\" then one row holding the number. Use it for totals instead of listing rows.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -96,6 +89,33 @@ func (s *Store) Tools() []tools.Tool {
 			}, "event"),
 			Call: s.countEvents,
 		},
+		{
+			Name: "recent_chat",
+			Description: "The last N organic console chat lines, newest first: one header line (tick, player, message) then one tab-separated row per line. " +
+				"Server console lines and a player's own questions to this bot are already dropped, and an immediate repeat of the line before it collapses to one. Default limit 10, at most 20.",
+			Schema: tools.ObjectSchema(map[string]any{
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Rows to return, default 10, at most 20.",
+					"minimum":     1,
+					"maximum":     maxRecentLimit,
+				},
+			}),
+			Call: s.recentChat,
+		},
+		{
+			Name: "catch_up",
+			Description: "What a player missed while away, server-wide, not just their own force: research finished, rockets launched, deaths, joins and leaves, plus the same filtered chat recent_chat reads. " +
+				"The window runs from that player's last recorded departure, capped at 24 hours. One header line (tick, event, player, detail) then up to 15 tab-separated rows, newest first, merged by tick. " +
+				"A player with no record at all gets one row saying so instead of an error.",
+			Schema: tools.ObjectSchema(map[string]any{
+				"player": map[string]any{
+					"type":        "string",
+					"description": "Player name.",
+				},
+			}, "player"),
+			Call: s.catchUp,
+		},
 	}
 }
 
@@ -110,50 +130,13 @@ func (s *Store) recentEvents(ctx context.Context, args json.RawMessage) (json.Ra
 		return nil, fmt.Errorf("recent_events: %w", err)
 	}
 
-	limit := in.Limit
-	if limit <= 0 {
-		limit = defaultRecentLimit
-	}
-	if limit > maxRecentLimit {
-		limit = maxRecentLimit
-	}
-
-	query := "SELECT id, tick, event, player, force, data FROM events WHERE 1=1"
-	var params []any
-	if in.Event != "" {
-		query += " AND event = ?"
-		params = append(params, in.Event)
-	}
-	if in.Force != "" {
-		query += " AND force = ?"
-		params = append(params, in.Force)
-	}
-	if in.Player != "" {
-		query += " AND player = ?"
-		params = append(params, in.Player)
-	}
-	query += " ORDER BY id DESC LIMIT ?"
-	params = append(params, limit)
-
-	rows, err := s.db.QueryContext(ctx, query, params...)
+	rows, err := s.queryEvents(ctx, eventQuery{
+		Event: in.Event, Force: in.Force, Player: in.Player, Limit: clampLimit(in.Limit),
+	})
 	if err != nil {
-		return nil, fmt.Errorf("recent_events: query: %w", err)
-	}
-	defer rows.Close()
-
-	out := []eventRow{}
-	for rows.Next() {
-		r, err := scanEventRow(rows)
-		if err != nil {
-			return nil, fmt.Errorf("recent_events: scan: %w", err)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("recent_events: %w", err)
 	}
-
-	return json.Marshal(out)
+	return json.RawMessage(columnar(eventHeader, eventRowsToTSV(rows))), nil
 }
 
 func (s *Store) lastEvent(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -169,27 +152,14 @@ func (s *Store) lastEvent(ctx context.Context, args json.RawMessage) (json.RawMe
 		return nil, errors.New(`last_event: "event" is required`)
 	}
 
-	query := "SELECT id, tick, event, player, force, data FROM events WHERE event = ?"
-	params := []any{in.Event}
-	if in.Player != "" {
-		query += " AND player = ?"
-		params = append(params, in.Player)
-	}
-	if in.Force != "" {
-		query += " AND force = ?"
-		params = append(params, in.Force)
-	}
-	query += " ORDER BY id DESC LIMIT 1"
-
-	row := s.db.QueryRowContext(ctx, query, params...)
-	r, err := scanEventRow(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return json.Marshal(map[string]string{"result": "none recorded"})
-	}
+	rows, err := s.queryEvents(ctx, eventQuery{Event: in.Event, Force: in.Force, Player: in.Player, Limit: 1})
 	if err != nil {
-		return nil, fmt.Errorf("last_event: scan: %w", err)
+		return nil, fmt.Errorf("last_event: %w", err)
 	}
-	return json.Marshal(r)
+	if len(rows) == 0 {
+		return json.RawMessage("none recorded"), nil
+	}
+	return json.RawMessage(columnar(eventHeader, eventRowsToTSV(rows))), nil
 }
 
 func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -220,33 +190,22 @@ func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.Raw
 	if err := s.db.QueryRowContext(ctx, query, params...).Scan(&count); err != nil {
 		return nil, fmt.Errorf("count_events: query: %w", err)
 	}
-	return json.Marshal(map[string]int64{"count": count})
+	return json.RawMessage(columnar("count", []string{strconv.FormatInt(count, 10)})), nil
 }
 
-// unmarshalArgs decodes tool arguments, treating a nil or empty payload as
-// "no arguments given" rather than an error, since every field these tools
-// take is optional except where checked separately.
-func unmarshalArgs(args json.RawMessage, out any) error {
-	if len(args) == 0 {
-		return nil
+// eventRowsToTSV renders recent_events/last_event's shared row shape: id,
+// tick, event, player, force, data, tab-joined in that order.
+func eventRowsToTSV(rows []eventRow) []string {
+	out := make([]string, len(rows))
+	for i, r := range rows {
+		out[i] = tsvRow(
+			strconv.FormatInt(r.ID, 10),
+			strconv.FormatInt(r.Tick, 10),
+			r.Event,
+			r.Player,
+			r.Force,
+			string(r.Data),
+		)
 	}
-	if err := json.Unmarshal(args, out); err != nil {
-		return fmt.Errorf("bad arguments: %w", err)
-	}
-	return nil
-}
-
-// rowScanner is satisfied by both *sql.Row and *sql.Rows.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanEventRow(row rowScanner) (eventRow, error) {
-	var r eventRow
-	var data string
-	if err := row.Scan(&r.ID, &r.Tick, &r.Event, &r.Player, &r.Force, &data); err != nil {
-		return eventRow{}, err
-	}
-	r.Data = json.RawMessage(data)
-	return r, nil
+	return out
 }

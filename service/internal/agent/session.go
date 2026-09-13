@@ -19,6 +19,7 @@ import (
 type SessionCaps struct {
 	Idle         time.Duration // an unnamed session ends after this long without a question
 	NamedIdle    time.Duration // a named one waits longer: it was asked for on purpose
+	ClarifyIdle  time.Duration // widens Idle (or NamedIdle, whichever is longer) while a session awaits the player's reply to an ask-back (docs/design/phase4-spec.md section 12)
 	MaxExchanges int           // oldest exchanges drop past this count
 	MaxBytes     int           // and past this many bytes of question and answer text
 }
@@ -26,6 +27,7 @@ type SessionCaps struct {
 const (
 	DefaultSessionIdle         = 3 * time.Minute
 	DefaultNamedSessionIdle    = 30 * time.Minute
+	DefaultClarifyIdle         = 10 * time.Minute
 	DefaultSessionMaxExchanges = 10
 	DefaultSessionMaxBytes     = 8000
 )
@@ -36,6 +38,9 @@ func (c SessionCaps) withDefaults() SessionCaps {
 	}
 	if c.NamedIdle <= 0 {
 		c.NamedIdle = DefaultNamedSessionIdle
+	}
+	if c.ClarifyIdle <= 0 {
+		c.ClarifyIdle = DefaultClarifyIdle
 	}
 	if c.MaxExchanges <= 0 {
 		c.MaxExchanges = DefaultSessionMaxExchanges
@@ -62,6 +67,12 @@ type session struct {
 	exchanges []Exchange
 	startedAt time.Time
 	lastAt    time.Time
+	// awaitingReply is true from the moment this session's last answer was
+	// an ask-back (a notice at level confirmation, docs/design/phase4-spec.md
+	// section 12) until the next question lands in it, whatever that
+	// question turns out to ask. idleFor reads it to widen the session's
+	// idle window to ClarifyIdle in the meantime.
+	awaitingReply bool
 }
 
 // SessionInfo is one row of the `sessions` listing.
@@ -91,30 +102,48 @@ func sessionKey(scope, name string) string {
 	return scope + "#" + name
 }
 
-func (s *sessions) idleFor(name string) time.Duration {
+// idleFor is how long scope/name may sit without a question before the
+// sweep drops it. A session currently awaiting the player's reply to an
+// ask-back (Decision 7) gets ClarifyIdle in place of its ordinary window; a
+// named session, asked for on purpose, keeps whichever of ClarifyIdle and
+// its own NamedIdle is longer, since NamedIdle was already a deliberate
+// choice and an ask-back must only ever widen a window, never shrink one.
+func (s *sessions) idleFor(name string, awaitingReply bool) time.Duration {
 	if name == "" {
+		if awaitingReply {
+			return s.caps.ClarifyIdle
+		}
 		return s.caps.Idle
+	}
+	if awaitingReply && s.caps.ClarifyIdle > s.caps.NamedIdle {
+		return s.caps.ClarifyIdle
 	}
 	return s.caps.NamedIdle
 }
 
-// open returns the live session for scope and name, starting a new one when
-// there is none, when the old one has idled out, or when fresh asks for
-// one. The second result says whether it was started just now.
-func (s *sessions) open(scope, name string, now time.Time, fresh bool) ([]Exchange, bool) {
+// open returns the live session's exchanges for scope and name, starting a
+// new one when there is none, when the old one has idled out, or when
+// fresh asks for one. The second result says whether it was started just
+// now. The third says whether the session was awaiting the player's reply
+// to an ask-back (Decision 7) when this question landed: whatever this
+// question turns out to ask, its arrival resolves that wait, so the flag is
+// cleared here, once, before the question is ever answered.
+func (s *sessions) open(scope, name string, now time.Time, fresh bool) ([]Exchange, bool, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
 	key := sessionKey(scope, name)
 	live := s.byKey[key]
 	if live != nil && !fresh {
+		wasAwaiting := live.awaitingReply
+		live.awaitingReply = false
 		out := make([]Exchange, len(live.exchanges))
 		copy(out, live.exchanges)
-		return out, false
+		return out, false, wasAwaiting
 	}
 	s.byKey[key] = &session{scope: scope, name: name, startedAt: now, lastAt: now}
 	s.trim()
-	return nil, true
+	return nil, true, false
 }
 
 // maxLiveSessions bounds the map: a player inventing a new #name on every
@@ -148,10 +177,15 @@ func (s *sessions) end(scope, name string, now time.Time) bool {
 }
 
 // record appends one exchange to the live session, dropping the oldest
-// exchanges whole until the count and byte caps hold. An exchange over the
-// byte cap by itself is kept alone: cutting it would hand the model half a
-// table as if it were the whole.
-func (s *sessions) record(scope, name string, e Exchange) {
+// exchanges whole until the count and byte caps hold, and sets whether this
+// exchange leaves the session awaiting the player's reply to an ask-back
+// (Decision 7). awaitingReply is the caller's own answer to "was this
+// exchange's answer itself an ask-back": setting it unconditionally, true
+// or false, is what makes a second ask-back in the same session renew the
+// window (open already cleared the flag before this question ran, so a
+// true here is this question's own doing, not a leftover) and what makes an
+// ordinary follow-up let the window fall back to normal.
+func (s *sessions) record(scope, name string, e Exchange, awaitingReply bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := sessionKey(scope, name)
@@ -162,6 +196,7 @@ func (s *sessions) record(scope, name string, e Exchange) {
 	}
 	live.exchanges = append(live.exchanges, e)
 	live.lastAt = e.At
+	live.awaitingReply = awaitingReply
 	total := 0
 	for _, x := range live.exchanges {
 		total += x.size()
@@ -204,7 +239,7 @@ func (s *sessions) list(scope string, now time.Time) []SessionInfo {
 // sweep drops idled-out sessions. Callers hold the lock.
 func (s *sessions) sweep(now time.Time) {
 	for key, live := range s.byKey {
-		if now.Sub(live.lastAt) >= s.idleFor(live.name) {
+		if now.Sub(live.lastAt) >= s.idleFor(live.name, live.awaitingReply) {
 			delete(s.byKey, key)
 		}
 	}

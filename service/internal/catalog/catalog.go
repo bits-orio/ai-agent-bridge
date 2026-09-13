@@ -87,17 +87,6 @@ func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tool
 	}
 }
 
-// describe is what the model reads to choose a tool: the provider's own
-// description and nothing else. The provider and function already sit in
-// the tool's name, and every word here is sent on every round of every
-// question, so nothing is appended.
-func describe(manifest rpc.ToolManifest) string {
-	if manifest.Desc == "" {
-		return "No description supplied by the provider."
-	}
-	return manifest.Desc
-}
-
 var unsafeNameChar = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
 // ToolName is the name the model sees for one provider function.

@@ -212,6 +212,116 @@ func TestParamGrammar(t *testing.T) {
 	}
 }
 
+// The three list<...> words each build the schema phase4-spec.md §5 spells
+// out: list<string> and list<number> are a bare scalar array, list<point> is
+// an array of {x, y, surface?} objects with only x and y required.
+func TestParamGrammarLists(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "some-provider",
+		Tools: map[string]rpc.ToolManifest{
+			"sweep": {
+				Desc: "d",
+				Params: map[string]string{
+					"items":   "list<string>! item names to report on, e.g. iron-plate",
+					"amounts": "list<number> amounts to compare",
+					"anchors": "list<point> one or more {x, y, surface?} to search near",
+				},
+			},
+		},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	props := c.Tools()[0].Schema["properties"].(map[string]any)
+
+	items := props["items"].(map[string]any)
+	if items["type"] != "array" || items["description"] != "item names to report on, e.g. iron-plate" {
+		t.Errorf("items property = %v", items)
+	}
+	if got := items["items"].(map[string]any); got["type"] != "string" {
+		t.Errorf("items element schema = %v, want a bare string", got)
+	}
+
+	amounts := props["amounts"].(map[string]any)
+	if amounts["type"] != "array" {
+		t.Errorf("amounts property = %v", amounts)
+	}
+	if got := amounts["items"].(map[string]any); got["type"] != "number" {
+		t.Errorf("amounts element schema = %v, want a bare number", got)
+	}
+
+	anchors := props["anchors"].(map[string]any)
+	if anchors["type"] != "array" {
+		t.Errorf("anchors property = %v", anchors)
+	}
+	point := anchors["items"].(map[string]any)
+	if point["type"] != "object" {
+		t.Fatalf("point schema = %v, want an object", point)
+	}
+	pointProps := point["properties"].(map[string]any)
+	if pointProps["x"].(map[string]any)["type"] != "number" || pointProps["y"].(map[string]any)["type"] != "number" {
+		t.Errorf("point x/y = %v, want both number", pointProps)
+	}
+	if pointProps["surface"].(map[string]any)["type"] != "string" {
+		t.Errorf("point surface = %v, want string", pointProps["surface"])
+	}
+	pointRequired, _ := point["required"].([]string)
+	if len(pointRequired) != 2 || pointRequired[0] != "x" || pointRequired[1] != "y" {
+		t.Errorf("point required = %v, want exactly [x y]", pointRequired)
+	}
+
+	// list<string> was declared with "!"; the other two were not.
+	required, _ := c.Tools()[0].Schema["required"].([]string)
+	found := map[string]bool{}
+	for _, name := range required {
+		found[name] = true
+	}
+	if !found["items"] {
+		t.Errorf("required = %v, want items required", required)
+	}
+	if found["amounts"] || found["anchors"] {
+		t.Errorf("required = %v, want amounts and anchors optional", required)
+	}
+}
+
+// A type word this build does not know degrades to a plain string carrying
+// the whole spec line, exactly like a provider's typo does today. This is the
+// property that lets the grammar ship ahead of the tools that use a future
+// word: an older service reading a newer manifest loses the type but keeps
+// the tool and the parameter, rather than dropping either (phase4-spec.md
+// §5).
+func TestUnknownParamTypeDegradesToAStringButKeepsTheTool(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "future-provider",
+		Tools: map[string]rpc.ToolManifest{
+			"peek": {
+				Desc: "d",
+				Params: map[string]string{
+					"target": "list<entity>! a type word from a grammar this build has not learned yet",
+				},
+			},
+		},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	if len(c.Tools()) != 1 {
+		t.Fatalf("built %d tool(s), want the tool kept despite the unknown type", len(c.Tools()))
+	}
+	props := c.Tools()[0].Schema["properties"].(map[string]any)
+	target := props["target"].(map[string]any)
+	if target["type"] != "string" {
+		t.Errorf("target property = %v, want it to degrade to a string", target)
+	}
+	if target["description"] != "list<entity>! a type word from a grammar this build has not learned yet" {
+		t.Errorf("description = %v, want the whole original line", target["description"])
+	}
+	// The unknown word swallowed the "!"; an unrecognised type is read whole,
+	// so it is never required either.
+	required, _ := c.Tools()[0].Schema["required"].([]string)
+	for _, name := range required {
+		if name == "target" {
+			t.Errorf("required = %v, want target left optional", required)
+		}
+	}
+}
+
 // A provider declaring force itself never overrides the reserved one.
 func TestProviderCannotDeclareForce(t *testing.T) {
 	reply := rpc.ToolsReply{{
@@ -276,6 +386,90 @@ func TestCallPassesTheProviderError(t *testing.T) {
 
 	if _, err := c.Tools()[1].Call(context.Background(), nil); err == nil {
 		t.Fatal("expected the provider error to come back")
+	}
+}
+
+// A manifest entry with no tier at all reads as tier 1: missing tier must
+// never drop the entry, and the cheaper tier is the default (phase4-spec.md
+// §5).
+func TestDescribeWithNoTierDefaultsToTierOne(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "p",
+		Tools: map[string]rpc.ToolManifest{"fn": {Desc: "does a thing"}},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	if got := c.Tools()[0].Description; got != "[tier 1, swept] does a thing" {
+		t.Errorf("description = %q, want the tier 1 prefix", got)
+	}
+}
+
+// Each declared tier gets its own prefix and word.
+func TestDescribeCarriesTheDeclaredTier(t *testing.T) {
+	for _, tc := range []struct {
+		tier string
+		want string
+	}{
+		{"1", "[tier 1, swept] does a thing"},
+		{"2", "[tier 2, bounded] does a thing"},
+	} {
+		reply := rpc.ToolsReply{{
+			Iface: "p",
+			Tools: map[string]rpc.ToolManifest{"fn": {Desc: "does a thing", Tier: rpc.Tier(tc.tier)}},
+		}}
+		c := Build(reply, &recorder{out: "{}"})
+		if got := c.Tools()[0].Description; got != tc.want {
+			t.Errorf("tier %q: description = %q, want %q", tc.tier, got, tc.want)
+		}
+	}
+}
+
+// A tier word nobody recognises reads the same as no tier at all: tier 1,
+// and the tool is kept, not dropped. Only "1" and "2" are defined
+// (phase4-spec.md §5: "Two tiers, and every tool sits in exactly one"), so an
+// unrecognised value degrades the same way an unrecognised param type word
+// does, rather than propagating a cost label nobody declared.
+func TestDescribeWithAnUnrecognisedTierFallsBackToTierOne(t *testing.T) {
+	for _, tier := range []string{"3", "gold", "0", "-1", "tier 2"} {
+		reply := rpc.ToolsReply{{
+			Iface: "p",
+			Tools: map[string]rpc.ToolManifest{"fn": {Desc: "does a thing", Tier: rpc.Tier(tier)}},
+		}}
+		c := Build(reply, &recorder{out: "{}"})
+		if len(c.Tools()) != 1 {
+			t.Fatalf("tier %q: built %d tool(s), want the tool kept", tier, len(c.Tools()))
+		}
+		if got := c.Tools()[0].Description; got != "[tier 1, swept] does a thing" {
+			t.Errorf("tier %q: description = %q, want the tier 1 default", tier, got)
+		}
+	}
+}
+
+// The tier prefix and the list<point> grammar addition are independent: a
+// tool can declare a tier 2 cost and take a list<point> parameter, and
+// neither one disturbs the other's part of the tool.
+func TestTierAndListGrammarComposeOnOneTool(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "p",
+		Tools: map[string]rpc.ToolManifest{
+			"find_item": {
+				Desc: "walks the map for an item",
+				Tier: "2",
+				Params: map[string]string{
+					"anchors": "list<point> one or more {x, y, surface?} to search near",
+				},
+			},
+		},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	tool := c.Tools()[0]
+
+	if want := "[tier 2, bounded] walks the map for an item"; tool.Description != want {
+		t.Errorf("description = %q, want %q", tool.Description, want)
+	}
+	props := tool.Schema["properties"].(map[string]any)
+	anchors := props["anchors"].(map[string]any)
+	if anchors["type"] != "array" || anchors["items"].(map[string]any)["type"] != "object" {
+		t.Errorf("anchors property = %v, want the list<point> object schema untouched by tier", anchors)
 	}
 }
 

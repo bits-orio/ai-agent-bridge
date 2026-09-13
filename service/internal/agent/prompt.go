@@ -36,6 +36,13 @@ func systemPrompt(q Question) string {
 	b.WriteString("Read what the question needs in one round, as few tools as possible, then submit. ")
 	fmt.Fprintf(&b, "Caps: a summary is at most %d lines of %d characters, a list %d items, a table %d columns by %d rows, a comparison %d rows. ",
 		MaxSummaryLines, MaxCellChars, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows)
+	b.WriteString("Each tool says whether it is cheap or costly. ")
+	b.WriteString("A cheap tool reads counters the game already keeps and covers every force in one call. ")
+	b.WriteString("A costly tool walks the map, so it covers one force at a time and needs a place to start.\n\n")
+
+	b.WriteString("A sweep may return more rows than an answer can show. ")
+	fmt.Fprintf(&b, "A table answer holds at most %d rows and %d columns, so rank the rows by whatever the question asked about, show the best %d, and say in the summary how many you left out, using the reply's shown and total. ",
+		MaxTableRows, MaxTableColumns, MaxTableRows)
 	b.WriteString("The game renders the artifact, so send values, not formatting.\n\n")
 
 	b.WriteString("Answers print in the game's chat. Every item, fluid, entity, technology or planet is written as its sprite tag and nothing else, no name beside it, ")
@@ -58,6 +65,9 @@ func systemPrompt(q Question) string {
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")
 	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
 	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer. ")
+	b.WriteString("Any notice that asks the player for something before you can answer, a surface, a place to look, which team they mean, carries level confirmation; ")
+	b.WriteString("a notice that reports something you could not do carries level warning. ")
+	b.WriteString("The difference is not cosmetic: confirmation is what holds the session open long enough for them to go and look before replying. ")
 	b.WriteString("A search that comes back truncated stopped before it reached the end of the surface, so it shows what is there and never that something is absent: ")
 	b.WriteString("answer with what it did find and say the rest went unchecked, or search again with a narrower filter, a type beside a product for instance. ")
 	b.WriteString("Never answer that there are none of something from a truncated search.\n\n")

@@ -52,6 +52,29 @@ func TestPromptPlacesTheBriefingAfterTheAskerLineAndBeforeTheQuestion(t *testing
 	}
 }
 
+// The sweep reduction rule (phase4-spec.md section 13, "What a sweep looks
+// like to the player") tells the model to cut a full sweep down to what a
+// table artifact can hold. It lives in the system prompt, the cached prefix,
+// so it must read the same for every question and never vary with the asker.
+func TestSystemPromptCarriesTheSweepReductionRule(t *testing.T) {
+	a := Question{Text: "what are the standings", Force: "team-1", Surface: "nauvis"}
+	b := Question{Text: "who is ahead on rockets", Force: "team-2", Surface: "vulcanus"}
+
+	pa, pb := systemPrompt(a), systemPrompt(b)
+	if pa != pb {
+		t.Errorf("the sweep reduction rule must not vary with the asker, but the system prompt differs:\n%s\n---\n%s", pa, pb)
+	}
+
+	for _, want := range []string{
+		"A sweep may return more rows than an answer can show.",
+		"shown and total",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the sweep reduction rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
 // An absent briefing renders nothing at all: no empty fence, no placeholder
 // (task instruction 3). Leaving the argument off and passing "" must render
 // identically, and neither may leave any fence marker behind.

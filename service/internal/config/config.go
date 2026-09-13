@@ -24,30 +24,32 @@ import (
 
 // Defaults applied whenever a field is left unset, in both config modes.
 const (
-	defaultProvider             = "openrouter"
-	defaultModel                = "deepseek/deepseek-v4-pro-0813"
-	defaultSmallModel           = "deepseek/deepseek-v4.1-flash"
-	defaultReasoning            = "low"
-	defaultCacheTTL             = "1h"
-	defaultDataCollection       = "deny"
-	defaultOpenRouterKeyEnv     = "OPENROUTER_API_KEY"
-	defaultAnthropicKeyEnv      = "ANTHROPIC_API_KEY"
-	defaultMaxRounds            = 6
-	defaultMaxTokensPerQuestion = 20000
-	defaultMaxOutputTokens      = 4096
-	defaultMaxToolResultBytes   = 4096
-	defaultSessionIdle          = 3 * time.Minute
-	defaultNamedSessionIdle     = 30 * time.Minute
-	defaultSessionMaxExchanges  = 10
-	defaultSessionMaxBytes      = 8000
-	defaultQuestionsPerHour     = 20
-	defaultServerQuestionsHour  = 120
-	defaultMaxCostPerDay        = 5.0
-	defaultMaxToolCalls         = 30
-	defaultPollInterval         = time.Second
-	defaultHistoryPath          = "history.sqlite"
-	defaultControlAddr          = "127.0.0.1:8090"
-	defaultControlTokenEnv      = "AAB_CONTROL_TOKEN"
+	defaultProvider                = "openrouter"
+	defaultModel                   = "deepseek/deepseek-v4-pro-0813"
+	defaultSmallModel              = "deepseek/deepseek-v4.1-flash"
+	defaultReasoning               = "low"
+	defaultCacheTTL                = "1h"
+	defaultDataCollection          = "deny"
+	defaultOpenRouterKeyEnv        = "OPENROUTER_API_KEY"
+	defaultAnthropicKeyEnv         = "ANTHROPIC_API_KEY"
+	defaultMaxRounds               = 6
+	defaultMaxTokensPerQuestion    = 20000
+	defaultMaxOutputTokens         = 4096
+	defaultMaxToolResultBytes      = 4096
+	defaultMaxRoundToolResultBytes = 24000
+	defaultSessionIdle             = 3 * time.Minute
+	defaultNamedSessionIdle        = 30 * time.Minute
+	defaultClarifyIdle             = 10 * time.Minute
+	defaultSessionMaxExchanges     = 10
+	defaultSessionMaxBytes         = 8000
+	defaultQuestionsPerHour        = 20
+	defaultServerQuestionsHour     = 120
+	defaultMaxCostPerDay           = 5.0
+	defaultMaxToolCalls            = 30
+	defaultPollInterval            = time.Second
+	defaultHistoryPath             = "history.sqlite"
+	defaultControlAddr             = "127.0.0.1:8090"
+	defaultControlTokenEnv         = "AAB_CONTROL_TOKEN"
 )
 
 // Duration is a time.Duration that unmarshals from a YAML string like "2s".
@@ -92,8 +94,10 @@ type AgentConfig struct {
 	MaxTokensPerQuestion      int      `yaml:"max_tokens_per_question"`       // token budget across those turns
 	MaxOutputTokens           int      `yaml:"max_output_tokens"`             // cap on one model turn's output, thinking included
 	MaxToolResultBytes        int      `yaml:"max_tool_result_bytes"`         // a tool result longer than this is cut before the model sees it
+	MaxRoundToolResultBytes   int      `yaml:"max_round_tool_result_bytes"`   // total tool-result bytes one round may add across every call it makes; a call that would push past it is refused, not clipped, and the calls that already fit are kept
 	SessionIdle               Duration `yaml:"session_idle"`                  // a session ends after this long without a question
 	NamedSessionIdle          Duration `yaml:"named_session_idle"`            // a #named session waits longer
+	ClarifyIdle               Duration `yaml:"clarify_idle"`                  // widens the idle window while a session awaits the player's reply to an ask-back
 	SessionMaxExchanges       int      `yaml:"session_max_exchanges"`         // oldest exchanges drop past this count
 	SessionMaxBytes           int      `yaml:"session_max_bytes"`             // and past this many bytes of question and answer text
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
@@ -412,6 +416,13 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		}
 		c.Agent.MaxToolResultBytes = n
 	}
+	if v := os.Getenv("AAB_MAX_ROUND_TOOL_RESULT_BYTES"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_MAX_ROUND_TOOL_RESULT_BYTES: invalid value %q", v)
+		}
+		c.Agent.MaxRoundToolResultBytes = n
+	}
 	if v := os.Getenv("AAB_SESSION_IDLE"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
@@ -425,6 +436,13 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 			return nil, fmt.Errorf("AAB_NAMED_SESSION_IDLE: %w", err)
 		}
 		c.Agent.NamedSessionIdle = Duration(d)
+	}
+	if v := os.Getenv("AAB_CLARIFY_IDLE"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_CLARIFY_IDLE: %w", err)
+		}
+		c.Agent.ClarifyIdle = Duration(d)
 	}
 	if v := os.Getenv("AAB_SESSION_MAX_EXCHANGES"); v != "" {
 		n, err := strconv.Atoi(v)
@@ -515,11 +533,17 @@ func (c *Config) applyAgentDefaults() {
 	if c.Agent.MaxToolResultBytes == 0 {
 		c.Agent.MaxToolResultBytes = defaultMaxToolResultBytes
 	}
+	if c.Agent.MaxRoundToolResultBytes == 0 {
+		c.Agent.MaxRoundToolResultBytes = defaultMaxRoundToolResultBytes
+	}
 	if c.Agent.SessionIdle == 0 {
 		c.Agent.SessionIdle = Duration(defaultSessionIdle)
 	}
 	if c.Agent.NamedSessionIdle == 0 {
 		c.Agent.NamedSessionIdle = Duration(defaultNamedSessionIdle)
+	}
+	if c.Agent.ClarifyIdle == 0 {
+		c.Agent.ClarifyIdle = Duration(defaultClarifyIdle)
 	}
 	if c.Agent.SessionMaxExchanges == 0 {
 		c.Agent.SessionMaxExchanges = defaultSessionMaxExchanges
@@ -644,6 +668,10 @@ func (c *Config) Interval() time.Duration { return time.Duration(c.PollInterval)
 // SessionIdle and NamedSessionIdle as durations.
 func (c *Config) SessionIdle() time.Duration      { return time.Duration(c.Agent.SessionIdle) }
 func (c *Config) NamedSessionIdle() time.Duration { return time.Duration(c.Agent.NamedSessionIdle) }
+
+// ClarifyIdle is how long a session awaiting the player's reply to an
+// ask-back stays alive (docs/design/phase4-spec.md section 12).
+func (c *Config) ClarifyIdle() time.Duration { return time.Duration(c.Agent.ClarifyIdle) }
 
 func expandPath(p string) string {
 	p = os.ExpandEnv(p)

@@ -70,12 +70,14 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		stats:    controlapi.NewStats(mdl.Name(), time.Now()),
 		inFlight: map[int64]*delivery{},
 		agent: agent.New(mdl, agent.Caps{
-			MaxRounds:            cfg.Agent.MaxRounds,
-			MaxTokensPerQuestion: cfg.Agent.MaxTokensPerQuestion,
-			MaxToolResultBytes:   cfg.Agent.MaxToolResultBytes,
+			MaxRounds:               cfg.Agent.MaxRounds,
+			MaxTokensPerQuestion:    cfg.Agent.MaxTokensPerQuestion,
+			MaxToolResultBytes:      cfg.Agent.MaxToolResultBytes,
+			MaxRoundToolResultBytes: cfg.Agent.MaxRoundToolResultBytes,
 			Sessions: agent.SessionCaps{
 				Idle:         cfg.SessionIdle(),
 				NamedIdle:    cfg.NamedSessionIdle(),
+				ClarifyIdle:  cfg.ClarifyIdle(),
 				MaxExchanges: cfg.Agent.SessionMaxExchanges,
 				MaxBytes:     cfg.Agent.SessionMaxBytes,
 			},

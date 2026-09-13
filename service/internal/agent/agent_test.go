@@ -374,6 +374,56 @@ func TestSessionIdlesOut(t *testing.T) {
 	}
 }
 
+// An ask-back (a notice at level confirmation) widens the session's idle
+// window to clarify_idle: a follow-up arriving after the ordinary idle but
+// inside the clarify window must still land in the same session, or the
+// player's reply opens a conversation with no memory of the question that
+// prompted it (docs/design/phase4-spec.md section 12).
+func TestAskBackWidensTheSessionIdleWindow(t *testing.T) {
+	askBack := submitStep("t1", map[string]any{"shape": "notice", "text": "Which surface, nauvis or the platform?", "level": LevelConfirmation})
+	answer := submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"nauvis it is"}})
+	m := &scriptedModel{steps: []model.Step{askBack, answer}}
+	c := caps()
+	c.Sessions.Idle = time.Minute
+	c.Sessions.ClarifyIdle = 5 * time.Minute
+	a := New(m, c)
+	now := time.Now()
+	a.now = func() time.Time { return now }
+
+	first, err := a.Answer(context.Background(), Question{ID: 21, Text: "how much iron is left", PlayerIndex: player(1)}, nil)
+	if err != nil {
+		t.Fatalf("first answer: %v", err)
+	}
+	if first.Artifact.Shape != ShapeNotice || first.Artifact.Level != LevelConfirmation {
+		t.Fatalf("first answer must be the ask-back: %+v", first.Artifact)
+	}
+
+	// Two minutes on: past the ordinary one-minute idle, still inside the
+	// five-minute clarify window.
+	now = now.Add(2 * time.Minute)
+	second, err := a.Answer(context.Background(), Question{ID: 22, Text: "nauvis", PlayerIndex: player(1)}, nil)
+	if err != nil {
+		t.Fatalf("second answer: %v", err)
+	}
+	if second.Session.Fresh {
+		t.Fatal("the clarify window should have kept the session alive past the ordinary idle")
+	}
+	if got := m.msgs[0].Blocks[0].Text; !strings.Contains(got, "how much iron is left") {
+		t.Errorf("the reply lost the question it was answering:\n%s", got)
+	}
+
+	// The reply landed, so the window is back to ordinary: two more minutes
+	// of silence must end it.
+	now = now.Add(2 * time.Minute)
+	third, err := a.Answer(context.Background(), Question{ID: 23, Text: "one more", PlayerIndex: player(1)}, nil)
+	if err != nil {
+		t.Fatalf("third answer: %v", err)
+	}
+	if !third.Session.Fresh {
+		t.Error("the flag must clear on the next question: an ordinary follow-up does not keep the clarify window open")
+	}
+}
+
 // "sessions" and a bare "new" never reach the model and cost nothing.
 func TestSessionCommandsSkipTheModel(t *testing.T) {
 	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"an answer"}})}}

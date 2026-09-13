@@ -161,9 +161,11 @@ from environment variables, which is what hosting panels want:
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
 | `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
 | `agent.max_tool_result_bytes` | `AAB_MAX_TOOL_RESULT_BYTES` | `4096` |
+| `agent.max_round_tool_result_bytes` | `AAB_MAX_ROUND_TOOL_RESULT_BYTES` | `24000` |
 | `agent.max_tool_calls` | `AAB_MAX_TOOL_CALLS` | `30` |
 | `agent.session_idle` | `AAB_SESSION_IDLE` | `3m` |
 | `agent.named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
+| `agent.clarify_idle` | `AAB_CLARIFY_IDLE` | `10m` |
 | `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
 | `agent.session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
@@ -284,10 +286,17 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
 5. The model gets the rules, every tool the server exposes plus
    `submit_answer`, the session so far, the briefing and the question. It
    calls tools; a round's calls run at once. A tool that fails becomes a
-   failed tool result, never a failed question.
+   failed tool result, never a failed question. A round whose results
+   together would pass `max_round_tool_result_bytes` refuses whichever
+   result would push it over, not the round: the results that already fit
+   are kept exactly as their tools returned them.
 6. `submit_answer` ends the loop. The artifact is validated and clipped,
    then sent over RCON for the companion to render, which turns force names
-   back into labels and bare names into icons.
+   back into labels and bare names into icons. An answer that is itself a
+   clarifying notice (asking which surface, which force) marks the session
+   awaiting the player's reply: its idle window widens to `clarify_idle`
+   until the next question lands in it, so the follow-up is not left
+   talking to a session that already closed.
 7. Anything else that can end a question ends it with an artifact too: a
    round cap, a token budget, a tool-call cap, a quota, a model that stops
    talking. A refusal prints to the asker alone.

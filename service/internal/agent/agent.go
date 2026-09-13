@@ -132,6 +132,7 @@ type Caps struct {
 	MaxRounds                 int
 	MaxTokensPerQuestion      int
 	MaxToolResultBytes        int // a tool result longer than this is cut before the model sees it
+	MaxRoundToolResultBytes   int // total tool-result bytes one round may add across every call; zero means DefaultMaxRoundToolResultBytes
 	Sessions                  SessionCaps
 	QuestionsPerPlayerPerHour int
 	QuestionsPerHour          int     // the whole server's rolling-hour cap; zero or less means none
@@ -161,6 +162,21 @@ func (c Caps) toolResultBytes() int {
 		return DefaultMaxToolResultBytes
 	}
 	return c.MaxToolResultBytes
+}
+
+// DefaultMaxRoundToolResultBytes bounds the sum of every read's result bytes
+// in one round (docs/design/phase4-spec.md section 13): three or four
+// results each individually inside MaxToolResultBytes can still hand the
+// model tens of thousands of bytes of freshly written text in one round, and
+// this is that same per-result standard, CONTEXT.md invariant 4, applied one
+// level up.
+const DefaultMaxRoundToolResultBytes = 24000
+
+func (c Caps) roundToolResultBytes() int {
+	if c.MaxRoundToolResultBytes <= 0 {
+		return DefaultMaxRoundToolResultBytes
+	}
+	return c.MaxRoundToolResultBytes
 }
 
 func (c Caps) maxRounds() int {
@@ -275,28 +291,37 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		if req.Command == CommandNew {
 			ledgerSession.Fresh = false
 		}
-		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
+		// askedBack and awaitingReplyResolved both stay false: a command
+		// never runs sess.record ("new" ends the session outright, and
+		// "sessions" only lists), so neither is this path's to claim,
+		// whatever level its own Notice happens to carry.
+		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
 	if !a.quota.take(q.key(), now) {
 		res := Result{Artifact: refusal(quotaNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
 	if !a.server.take(serverKey, now) {
 		a.quota.refund(q.key(), now)
 		res := Result{Artifact: refusal(serverQuotaNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
 	if a.budget.exhausted(now) {
 		a.quota.refund(q.key(), now)
 		a.server.refund(serverKey, now)
 		res := Result{Artifact: refusal(budgetNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
-	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
+	// wasAwaiting says whether this session was still waiting on the
+	// player's reply to an ask-back (Decision 7) when this question landed;
+	// open has already cleared the flag, since this question's arrival
+	// resolves that wait whatever it turns out to ask. It rides through
+	// every ending below as the ledger's awaiting_reply_resolved.
+	earlier, fresh, wasAwaiting := a.sess.open(q.scope(), req.Name, now, req.Fresh)
 	mark.Fresh = fresh
 	q.Text = substituteLabels(req.Question, q.Labels)
 
@@ -385,7 +410,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// artifact here to test, only the placeholder shape above, and
 			// a provider outage is never a free-tier win regardless.
 			errText := err.Error()
-			a.writeQuestion(a.questionRecord(q, rawText, mark, ShapeNotice, round, toolCalls, res.CostUSD, msModel, msRCON, false, nil, &errText, false, briefingStatus, briefingBytes, briefingTokens, briefingMs))
+			a.writeQuestion(a.questionRecord(q, rawText, mark, ShapeNotice, round, toolCalls, res.CostUSD, msModel, msRCON, false, nil, &errText, false, briefingStatus, briefingBytes, briefingTokens, briefingMs, false, wasAwaiting))
 			return res, err
 		}
 		usage.Add(step.Usage)
@@ -398,7 +423,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			if ledgerOn {
 				rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, 0, nil))
 			}
-			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
+			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
 		var results []model.Block
 		var calledTools []ledger.ToolCall
@@ -425,7 +450,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// wall clock that actually passed, inflating the RCON side of
 			// the one report the ledger exists to settle.
 			toolStart := time.Now()
-			results, artifact, submitted, calledTools = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.Floor, ledgerOn)
+			results, artifact, submitted, calledTools = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.caps.roundToolResultBytes(), a.Floor, ledgerOn)
 			roundToolMs = time.Since(toolStart).Milliseconds()
 			if reads > 0 {
 				// A round that was nothing but a submission never dispatched
@@ -437,7 +462,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 				if ledgerOn {
 					rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
 				}
-				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
+				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 			}
 		}
 		if ledgerOn {
@@ -446,10 +471,10 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
 
 		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Budgeted() >= budget {
-			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
+			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
 	}
-	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
+	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 }
 
 // runCalls executes one round's tool calls and reports whether the round
@@ -461,8 +486,10 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 // actually ran; a pure submit_answer round runs no lookups and returns nil.
 // ledgerOn false skips building that fourth return's entries at all, down
 // through runReads and read: the calls still run, only the ledger side of
-// them is left out.
-func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) ([]model.Block, Artifact, bool, []ledger.ToolCall) {
+// them is left out. roundBudget is the round-wide byte cap on top of limit's
+// per-result one (docs/design/phase4-spec.md section 13): limit bounds one
+// result, roundBudget bounds what every result in the round adds up to.
+func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn bool) ([]model.Block, Artifact, bool, []ledger.ToolCall) {
 	results := make([]model.Block, len(calls))
 	submits, reads := partition(calls)
 
@@ -470,7 +497,7 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 		for _, i := range submits {
 			results[i] = failed(calls[i].ID, errors.New(besideReadsRefusal))
 		}
-		calledTools := runReads(ctx, calls, reads, results, byName, force, limit, floor, ledgerOn)
+		calledTools := runReads(ctx, calls, reads, results, byName, force, limit, roundBudget, floor, ledgerOn)
 		return results, Artifact{}, false, calledTools
 	}
 
@@ -550,8 +577,12 @@ func partition(calls []model.Block) (submits, reads []int) {
 // slot, so the results come back in the order the model asked for them. The
 // ledger entry for each read is built in the same slot order. ledgerOn false
 // leaves calledTools nil: every read still runs, only its ledger entry is
-// skipped.
-func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) []ledger.ToolCall {
+// skipped. Once every read is in, enforceRoundBudget walks them in that same
+// call order and refuses whichever ones would push the round's total bytes
+// past roundBudget; every call still ran, so the ledger's own record of it
+// (calledTools) is left exactly as read built it, and only the block the
+// model sees is replaced.
+func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn bool) []ledger.ToolCall {
 	var calledTools []ledger.ToolCall
 	if ledgerOn {
 		calledTools = make([]ledger.ToolCall, len(reads))
@@ -569,7 +600,39 @@ func runReads(ctx context.Context, calls []model.Block, reads []int, results []m
 		}()
 	}
 	wg.Wait()
+	enforceRoundBudget(results, reads, roundBudget)
 	return calledTools
+}
+
+// enforceRoundBudget is section 13's per-round tool-result byte cap: reads
+// are counted in the order the model asked for them (the same call order
+// runReads already promises above, not goroutine completion order, which is
+// not deterministic), a result that keeps the running total at or under cap
+// is kept exactly as the tool returned it, and the moment one more result
+// would push the total past cap, that result is refused instead, in the
+// same {refused, why} voice as the tier 2 needs_anchor refusal (section 11).
+// A cap of zero or less (Caps.roundToolResultBytes never actually produces
+// one, but a directly built Caps{} might) turns the check off rather than
+// refusing every read outright.
+func enforceRoundBudget(results []model.Block, reads []int, cap int) {
+	if cap <= 0 {
+		return
+	}
+	spent := 0
+	for _, i := range reads {
+		n := len(results[i].Content)
+		if spent+n <= cap {
+			spent += n
+			continue
+		}
+		results[i] = model.Block{
+			Type: model.BlockToolResult,
+			ID:   results[i].ID,
+			Content: fmt.Sprintf(
+				`{"refused":"round_budget","why":"this round has already spent %d of its %d-byte tool-result budget; %d bytes are left, not enough for this result"}`,
+				spent, cap, cap-spent),
+		}
+	}
 }
 
 // read runs one tool. Every tool that declares force gets the asker's force
@@ -607,8 +670,11 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 // briefing* arguments are what Answer computed once before round 1
 // (docs/design/phase4-observability-spec.md's briefing/briefing_bytes/
 // briefing_tokens/briefing_ms fields); finish only carries them into the
-// record, it never decides them.
-func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64) Result {
+// record, it never decides them. awaitingReplyResolved is Answer's own
+// wasAwaiting, whether this session was still waiting on a reply to an
+// ask-back when this question landed (section 12); it becomes the ledger's
+// awaiting_reply_resolved unchanged.
+func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64, awaitingReplyResolved bool) Result {
 	clipped, err := validate(artifact)
 	if err != nil {
 		clipped = Notice(LevelWarning, stalledNotice)
@@ -616,11 +682,16 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 	clipped.Session = &mark
 	cost := CostUSD(a.mdl.Name(), usage)
 	a.budget.spend(cost, a.now())
+	// askedBack renews the session's clarify_idle window when this answer is
+	// itself another ask-back, and clears it (a no-op, since open already
+	// cleared it on the way in) otherwise: record always takes the current
+	// answer's own verdict, never leaves the flag as open left it.
+	askedBack := isAskBack(clipped)
 	a.sess.record(q.scope(), mark.Name, Exchange{
 		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
-	})
+	}, askedBack)
 	a.flushRounds(roundRecords)
-	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs))
+	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs, askedBack, awaitingReplyResolved))
 	return Result{
 		Artifact: clipped,
 		Rounds:   rounds,
@@ -628,6 +699,27 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 		CostUSD:  cost,
 		Session:  mark,
 	}
+}
+
+// isAskBack is the ask-back signal (docs/design/phase4-spec.md section 12):
+// the model's own submit_answer, shaped as the notice/confirmation pair the
+// submit_answer schema already offers alongside notice/warning (submit.go).
+// It is the narrowest signal the artifact carries, and the one the spec
+// itself names: a loop-generated notice is always LevelWarning (roundsNotice,
+// tokenNotice, stalledNotice, the quota and budget refusals), never
+// LevelConfirmation, so this reads only what the model itself chose, never
+// the loop talking about itself. What it can miss: the system prompt does
+// not yet tell the model to pick level confirmation specifically for a
+// clarifying question (today it only says "ask which surface in a notice",
+// naming no level), so a model that asks back as a LevelWarning notice
+// instead is not caught here and the session's window stays the ordinary
+// one. What it can over-catch: a command's own LevelConfirmation notices
+// ("Started a new session", "No sessions in your scope") never reach this
+// function at all, since a.command returns before sess.record is ever
+// called, so they cannot mark a session awaiting a reply that was never
+// asked for.
+func isAskBack(a Artifact) bool {
+	return a.Shape == ShapeNotice && a.Level == LevelConfirmation
 }
 
 // fromText rescues an answer from a turn with no tool calls in it. A model

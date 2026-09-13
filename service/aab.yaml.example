@@ -80,12 +80,14 @@ agent:
   max_tokens_per_question: 20000      # token budget across those turns; a cached input token counts a tenth
   max_output_tokens: 4096             # cap on one turn's output, thinking included
   max_tool_result_bytes: 4096         # a longer tool result is cut before the model sees it
+  max_round_tool_result_bytes: 24000  # total tool-result bytes one round may add across every call; a call that would push past it is refused, not clipped, and the calls that already fit are kept
   # Sessions: the shared transcript follow-up questions see. One per chat scope
   # plus any "#name"; ends by idle time or on "new"; bounded by count and bytes,
   # dropping the oldest exchanges whole, so a session never adds more than about
   # two thousand tokens to a question.
   session_idle: 3m
   named_session_idle: 30m
+  clarify_idle: 10m                   # widens the idle window while a session awaits the player's reply to an ask-back, so a clarifying question survives the walk to go look
   session_max_exchanges: 10
   session_max_bytes: 8000
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota

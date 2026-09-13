@@ -264,6 +264,42 @@ func TestLedgerZeroLookupFalseWhenCapRefusesEveryRound(t *testing.T) {
 	}
 }
 
+// The ask-back loop's own two ledger fields (docs/design/phase4-spec.md
+// section 12): asked_back on the question whose own answer was the
+// ask-back, awaiting_reply_resolved on the question that landed while the
+// session was still waiting for a reply to it.
+func TestLedgerRecordsAskBackAndItsResolution(t *testing.T) {
+	dir := t.TempDir()
+	askBack := submitStep("t1", map[string]any{"shape": "notice", "text": "which surface?", "level": LevelConfirmation})
+	answer := submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"ok"}})
+	m := &scriptedModel{steps: []model.Step{askBack, answer}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+
+	if _, err := a.Answer(context.Background(), Question{ID: 1501, Text: "where is it", PlayerIndex: player(1)}, nil); err != nil {
+		t.Fatalf("first answer: %v", err)
+	}
+	if _, err := a.Answer(context.Background(), Question{ID: 1502, Text: "nauvis", PlayerIndex: player(1)}, nil); err != nil {
+		t.Fatalf("second answer: %v", err)
+	}
+	a.Ledger.Close()
+
+	first := findQuestion(t, dir, 1501)
+	if !first.AskedBack {
+		t.Errorf("question 1501's own answer was the ask-back: asked_back = %v, want true", first.AskedBack)
+	}
+	if first.AwaitingReplyResolved {
+		t.Error("question 1501 started the wait, it did not resolve one")
+	}
+	second := findQuestion(t, dir, 1502)
+	if second.AskedBack {
+		t.Error("question 1502's answer is an ordinary summary, not another ask-back")
+	}
+	if !second.AwaitingReplyResolved {
+		t.Error("question 1502 landed while the session was still awaiting a reply: awaiting_reply_resolved should be true")
+	}
+}
+
 // 6: a normal answer, a model that stops talking without calling a tool.
 func TestLedgerWritesNormalAnswer(t *testing.T) {
 	dir := t.TempDir()
