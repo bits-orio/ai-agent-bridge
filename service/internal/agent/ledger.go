@@ -35,6 +35,9 @@ import (
 func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64, askedBack, awaitingReplyResolved bool) ledger.QuestionRecord {
 	r := ledger.NewQuestionRecord()
 	r.QuestionID = q.ID
+	if v := a.Personality; v != "" {
+		r.Voice = v
+	}
 	r.Asker = q.askerName()
 	r.Force = q.force()
 	r.Surface = q.Surface

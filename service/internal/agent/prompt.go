@@ -17,7 +17,7 @@ import (
 // the user turn (askerContext), so the system prompt and the tool list after
 // it stay one stable prefix for the model's prompt cache; a line up here that
 // named the asker cost every change of player or surface a full cache miss.
-func systemPrompt(q Question) string {
+func systemPrompt(voice string) string {
 	var b strings.Builder
 	b.WriteString("You are the in-game assistant on a Factorio multiplayer server. ")
 	b.WriteString("You answer one question from one player by reading live game state with the tools you are given. ")
@@ -74,7 +74,39 @@ func systemPrompt(q Question) string {
 
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
+
+	// The voice, when the operator turned one on, goes last: everything above
+	// is identical on every server, so turning personality on costs one cache
+	// write rather than invalidating a prefix that was already warm.
+	if voice != "" {
+		b.WriteString("\n\n")
+		b.WriteString(voice)
+	}
 	return b.String()
+}
+
+// VoiceOff is the personality setting's default and the value the ledger
+// records when no flavour is in use.
+const VoiceOff = "off"
+
+// VoiceFactorio is the one flavour the service offers, quoted from
+// docs/design/phase4-spec.md section 16 word for word. It is owned here, not
+// configured by the operator, and deliberately so: free text drifts, and free
+// text can be worded to change what an answer says. A fixed string reviewed
+// once can do neither.
+const VoiceFactorio = "Speak like an engineer on the factory floor: plain, dry, and fond of the " +
+	"machines. Factorio's own words are welcome where they fit, even when the question " +
+	"is not about Factorio. Keep it to the summary line. Flavour never changes a " +
+	"number, a unit, an item name or a table cell."
+
+// voiceText is the flavour a personality setting names. An unknown setting is
+// no flavour at all rather than an error: a typo in a config file must not
+// stop a server answering questions.
+func voiceText(personality string) string {
+	if personality == "factorio" {
+		return VoiceFactorio
+	}
+	return ""
 }
 
 // askerContext is the one line that changes from question to question: who

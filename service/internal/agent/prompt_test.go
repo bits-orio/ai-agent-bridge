@@ -57,13 +57,7 @@ func TestPromptPlacesTheBriefingAfterTheAskerLineAndBeforeTheQuestion(t *testing
 // table artifact can hold. It lives in the system prompt, the cached prefix,
 // so it must read the same for every question and never vary with the asker.
 func TestSystemPromptCarriesTheSweepReductionRule(t *testing.T) {
-	a := Question{Text: "what are the standings", Force: "team-1", Surface: "nauvis"}
-	b := Question{Text: "who is ahead on rockets", Force: "team-2", Surface: "vulcanus"}
-
-	pa, pb := systemPrompt(a), systemPrompt(b)
-	if pa != pb {
-		t.Errorf("the sweep reduction rule must not vary with the asker, but the system prompt differs:\n%s\n---\n%s", pa, pb)
-	}
+	pa := systemPrompt("")
 
 	for _, want := range []string{
 		"A sweep may return more rows than an answer can show.",
@@ -90,6 +84,20 @@ func TestPromptWithNoBriefingRendersNothing(t *testing.T) {
 	for _, marker := range []string{"--- briefing ---", "--- end briefing ---", "Server briefing."} {
 		if strings.Contains(omitted, marker) {
 			t.Errorf("no briefing was given, but the user turn carries fence marker %q:\n%s", marker, omitted)
+		}
+	}
+}
+
+// The voice is one fixed string the service owns, not operator free text, and
+// an unrecognised setting is no voice at all rather than an error: a typo in a
+// config file must not stop a server answering questions.
+func TestVoiceTextOnlyRecognisesTheOneFlavour(t *testing.T) {
+	if voiceText("factorio") != VoiceFactorio {
+		t.Error("factorio should select the one flavour the service ships")
+	}
+	for _, setting := range []string{"off", "", "Factorio", "pirate", "off ", "factorio "} {
+		if got := voiceText(setting); got != "" {
+			t.Errorf("voiceText(%q) = %q, want no voice at all", setting, got)
 		}
 	}
 }

@@ -88,6 +88,7 @@ agent:
   session_idle: 3m
   named_session_idle: 30m
   clarify_idle: 10m                   # widens the idle window while a session awaits the player's reply to an ask-back, so a clarifying question survives the walk to go look
+  personality: off                    # off, or factorio for a light engineer-on-the-floor voice on the summary line. The text is fixed and owned by the service, not written here: flavour never changes a number, a unit, an item name or a table cell
   session_max_exchanges: 10
   session_max_bytes: 8000
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota

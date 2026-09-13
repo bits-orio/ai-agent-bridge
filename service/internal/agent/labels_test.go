@@ -42,7 +42,7 @@ func TestSubstituteLabels(t *testing.T) {
 // The system prompt no longer carries labels, and does carry the clickable
 // and where rules.
 func TestSystemPromptRules(t *testing.T) {
-	got := systemPrompt(Question{Text: "x", Force: "team-1", Labels: []ForceLabel{{Name: "team-1", Label: "Team Ace"}}})
+	got := systemPrompt("")
 	if strings.Contains(got, "Team Ace") {
 		t.Errorf("labels leaked into the prompt:\n%s", got)
 	}

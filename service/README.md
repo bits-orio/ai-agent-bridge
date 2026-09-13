@@ -166,6 +166,7 @@ from environment variables, which is what hosting panels want:
 | `agent.session_idle` | `AAB_SESSION_IDLE` | `3m` |
 | `agent.named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
 | `agent.clarify_idle` | `AAB_CLARIFY_IDLE` | `10m` |
+| `agent.personality` | `AAB_PERSONALITY` | `off` |
 | `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
 | `agent.session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |

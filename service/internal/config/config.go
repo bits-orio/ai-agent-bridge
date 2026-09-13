@@ -40,6 +40,10 @@ const (
 	defaultSessionIdle             = 3 * time.Minute
 	defaultNamedSessionIdle        = 30 * time.Minute
 	defaultClarifyIdle             = 10 * time.Minute
+	// defaultPersonality is off: a server that never sets it answers in the
+	// plain voice, which is what an operator running this for other people
+	// gets unless they choose otherwise.
+	defaultPersonality = "off"
 	defaultSessionMaxExchanges     = 10
 	defaultSessionMaxBytes         = 8000
 	defaultQuestionsPerHour        = 20
@@ -98,6 +102,7 @@ type AgentConfig struct {
 	SessionIdle               Duration `yaml:"session_idle"`                  // a session ends after this long without a question
 	NamedSessionIdle          Duration `yaml:"named_session_idle"`            // a #named session waits longer
 	ClarifyIdle               Duration `yaml:"clarify_idle"`                  // widens the idle window while a session awaits the player's reply to an ask-back
+	Personality               string   `yaml:"personality"`                   // "off" (default) or "factorio": the fixed voice appended to the system prompt
 	SessionMaxExchanges       int      `yaml:"session_max_exchanges"`         // oldest exchanges drop past this count
 	SessionMaxBytes           int      `yaml:"session_max_bytes"`             // and past this many bytes of question and answer text
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota
@@ -444,6 +449,9 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		}
 		c.Agent.ClarifyIdle = Duration(d)
 	}
+	if v := os.Getenv("AAB_PERSONALITY"); v != "" {
+		c.Agent.Personality = v
+	}
 	if v := os.Getenv("AAB_SESSION_MAX_EXCHANGES"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -544,6 +552,9 @@ func (c *Config) applyAgentDefaults() {
 	}
 	if c.Agent.ClarifyIdle == 0 {
 		c.Agent.ClarifyIdle = Duration(defaultClarifyIdle)
+	}
+	if c.Agent.Personality == "" {
+		c.Agent.Personality = defaultPersonality
 	}
 	if c.Agent.SessionMaxExchanges == 0 {
 		c.Agent.SessionMaxExchanges = defaultSessionMaxExchanges

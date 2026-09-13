@@ -93,6 +93,7 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	r.agent.Floor = client.Floor
 	r.agent.BriefingEnabled = cfg.BriefingEnabled()
 	r.agent.Chat = newHistoryChat(store)
+	r.agent.Personality = cfg.Agent.Personality
 	if cfg.BriefingEnabled() {
 		log.Print("briefing: on, riding with every question (briefing.enabled: true)")
 	} else {

@@ -474,7 +474,7 @@ func TestSubmitToolIsAlwaysOffered(t *testing.T) {
 // are untrusted, and the answer goes through submit_answer.
 func TestSystemPromptWarnsAboutUntrustedResults(t *testing.T) {
 	q := Question{Text: "x", Force: "enemy", Asker: "player 1"}
-	system := systemPrompt(q)
+	system := systemPrompt("")
 	for _, want := range []string{"untrusted", SubmitTool} {
 		if !strings.Contains(system, want) {
 			t.Errorf("system prompt is missing %q:\n%s", want, system)

@@ -246,6 +246,13 @@ type Agent struct {
 	// organic chat lines (the `ch` key). A nil Chat simply omits `ch`, the
 	// same as any other Group A source that did not land.
 	Chat ChatSource
+
+	// Personality is the operator's voice setting (phase4-spec.md section
+	// 16): "off", the default, or "factorio". It picks a fixed flavour
+	// string the service owns, appended to the end of the system prompt, so
+	// it is the same text for every question on this server and turning it
+	// on costs one cache write rather than one per question.
+	Personality string
 }
 
 func New(m model.Model, caps Caps) *Agent {
@@ -328,7 +335,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	ctx = catalog.WithForce(ctx, q.force())
 	byName := index(ts)
 	defs := defsFor(ts)
-	system := systemPrompt(q)
+	system := systemPrompt(voiceText(a.Personality))
 
 	var msModel, msRCON int64
 	// The briefing runs once per question, before round 1, on its own budget

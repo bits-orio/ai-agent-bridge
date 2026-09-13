@@ -15,9 +15,23 @@ import (
 // transcript and before the question.
 func TestSystemPromptIsTheSameForEveryAsker(t *testing.T) {
 	a := Question{Text: "x", PlayerName: "alice", PlayerIndex: player(3), Force: "team-1", Surface: "nauvis"}
-	b := Question{Text: "y", Force: "spectator", Surface: "mts-nauvis-2", PhysicalSurface: "nauvis"}
-	if systemPrompt(a) != systemPrompt(b) {
-		t.Errorf("the system prompt varies with the asker:\n%s\n---\n%s", systemPrompt(a), systemPrompt(b))
+
+	// systemPrompt takes no question at all any more, so it cannot vary with
+	// the asker by construction. What it does take is the voice, which is one
+	// value per server, so the prefix is stable within a server either way.
+	// The guard that still matters, that nothing in the round loop folds
+	// per-question text into the system string, runs through Answer in
+	// agent_test.go; a comparison here could only ever compare a pure
+	// function to itself.
+	off, on := systemPrompt(""), systemPrompt(VoiceFactorio)
+	if off == on {
+		t.Error("the voice tail is missing: turning personality on changed nothing")
+	}
+	if !strings.HasPrefix(on, off) {
+		t.Error("the voice must append to the end, leaving the prefix before it byte identical")
+	}
+	if strings.Contains(off, "factory floor") {
+		t.Error("the voice leaked into the prompt with personality off")
 	}
 
 	turn := prompt(a, []Exchange{{Asker: "bob", Question: "q", Answer: "a"}})
