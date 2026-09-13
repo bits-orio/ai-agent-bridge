@@ -102,11 +102,15 @@ func TestToolCallCap(t *testing.T) {
 		t.Errorf("a submission alone passes a used-up cap: %+v rounds=%d", res.Artifact, res.Rounds)
 	}
 
-	refusal := refuseLookups([]model.Block{{ID: "x"}}, 20, 3, 9, 12)
+	refusal, calledTools := refuseLookups([]model.Block{{ID: "x", Name: "nothing"}}, 20, 3, 9, 12, 0, true)
 	if len(refusal) != 1 || !refusal[0].IsError || !strings.Contains(refusal[0].Content, "asked for 20 lookups but only 3 remain") || !strings.Contains(refusal[0].Content, "9 of 12 used") {
 		t.Errorf("refusal = %+v", refusal)
 	}
-	if none := refuseLookups([]model.Block{{ID: "y"}}, 1, 0, 12, 12); !strings.Contains(none[0].Content, "no lookups remain") {
+	if len(calledTools) != 1 || calledTools[0].OK || calledTools[0].Ms != 0 || calledTools[0].Name != "nothing" ||
+		calledTools[0].Error == nil || !strings.Contains(*calledTools[0].Error, "asked for 20 lookups but only 3 remain") {
+		t.Errorf("calledTools = %+v, want one refused entry naming the call and carrying the refusal text", calledTools)
+	}
+	if none, _ := refuseLookups([]model.Block{{ID: "y"}}, 1, 0, 12, 12, 0, true); !strings.Contains(none[0].Content, "no lookups remain") {
 		t.Errorf("used-up refusal = %+v", none)
 	}
 }

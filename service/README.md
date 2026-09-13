@@ -172,6 +172,8 @@ from environment variables, which is what hosting panels want:
 | `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
 | `control_api.addr` | `AAB_CONTROL_ADDR` | `127.0.0.1:8090` |
 | `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |
+| `ledger.enabled` | `AAB_LEDGER_ENABLED` | `true` |
+| `ledger.dir` | `AAB_LEDGER_DIR` | the directory holding the config file |
 | `log_file` | `AAB_LOG_FILE` | `aab.log` next to the events file |
 
 Secrets keep their own names in both modes and never sit in the YAML:
@@ -222,10 +224,19 @@ lines to look at when a question cost more than expected.
 ./aab -config aab.yaml probe                   # the whole tool catalog, manifests verbatim
 ./aab -config aab.yaml rpc '{"v":1,"op":"poll"}'   # one raw protocol request
 ./aab -config aab.yaml poll 0                  # unanswered questions above an id
+./aab stats                                    # report on the observability ledger
 ```
 
-Each exits non-zero on an `{"ok":false}` reply and prints the error code.
-None of them needs a model key.
+Each of the first four exits non-zero on an `{"ok":false}` reply and prints
+the error code. None of them needs a model key.
+
+`stats` is pure arithmetic over the ledger files already on disk: it needs
+no RCON password, no model key, and no reachable Factorio server, so it
+runs before any of that is checked. `./aab stats 2026-09-12` reports one
+day, `./aab stats 2026-09-01 2026-09-12` an inclusive range, no args every
+ledger file found. It reads `ledger.dir` out of `-config` the same way
+every other subcommand does; pass `-ledger-dir` instead to point it
+straight at a directory without touching a config file at all.
 
 ## Control API
 

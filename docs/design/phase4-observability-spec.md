@@ -38,8 +38,8 @@ Two log lines already exist, at two different grains. `traceRound`
 (`service/internal/agent/trace.go`, header comment lines 1-3, function at
 line 13) already writes one line per model round, when the optional
 `Trace func(format string, args ...any)` hook (`service/internal/agent/agent.go`
-line 203) is set; it is wired once, at `a.traceRound(q, round, step)`
-(line 267), and the line it writes already carries the question id, round
+line 204) is set; it is wired once, at `a.traceRound(q, round, step)`
+(line 340), and the line it writes already carries the question id, round
 number, stop reason, every token count but the hour-cache-write count,
 provider, and the names of the tools called that round. Every answer also
 produces one aggregate line, at
@@ -78,7 +78,6 @@ so a round can be joined back to the question it belongs to.
   "round": 2,
   "model": "deepseek/deepseek-v4-pro-0813",
   "provider": "DeepInfra",
-  "ms_first_byte": 640,
   "ms_total": 4120,
   "input_tokens": 3810,
   "output_tokens": 214,
@@ -115,11 +114,10 @@ so a round can be joined back to the question it belongs to.
 | field | holds |
 |---|---|
 | `question_id` | which question this round belongs to |
-| `round` | 1-based round number, the same counter as the agent loop's `for round := 1; round <= a.caps.maxRounds(); round++` (`service/internal/agent/agent.go` line 258) |
+| `round` | 1-based round number, the same counter as the agent loop's `for round := 1; round <= a.caps.maxRounds(); round++` (`service/internal/agent/agent.go` line 313) |
 | `model` | the model id this round ran against |
 | `provider` | `model.Step.Provider`: which upstream OpenRouter routed the round to. A different word for a different thing than CONTEXT.md's Provider (a mod exposing tools) |
-| `ms_first_byte` | wall clock from request start to the first streamed byte |
-| `ms_total` | wall clock for the whole round: the model call plus every tool call it made |
+| `ms_total` | wall clock for the whole round: the model call plus the tool phase's own elapsed time, timed as one span from just before the round's calls are dispatched to just after they return, not summed from each call's own `ms`. A round's reads run concurrently, so summing per-call durations would measure the round's fan-out width, not the time that actually passed. |
 | `input_tokens` | `Usage.InputTokens` |
 | `output_tokens` | `Usage.OutputTokens` |
 | `cache_read_tokens` | `Usage.CacheReadTokens`: input served from the prompt cache, billed at the cached-read rate |
@@ -128,7 +126,9 @@ so a round can be joined back to the question it belongs to.
 | `reasoning_tokens` | `Usage.ReasoningTokens` |
 | `cost` | `Usage.Cost`, USD |
 | `stop_reason` | `model.Step.StopReason` |
-| `tool_calls` | one entry per call this round dispatched, from `runCalls`/`runReads` (`service/internal/agent/agent.go` lines 305, 372) |
+| `tool_calls` | one entry per call this round actually ran or the lookup cap actually refused, from `runCalls`/`runReads` (`service/internal/agent/agent.go` lines 412, 501). A round the lookup cap refuses still records one entry per refused read, so the repeat-count report in section 4 sees the case it exists for; see the `ok` and `error` rows below. `submit_answer` is never recorded here, on any path: it is the loop's own terminator, not a catalog tool, so a pure submission round carries no entries at all, and a submission refused alongside reads leaves no entry of its own either, only the reads beside it do. |
+
+`ms_first_byte` is not recorded. The OpenRouter client posts a request and waits for the complete response rather than streaming it, so there is no first-byte moment to measure, and a zero here would read as a measurement rather than an absence. If the client starts streaming, the field returns.
 
 Each `tool_calls` entry:
 
@@ -137,10 +137,10 @@ Each `tool_calls` entry:
 | `name` | the catalog name, `iface__fn` the way `ToolName` builds it (`service/internal/catalog/catalog.go` line 111, `sep` at line 28) |
 | `args` | the call's arguments, clipped the same way a tool result is clipped, never the full text of an oversized argument |
 | `result_bytes` | the size, in bytes, of the result this call returned. A sweep carries this inside the envelope [phase4-spec.md](phase4-spec.md)'s wire contract specifies; the service's own list tools (`recent_chat`, `catch_up`, `recent_events`, `last_event`, `count_events`) sweep no axis and return the same header-plus-tab-separated-rows shape with no sweep envelope, so their `result_bytes` counts a header line and rows, nothing else. Measured ahead of the service's own `max_tool_result_bytes` clip: 4096 in Group A, unchanged from today's default, and 8000 in Group B, raised in the same release as `CAPS.call`'s rise to 16384 (`service/internal/config/config.go` line 38) |
-| `ms` | wall clock for this one call |
+| `ms` | wall clock for this one call, or `0` for a call the lookup cap refused, since it never ran. Nothing sums this into `ms_total` or `ms_rcon`; each of those times its round's tool phase once, as a single span, rather than adding per-call durations up. |
 | `ms_above_floor` | `ms` minus `rpc.Client.Floor()` (`service/internal/rpc/rpc.go` line 86, backed by the 32-sample ring in `service/internal/rpc/latency.go` lines 15-40): the part of the call that is not baseline RCON, so a genuinely slow tool stands out from a merely slow connection |
-| `ok` | true when the call returned a result |
-| `error` | the error string when `ok` is false, `null` otherwise |
+| `ok` | true when the call returned a result, false when it errored or when the lookup cap refused it before it ran |
+| `error` | the error string when `ok` is false, `null` otherwise: the call's own error, or the refusal text when the lookup cap refused the call |
 | `path` | present only when `name` is a `find_item` call, omitted for every other tool: which rung answered it, `logistic` (a logistic network already held the item, no walk needed), `walk` (the bounded entity walk under `work_budget` found it), or `refused` (no anchor and no logistic hit, so the structured refusal fired). This is what tests the prediction that the three-rung logistic path already answers most where-is-it questions ([phase4-spec.md](phase4-spec.md)), rather than leaving it assumed |
 
 ### Per question
@@ -169,6 +169,7 @@ Each `tool_calls` entry:
   "awaiting_reply_resolved": false,
   "refused": false,
   "refused_reason": null,
+  "model_error": null,
   "voice": "off"
 }
 ```
@@ -184,19 +185,20 @@ Each `tool_calls` entry:
 | `text` | the question text, already capped at 400 bytes by the companion (`companion-mod/scripts/questions.lua` line 38) before it reaches the service |
 | `rounds` | how many rounds the question took, bound by `max_rounds` (default 6, `service/internal/config/config.go` line 35) |
 | `lookups` | total tool calls across every round, bound by `max_tool_calls` (default 30, line 46) |
-| `zero_lookup` | true when `lookups` is zero: the question was answered from the briefing alone, with no tool call at all. This is the free tier's own signature |
-| `shape` | the artifact shape delivered: `summary`, `notice`, `list`, `table` or `comparison`, the five [phase1-2-spec.md](phase1-2-spec.md) defines (`service/internal/agent/artifact.go` lines 19-23) |
+| `zero_lookup` | true when three things hold together: at least one round ran, `lookups` stayed at zero, and the delivered artifact is not a warning notice. That is the free tier's own signature, a real answer with no tool call at all. The third condition is what keeps the field honest, because two endings satisfy the first two and are not free-tier wins: a model outage, forced false at the model-error path because there is no delivered artifact to test and an outage is never a question the briefing answered; and a question whose every round was refused by the lookup cap, which ends on the rounds or token notice and is excluded by the notice test. Both record false (`zeroLookupFor`, `service/internal/agent/ledger.go`) |
+| `shape` | the artifact shape actually delivered, always one of the five [phase1-2-spec.md](phase1-2-spec.md) defines: `summary`, `notice`, `list`, `table` or `comparison` (`service/internal/agent/artifact.go` lines 19-23), never empty. A model outage still delivers a `notice`, so the record says `notice`, not nothing |
 | `cost` | the question's total cost, every round's `cost` summed |
-| `ms_model` | wall clock inside model calls: every round's `ms_total` minus that round's own tool time |
-| `ms_rcon` | wall clock spent on RCON: every `tool_calls[].ms` across every round, summed, plus `briefing_ms` as a separate summand, so the briefing's own cost stays visible rather than buried inside a number that reads as pure tool time |
+| `ms_model` | wall clock inside model calls: every round's `ms_total` minus that round's own tool time. The one case this does not reconcile against summing every round's own `ms_total`: a model call that fails outright still adds its wall clock here before the error is handled, but never produces a `RoundRecord` at all, so that time has no round entry to add back up from |
+| `ms_rcon` | wall clock spent on RCON: each round's tool-phase span, the same span `ms_total` times, summed across rounds, plus `briefing_ms` as its own summand, so the briefing's own cost stays visible rather than buried inside a number that reads as pure tool time. The span is summed only for a round that actually dispatched a read (`reads > 0`, `service/internal/agent/agent.go` line 377): a round holding nothing but a submission spends its span parsing and validating the artifact locally, which is neither a model call nor an RCON call, so it is billed to neither side. That is the second of the two places where `ms_model` plus `ms_rcon` does not reconcile against summed `ms_total`; the `ms_model` row above carries the first |
 | `briefing` | whether the briefing rode with this question: `on` when it was assembled and reached the user turn, `off` when the operator's `briefing` config key had it turned off for this question, `failed` when the config key was on but the attempt itself timed out, errored, or hit a companion lacking the op, so the service answered without it |
 | `briefing_bytes` | meaningful only when `briefing` is `on`, zero when it is `off` or `failed`: the size of the reply the briefing was assembled from, several `call` replies summed until the companion ships a dedicated `briefing` op, one reply after ([phase4-spec.md](phase4-spec.md) has the wire contract for both) |
 | `briefing_tokens` | meaningful only when `briefing` is `on`, zero when it is `off` or `failed`: the briefing's size once it sits in the user turn, from the byte-per-four estimator, `floor(briefing_bytes / 4)`. It is an estimate, not a figure the model API reports back on its own; the estimator is what the ledger has, and consistency across every question matters more than precision on any one of them |
 | `briefing_ms` | meaningful only when `briefing` is `on`, zero when it is `off` or `failed`: wall clock spent fetching the briefing, before round 1, five serialized `call` trips today at about 525 ms at the 105 ms RCON floor, or the one `briefing` trip once it ships |
 | `asked_back` | true when the answer delivered for this question was the ask-back `notice` at level `confirmation` (Decision 7), not a real answer. This is the field a tier 2 tool's structured refusal actually sets: the refusal itself is a normal tool result the round continues past, invisible to the ledger on its own, and it shows up here only through what the model does with it |
 | `awaiting_reply_resolved` | true when this question arrived while its session's `awaiting_reply` flag was still set: the player's reply landed inside the session's `clarify_idle` window rather than after it expired. Set on the resolving question's own record, never rewritten onto the ask-back's, since a ledger entry is never rewritten once written |
-| `refused` | true when the service refused the question outright, before or instead of asking the model at all: an hourly quota, the server-wide hourly quota, the daily cost budget, or an empty question (`refusal(...)`, `service/internal/agent/agent.go` lines 232, 236 and 241, and `service/internal/agent/commands.go` line 30). A tier 2 tool's own refusal does not set this field; see `asked_back` |
+| `refused` | true when the service refused the question outright, before or instead of asking the model at all: an hourly quota, the server-wide hourly quota, the daily cost budget, or an empty question (`refusal(...)`, `service/internal/agent/agent.go` lines 268, 274 and 281, and `service/internal/agent/commands.go` line 30). A tier 2 tool's own refusal does not set this field; see `asked_back`. A model outage does not set it either: the service still asked the model, it just failed to answer; see `model_error` |
 | `refused_reason` | the notice text delivered when `refused` is true (`quotaNotice`, `serverQuotaNotice`, `budgetNotice`, or the empty-question notice), `null` otherwise |
+| `model_error` | the error text when the model call itself failed and the question ended in a failure notice, `null` otherwise. Clipped like every other recorded string |
 | `voice` | the `personality` setting active for this question (Decision 12): `off`, or the flavour value |
 
 ## 3. Where it lives, its rotation, and its size
@@ -222,8 +224,9 @@ roughly 3MB a day.
 It holds player names and question text by design (Decision 10 and R13
 already put both in the model's hands), so it is not something to
 publish. It stays on the operator's disk, next to the SQLite history file,
-and `*.jsonl` joins `*.log` in `.gitignore` for the same reason
-`/service/*.log` and `/service/history.sqlite*` are already there.
+and the pattern `ledger-*.jsonl`, left unanchored rather than rooted at
+`/service/`, joins `.gitignore` for the same reason `/service/*.log` and
+`/service/history.sqlite*` are already there.
 
 ## 4. `aab stats`
 
@@ -247,7 +250,10 @@ Two of these are load-bearing, not merely interesting. Tool repeat count
 within a round turns "the model called `current_research` once per force,
 21 times" from an anecdote into a standing report: whichever tool tops it
 is the next one to make plural, built from what questions actually asked
-rather than a guess at what they might ask. Cache hit ratio per question is
+rather than a guess at what they might ask. That anecdote is precisely a
+round the lookup cap refused, so a refused round's calls are recorded in
+`tool_calls` the same as any other, one entry per refused call, or the
+report would be blind in the case it exists for. Cache hit ratio per question is
 the regression alarm: the system prompt prefix has to stay byte stable for
 the cache to hold, and a ratio that drops on a release is the same signal
 that would have caught the 2026-09-12 asker-line regression the day it
@@ -272,11 +278,16 @@ arriving after the session has already idled out.
 
 ## 5. What the ledger must never do
 
-It writes after an answer is already decided, never before, and never on
-the path that decides it. A slow write, or a full disk, delays nothing a
-player sees and fails no question: the write is best effort, its own error
-goes to the service's own log, never to the asker, and the answer already
-rendered stands either way.
+It writes only after an answer is already decided, never before, and never
+on the path that decides it. A write error never fails a question and
+never reaches the asker: it goes to the service's own log, once, and the
+answer already decided stands either way. The write does happen before the
+answer is delivered, though: a question's round records flush in one burst
+and its own question record follows, both inside the same call that is
+about to hand the artifact back for delivery. A slow write or a full disk
+is bounded to one best-effort append per record, not eliminated. The
+owner's call is to keep the writer synchronous rather than move it onto an
+async queue that could lose records on shutdown.
 
 It carries what Decision 10 and R13 already put in the model's hands: chat
 text and player names. It must never carry what the model and the tools

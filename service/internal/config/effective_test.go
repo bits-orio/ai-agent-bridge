@@ -107,6 +107,34 @@ rcon:
 	}
 }
 
+// LoadQuiet exists so a caller that only wants a resolved *Config (stats.go's
+// statsLedgerDir) never leaves the dump-file side effect behind, whatever directory it
+// runs from and whether or not the config it read went on to validate.
+func TestLoadQuietWritesNoEffectiveDumpOnSuccess(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+
+	if _, err := LoadQuiet("/no/such/aab.yaml"); err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if _, err := os.Stat(EffectiveConfigName); !os.IsNotExist(err) {
+		t.Fatalf("LoadQuiet must not write %s, stat returned: %v", EffectiveConfigName, err)
+	}
+}
+
+func TestLoadQuietWritesNoEffectiveDumpOnValidationFailure(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("FACTORIO_RCON_PASSWORD", "") // the empty-secret case, F5's own repro
+
+	if _, err := LoadQuiet("/no/such/aab.yaml"); err == nil {
+		t.Fatal("expected validation error for empty RCON password")
+	}
+	if _, err := os.Stat(EffectiveConfigName); !os.IsNotExist(err) {
+		t.Fatalf("LoadQuiet must not write %s even on validation failure, stat returned: %v", EffectiveConfigName, err)
+	}
+}
+
 func TestForcedEnvModeWithoutFileStatesTheGuard(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)

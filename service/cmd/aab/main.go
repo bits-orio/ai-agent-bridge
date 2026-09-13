@@ -22,6 +22,7 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "aab.yaml", "path to config file")
+	ledgerDir := flag.String("ledger-dir", "", "ledger directory to read (stats only; default: resolved from config)")
 	flag.Usage = usage
 	flag.Parse()
 
@@ -36,9 +37,18 @@ func main() {
 	// "aab -config aab.yaml run" and "aab run -config aab.yaml" mean the same thing.
 	subFlags := flag.NewFlagSet(sub, flag.ExitOnError)
 	subFlags.StringVar(cfgPath, "config", *cfgPath, "path to config file")
+	subFlags.StringVar(ledgerDir, "ledger-dir", *ledgerDir, "ledger directory to read (stats only; default: resolved from config)")
 	subFlags.Usage = usage
 	_ = subFlags.Parse(rest)
 	rest = subFlags.Args()
+
+	// aab stats is pure arithmetic over ledger files already on disk (F5): it runs
+	// before the config/RCON prologue below, so reading a year of ledger needs
+	// neither an RCON password nor a reachable Factorio server.
+	if sub == "stats" {
+		runStats(statsLedgerDir(*ledgerDir, *cfgPath), rest)
+		return
+	}
 
 	// Load a .env sitting next to the config file (the setup wizard writes one there) so
 	// the service's secrets are available without the caller having to `source` it first.
@@ -92,6 +102,14 @@ subcommands:
                   "op" field, e.g. aab rpc '{"op":"poll","after":0}'; print the reply
   poll [after]    print questions with id greater than after (default: 0, everything
                   still pending)
+  stats [day|from to]
+                  report on the observability ledger: cache hit ratio, tool frequency
+                  and repeats, refusals, cost, and more. No args reports over every
+                  ledger file on disk; one YYYY-MM-DD reports that day; two report the
+                  inclusive range between them. Pure arithmetic over files already on
+                  disk: no config file, no RCON password and no Factorio server needed.
+                  -ledger-dir names the directory directly; without it, stats makes a
+                  best-effort attempt to read ledger.dir out of -config
 
 flags:
 `)

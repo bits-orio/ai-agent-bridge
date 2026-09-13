@@ -98,6 +98,15 @@ agent:
 history:
   path: history.sqlite
 
+# The observability ledger: one JSONL line per question and per model round
+# (docs/design/phase4-observability-spec.md), what aab stats reads. It holds player
+# names and question text by design, so it defaults on with an off switch rather than
+# the other way around. Never slows or fails a question: a write error is logged once
+# and swallowed.
+# ledger:
+#   enabled: true
+#   dir: .            # default: the directory holding this config file
+
 # The service's own HTTP surface: /healthz and /v1/status (connected, mod version,
 # questions answered, tokens, cost, model, uptime). Leave addr empty to turn it off.
 # /healthz is always open; /v1/status needs the bearer token when one is configured.

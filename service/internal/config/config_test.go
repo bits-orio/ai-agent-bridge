@@ -291,3 +291,132 @@ func TestLoadFromEnvInvalidSessionIdle(t *testing.T) {
 		t.Fatal("expected an error for an unparsable AAB_SESSION_IDLE")
 	}
 }
+
+// The ledger is on by default (it holds player names and question text, so
+// an operator turns it off explicitly, never the other way around), and its
+// dir falls back to the working directory when there is no config file to
+// anchor it to.
+func TestLedgerDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+
+	c, err := Load("/no/such/aab.yaml")
+	if err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if !c.LedgerEnabled() {
+		t.Error("LedgerEnabled() = false, want true by default")
+	}
+	if c.Ledger.Enabled == nil || !*c.Ledger.Enabled {
+		t.Errorf("Ledger.Enabled = %v, want a resolved true so the effective-config dump shows it plainly", c.Ledger.Enabled)
+	}
+	if c.Ledger.Dir != "." {
+		t.Errorf("Ledger.Dir = %q, want %q (no config file to anchor to)", c.Ledger.Dir, ".")
+	}
+}
+
+// In file mode, ledger.dir is resolved against the config file the same way
+// history.path already is, and an explicit enabled: false must survive
+// (must not be reinterpreted as "unset").
+func TestLoadFileParsesTheLedgerSection(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+
+	cfgPath := filepath.Join(dir, "aab.yaml")
+	yaml := `
+factorio:
+  rcon:
+    address: "game:27015"
+    password_env: FACTORIO_RCON_PASSWORD
+  events_file: /tmp/events.jsonl
+ledger:
+  enabled: false
+  dir: ledgers
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.LedgerEnabled() {
+		t.Error("LedgerEnabled() = true, want false: the config said enabled: false")
+	}
+	if want := filepath.Join(dir, "ledgers"); c.Ledger.Dir != want {
+		t.Errorf("Ledger.Dir = %q, want it resolved against the config file as %q", c.Ledger.Dir, want)
+	}
+}
+
+// A config file that says nothing about the ledger still gets the default
+// dir (the directory holding the config file), not the working directory.
+func TestLoadFileDefaultsLedgerDirToConfigDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(t.TempDir()) // a different cwd than the config file's own directory
+	t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+
+	cfgPath := filepath.Join(dir, "aab.yaml")
+	yaml := "factorio:\n  rcon:\n    address: \"game:27015\"\n    password_env: FACTORIO_RCON_PASSWORD\n  events_file: /tmp/events.jsonl\n"
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.LedgerEnabled() {
+		t.Error("LedgerEnabled() = false, want true: enabled was left unset")
+	}
+	if c.Ledger.Dir != dir {
+		t.Errorf("Ledger.Dir = %q, want %q (the config file's own directory)", c.Ledger.Dir, dir)
+	}
+}
+
+func TestLoadFromEnvLedgerOverrides(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_LEDGER_ENABLED", "false")
+	t.Setenv("AAB_LEDGER_DIR", "/var/lib/aab/ledger")
+
+	c, err := Load("/no/such/aab.yaml")
+	if err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if c.LedgerEnabled() {
+		t.Error("LedgerEnabled() = true, want false")
+	}
+	if c.Ledger.Dir != "/var/lib/aab/ledger" {
+		t.Errorf("Ledger.Dir = %q, want /var/lib/aab/ledger", c.Ledger.Dir)
+	}
+}
+
+// AAB_LEDGER_DIR is a path the same way AAB_LOG_FILE and AAB_EVENTS_FILE are, so it
+// expands ${VAR} and a leading ~/ the same way those two do.
+func TestLoadFromEnvLedgerDirExpandsPath(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(t.TempDir()) // a different cwd, so a relative result here couldn't pass by accident
+	setEnvMode(t)
+	t.Setenv("AAB_TEST_HOME", dir)
+	t.Setenv("AAB_LEDGER_DIR", "${AAB_TEST_HOME}/ledger")
+
+	c, err := Load("/no/such/aab.yaml")
+	if err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if want := filepath.Join(dir, "ledger"); c.Ledger.Dir != want {
+		t.Errorf("Ledger.Dir = %q, want %q (AAB_LEDGER_DIR expanded)", c.Ledger.Dir, want)
+	}
+}
+
+func TestLoadFromEnvInvalidLedgerEnabled(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_LEDGER_ENABLED", "not-a-bool")
+
+	if _, err := Load("/no/such/aab.yaml"); err == nil {
+		t.Fatal("expected an error for an unparsable AAB_LEDGER_ENABLED")
+	}
+}

@@ -49,24 +49,37 @@ func (m Meta) modeLine() string {
 	}
 }
 
-// finish is the single tail shared by both config modes: validate, dump the effective
-// config (even when validation fails, that's when inspection matters most), and log.
-func finish(c *Config, m Meta) (*Config, error) {
+// finish is the single tail shared by both config modes: validate, and, when dump is
+// true, write the effective config (even when validation fails, that's when inspection
+// matters most). dump is false only for LoadQuiet's callers (stats.go's statsLedgerDir is
+// the one today), who need a resolved *Config but must never overwrite another process's
+// aab.effective.yaml in whatever directory they happen to run from just to read one field.
+func finish(c *Config, m Meta, dump bool) (*Config, error) {
 	m.Validation = c.validate()
-	writeEffective(c, m)
+	if dump {
+		writeEffective(c, m)
+	} else {
+		logConfigMode(m)
+	}
 	if m.Validation != nil {
 		return nil, m.Validation
 	}
 	return c, nil
 }
 
-// writeEffective renders and writes the effective-config snapshot. Best-effort: failures
-// are logged, never fatal.
-func writeEffective(c *Config, m Meta) {
+// logConfigMode is the startup log line every load logs regardless of dump: which mode
+// resolved the config, and any warnings that came with it.
+func logConfigMode(m Meta) {
 	log.Printf("config: %s", m.modeLine())
 	for _, w := range m.Warnings {
 		log.Printf("config: WARNING: %s", w)
 	}
+}
+
+// writeEffective renders and writes the effective-config snapshot. Best-effort: failures
+// are logged, never fatal.
+func writeEffective(c *Config, m Meta) {
+	logConfigMode(m)
 	body, err := renderEffective(c, m)
 	if err == nil {
 		err = os.WriteFile(EffectiveConfigName, body, 0o644)

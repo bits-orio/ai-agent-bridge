@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -201,6 +202,20 @@ type Agent struct {
 	// Trace, when set, gets one line per model round: what the round cost
 	// and what the model spent its output on. Nil means no per-round lines.
 	Trace func(format string, args ...any)
+
+	// Ledger, when set to an enabled Writer, gets one QuestionRecord for
+	// every question Answer finishes with and one RoundRecord for every
+	// model round (docs/design/phase4-observability-spec.md sections 2-4).
+	// A nil Ledger, or one opened disabled, makes every write a no-op:
+	// ledger.Writer's own contract, not a nil check this package repeats.
+	Ledger *ledger.Writer
+
+	// Floor, when set, is the fastest recent RCON round trip: subtracted
+	// from a tool call's own wall clock so a genuinely slow tool stands out
+	// from ordinary network latency (the ledger's ms_above_floor). Nil
+	// means nothing is subtracted, which is what every tool call gets when
+	// this is left unset, tests included.
+	Floor func() time.Duration
 }
 
 func New(m model.Model, caps Caps) *Agent {
@@ -223,22 +238,49 @@ func (a *Agent) Model() string { return a.mdl.Name() }
 // comes back as a Result.
 func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result, error) {
 	now := a.now()
+	// Captured before substituteLabels rewrites q.Text for the model, so
+	// every ledger line below logs the same text the companion sent,
+	// whichever of the nine endings this question hits.
+	rawText := q.Text
 	req := parse(q.Text)
 	mark := SessionMark{Key: sessionKey(q.scope(), req.Name), Name: req.Name}
 	if req.Command != "" {
-		return a.command(q, req, mark, now), nil
+		res := a.command(q, req, mark, now)
+		var reason *string
+		refused := req.Command == CommandEmpty
+		if refused {
+			reason = strPtr(emptyQuestionNotice)
+		}
+		// "new" only ends the current session; sessions.open runs for the
+		// question that follows, not this one, so the ledger's own
+		// session_fresh (which means "sessions.open reported a fresh
+		// session for this question") must not claim that yet. The
+		// artifact's own session marker is left untouched: it correctly
+		// tells the player their next question starts clean.
+		ledgerSession := res.Session
+		if req.Command == CommandNew {
+			ledgerSession.Fresh = false
+		}
+		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact)))
+		return res, nil
 	}
 	if !a.quota.take(q.key(), now) {
-		return Result{Artifact: refusal(quotaNotice), Session: mark}, nil
+		res := Result{Artifact: refusal(quotaNotice), Session: mark}
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		return res, nil
 	}
 	if !a.server.take(serverKey, now) {
 		a.quota.refund(q.key(), now)
-		return Result{Artifact: refusal(serverQuotaNotice), Session: mark}, nil
+		res := Result{Artifact: refusal(serverQuotaNotice), Session: mark}
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		return res, nil
 	}
 	if a.budget.exhausted(now) {
 		a.quota.refund(q.key(), now)
 		a.server.refund(serverKey, now)
-		return Result{Artifact: refusal(budgetNotice), Session: mark}, nil
+		res := Result{Artifact: refusal(budgetNotice), Session: mark}
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		return res, nil
 	}
 	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
 	mark.Fresh = fresh
@@ -255,27 +297,70 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 
 	var usage model.Usage
 	toolCalls := 0
+	var msModel, msRCON int64
+	// ledgerOn is tested once per round rather than letting each round
+	// build a RoundRecord and every tool call clip its own args only for
+	// Writer.write to discard them: a disabled ledger (or none wired) must
+	// cost one bool test per round, not a wasted build. The per-question
+	// record is still built on every path, because it copies a handful of
+	// fields and clips nothing; only the per-round and per-call work, which
+	// grows with the round and clips every argument, is worth gating.
+	ledgerOn := a.Ledger.Enabled()
+	// Round records accumulate here rather than writing as each round
+	// finishes: the ledger only ever writes after the artifact that ends
+	// the question already exists, never on the path that decides it
+	// (spec section 5). Bounded by max_rounds, so this never buffers more
+	// than one question's worth of rounds, and flushRounds (called from
+	// finish and the model-error path below) is what actually writes them.
+	rounds := make([]ledger.RoundRecord, 0, a.caps.maxRounds())
 	for round := 1; round <= a.caps.maxRounds(); round++ {
+		modelStart := time.Now()
 		step, err := a.mdl.Step(ctx, system, msgs, defs)
+		roundModelMs := time.Since(modelStart).Milliseconds()
 		if err != nil {
 			// The asker got no answer, so the slot goes back: a model
 			// outage must not spend anyone's hourly allowance.
 			a.quota.refund(q.key(), now)
-			return Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage), Session: mark}, err
+			msModel += roundModelMs
+			res := Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage), Session: mark}
+			a.flushRounds(rounds)
+			// The runner (cmd/aab/answer.go) turns this error into a
+			// failure notice before it ever reaches the player, so the
+			// ledger records the shape actually delivered, not the empty
+			// value this branch has no artifact to read it from. refused
+			// stays false: refused means the service turned the question
+			// away before or instead of asking the model, and here the
+			// model was asked; it just failed. zero_lookup is forced false
+			// rather than run through zeroLookupFor: there is no delivered
+			// artifact here to test, only the placeholder shape above, and
+			// a provider outage is never a free-tier win regardless.
+			errText := err.Error()
+			a.writeQuestion(a.questionRecord(q, rawText, mark, ShapeNotice, round, toolCalls, res.CostUSD, msModel, msRCON, false, nil, &errText, false))
+			return res, err
 		}
 		usage.Add(step.Usage)
+		msModel += roundModelMs
 		a.traceRound(q, round, step)
 		msgs = append(msgs, model.Message{Role: model.RoleAssistant, Blocks: step.Blocks})
 
 		calls := model.ToolUses(step.Blocks)
 		if len(calls) == 0 {
-			return a.finish(q, fromText(step), round, usage, mark), nil
+			if ledgerOn {
+				rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, 0, nil))
+			}
+			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
 		}
 		var results []model.Block
+		var calledTools []ledger.ToolCall
+		var roundToolMs int64
 		if reads, left := countReads(calls), a.caps.maxToolCalls()-toolCalls; reads > left {
 			// The round is refused, not the question: the model is told what
-			// is left and answers from what it has, or asks for less.
-			results = refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls())
+			// is left and answers from what it has, or asks for less. Every
+			// refused call still gets a ledger.ToolCall of its own (ms:0,
+			// the refusal text as its error), so a round the cap refused
+			// still shows up in the repeat-count report instead of leaving
+			// it blind in exactly the case that motivates it.
+			results, calledTools = refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls(), a.caps.toolResultBytes(), ledgerOn)
 			if a.Trace != nil {
 				a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
 			}
@@ -283,18 +368,38 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			toolCalls += reads
 			var artifact Artifact
 			var submitted bool
-			results, artifact, submitted = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes())
-			if submitted {
-				return a.finish(q, artifact, round, usage, mark), nil
+			// A round's reads run concurrently (runReads fans them out over
+			// goroutines), so the tool phase's own wall clock, not the sum
+			// of each call's own ms, is what a round actually spent on
+			// tools: summing would report N concurrent calls as N times the
+			// wall clock that actually passed, inflating the RCON side of
+			// the one report the ledger exists to settle.
+			toolStart := time.Now()
+			results, artifact, submitted, calledTools = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.Floor, ledgerOn)
+			roundToolMs = time.Since(toolStart).Milliseconds()
+			if reads > 0 {
+				// A round that was nothing but a submission never dispatched
+				// a read: the wall clock just measured is local (parsing the
+				// submission), not RCON, so it must not bill to ms_rcon.
+				msRCON += roundToolMs
 			}
+			if submitted {
+				if ledgerOn {
+					rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
+				}
+				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
+			}
+		}
+		if ledgerOn {
+			rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
 		}
 		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
 
 		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Budgeted() >= budget {
-			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark), nil
+			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
 		}
 	}
-	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark), nil
+	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
 }
 
 // runCalls executes one round's tool calls and reports whether the round
@@ -302,7 +407,12 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 // ends the loop: a round that mixes it with reads is refused, and a round that
 // submits twice keeps the first submission in block order, so which answer
 // reaches the player never depends on which goroutine finished first.
-func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit int) ([]model.Block, Artifact, bool) {
+// The fourth return is this round's ledger entries, one per lookup it
+// actually ran; a pure submit_answer round runs no lookups and returns nil.
+// ledgerOn false skips building that fourth return's entries at all, down
+// through runReads and read: the calls still run, only the ledger side of
+// them is left out.
+func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) ([]model.Block, Artifact, bool, []ledger.ToolCall) {
 	results := make([]model.Block, len(calls))
 	submits, reads := partition(calls)
 
@@ -310,8 +420,8 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 		for _, i := range submits {
 			results[i] = failed(calls[i].ID, errors.New(besideReadsRefusal))
 		}
-		runReads(ctx, calls, reads, results, byName, force, limit)
-		return results, Artifact{}, false
+		calledTools := runReads(ctx, calls, reads, results, byName, force, limit, floor, ledgerOn)
+		return results, Artifact{}, false, calledTools
 	}
 
 	for n, i := range submits {
@@ -324,9 +434,9 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 		for _, later := range submits[n+1:] {
 			results[later] = failed(calls[later].ID, errors.New(secondSubmitRefusal))
 		}
-		return results, artifact, true
+		return results, artifact, true, nil
 	}
-	return results, Artifact{}, false
+	return results, Artifact{}, false, nil
 }
 
 // countReads is how many of a round's calls are lookups; a submission is
@@ -339,8 +449,17 @@ func countReads(calls []model.Block) int {
 // refuseLookups is a round's results when its reads would pass the cap: every
 // call gets the same refusal, which says what is left, so the model answers
 // from what it has or asks for less. A submission beside the reads is refused
-// with them, as it would have been anyway.
-func refuseLookups(calls []model.Block, asked, left, used, cap int) []model.Block {
+// with them, as it would have been anyway, but it is not a lookup and never
+// gets a ledger.ToolCall of its own: partition puts it in the same slice as
+// the reads, and the reports built from tool_calls read it by name, so a
+// phantom submit_answer entry would misreport what actually ran. The second
+// return is the refusal recorded as a ledger.ToolCall per refused read
+// (clipped args, ok:false, ms:0, the refusal text as error): the call never
+// ran, but the model asked for it, and the repeat-count report needs to see
+// that it asked. Built with append, not indexed by i, so a skipped
+// submission never leaves a zero-value gap. ledgerOn false skips building
+// any of them.
+func refuseLookups(calls []model.Block, asked, left, used, cap, limit int, ledgerOn bool) ([]model.Block, []ledger.ToolCall) {
 	text := fmt.Sprintf("Refused: this round asked for %d lookups but only %d remain for this question (%d of %d used). "+
 		"Answer now from what you already have, saying what you could not check, or ask for at most %d.", asked, left, used, cap, left)
 	if left <= 0 {
@@ -348,10 +467,20 @@ func refuseLookups(calls []model.Block, asked, left, used, cap int) []model.Bloc
 			"Answer now from what you already have and say what you could not check.", used, cap)
 	}
 	results := make([]model.Block, len(calls))
+	var calledTools []ledger.ToolCall
 	for i, call := range calls {
 		results[i] = failed(call.ID, errors.New(text))
+		if !ledgerOn || call.Name == SubmitTool {
+			continue
+		}
+		calledTools = append(calledTools, ledger.ToolCall{
+			Name:  call.Name,
+			Args:  content(call.Input, limit),
+			OK:    false,
+			Error: strPtr(text),
+		})
 	}
-	return results
+	return results, calledTools
 }
 
 // partition splits one round's calls into submissions and reads, keeping the
@@ -368,54 +497,81 @@ func partition(calls []model.Block) (submits, reads []int) {
 }
 
 // runReads runs a round's reads at once and writes each result into its own
-// slot, so the results come back in the order the model asked for them.
-func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit int) {
+// slot, so the results come back in the order the model asked for them. The
+// ledger entry for each read is built in the same slot order. ledgerOn false
+// leaves calledTools nil: every read still runs, only its ledger entry is
+// skipped.
+func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) []ledger.ToolCall {
+	var calledTools []ledger.ToolCall
+	if ledgerOn {
+		calledTools = make([]ledger.ToolCall, len(reads))
+	}
 	var wg sync.WaitGroup
-	for _, i := range reads {
+	for n, i := range reads {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results[i] = read(ctx, calls[i], byName, force, limit)
+			block, tc := read(ctx, calls[i], byName, force, limit, floor, ledgerOn)
+			results[i] = block
+			if ledgerOn {
+				calledTools[n] = tc
+			}
 		}()
 	}
 	wg.Wait()
+	return calledTools
 }
 
 // read runs one tool. Every tool that declares force gets the asker's force
 // filled in when the model left it out, game tools and history tools alike,
-// which is what the system prompt promises the model.
-func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int) model.Block {
+// which is what the system prompt promises the model. Alongside the model's
+// own result, it always returns this call's ledger entry, known tool or not,
+// so every lookup the model asked for shows up in the ledger exactly once;
+// ledgerOn false makes that second return the zero value instead, skipping
+// the args clip and the Floor call that building a real one costs.
+func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) (model.Block, ledger.ToolCall) {
+	started := time.Now()
 	t, known := byName[call.Name]
 	if !known {
-		return failed(call.ID, fmt.Errorf("there is no tool named %q", call.Name))
+		err := fmt.Errorf("there is no tool named %q", call.Name)
+		return failed(call.ID, err), maybeToolCallRecord(ledgerOn, call.Name, call.Input, limit, time.Since(started), floor, 0, err)
 	}
 	args := call.Input
 	if tools.Declares(t.Schema, catalog.ForceParam) {
 		args = tools.FillString(args, catalog.ForceParam, force)
 	}
 	out, err := t.Call(ctx, args)
+	ms := time.Since(started)
 	if err != nil {
-		return failed(call.ID, err)
+		return failed(call.ID, err), maybeToolCallRecord(ledgerOn, call.Name, args, limit, ms, floor, 0, err)
 	}
-	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out, limit)}
+	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out, limit)},
+		maybeToolCallRecord(ledgerOn, call.Name, args, limit, ms, floor, len(out), nil)
 }
 
-// finish clips the artifact, remembers the exchange and prices the question.
-func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark) Result {
+// finish clips the artifact, remembers the exchange, prices the question,
+// flushes the question's accumulated round records and writes its own ledger
+// line, in that order, once the artifact that ends the question already
+// exists. rawText is what the companion actually sent, for the ledger; q.Text
+// may already be the label-substituted form the model saw.
+func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord) Result {
 	clipped, err := validate(artifact)
 	if err != nil {
 		clipped = Notice(LevelWarning, stalledNotice)
 	}
 	clipped.Session = &mark
-	a.budget.spend(CostUSD(a.mdl.Name(), usage), a.now())
+	cost := CostUSD(a.mdl.Name(), usage)
+	a.budget.spend(cost, a.now())
 	a.sess.record(q.scope(), mark.Name, Exchange{
 		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
 	})
+	a.flushRounds(roundRecords)
+	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped)))
 	return Result{
 		Artifact: clipped,
 		Rounds:   rounds,
 		Usage:    usage,
-		CostUSD:  CostUSD(a.mdl.Name(), usage),
+		CostUSD:  cost,
 		Session:  mark,
 	}
 }

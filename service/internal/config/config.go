@@ -80,6 +80,7 @@ type Config struct {
 	Agent        AgentConfig      `yaml:"agent"`
 	History      HistoryConfig    `yaml:"history"`
 	ControlAPI   ControlAPIConfig `yaml:"control_api"`
+	Ledger       LedgerConfig     `yaml:"ledger"`
 	LogFile      string           `yaml:"log_file"` // also write logs here (default: aab.log next to events; "-" = stderr only)
 }
 
@@ -105,6 +106,19 @@ type AgentConfig struct {
 // moving the config moves the history with it.
 type HistoryConfig struct {
 	Path string `yaml:"path"`
+}
+
+// LedgerConfig is the observability ledger: one JSONL line per question and
+// one per model round (docs/design/phase4-observability-spec.md). It holds
+// player names and question text by design, so it is on unless the operator
+// turns it off, rather than the other way around. Enabled is a pointer
+// because that default is true: an absent "enabled" key in the YAML must
+// read as unset, not as an explicit false, which a plain bool cannot tell
+// apart, so this section cannot reuse the "zero means take the default"
+// idiom applyAgentDefaults uses for every int and float64 field below.
+type LedgerConfig struct {
+	Enabled *bool  `yaml:"enabled"`
+	Dir     string `yaml:"dir"` // default: the directory holding the config file
 }
 
 // ControlAPIConfig is the service's own HTTP surface. An empty addr turns it
@@ -196,11 +210,25 @@ func (m ModelConfig) check() error {
 
 // Load reads and validates configuration. If the config file is absent, or env-var mode
 // is forced with AAB_CONFIG=none, it builds the config entirely from environment
-// variables (env-var config mode). See LoadFromEnv.
+// variables (env-var config mode). See LoadFromEnv. It also writes the effective-config
+// snapshot (effective.go) as a side effect, the way every subcommand but stats wants.
 func Load(path string) (*Config, error) {
+	return load(path, true)
+}
+
+// LoadQuiet is Load without the effective-config snapshot: same resolution and
+// validation, but finish's writeEffective side effect never runs. Use it for a caller
+// that only wants a resolved *Config to read a field off of and cannot say which
+// directory it will be run from (stats.go's statsLedgerDir, the one caller today) --
+// Load would otherwise clobber another process's own aab.effective.yaml sitting there.
+func LoadQuiet(path string) (*Config, error) {
+	return load(path, false)
+}
+
+func load(path string, dump bool) (*Config, error) {
 	_, statErr := os.Stat(path)
 	if forced := strings.EqualFold(os.Getenv("AAB_CONFIG"), "none"); forced || errors.Is(statErr, fs.ErrNotExist) {
-		return loadFromEnv(Meta{Mode: "env", ConfigPath: path, Forced: forced, FileExists: statErr == nil})
+		return loadFromEnv(Meta{Mode: "env", ConfigPath: path, Forced: forced, FileExists: statErr == nil}, dump)
 	}
 
 	b, err := os.ReadFile(path)
@@ -233,6 +261,7 @@ func Load(path string) (*Config, error) {
 	}
 	c.applyAgentDefaults()
 	c.History.Path = resolveHistoryPath(c.History.Path, path)
+	c.applyLedgerDefaults(path)
 	c.applyControlDefaults()
 
 	// Resolve secrets from the environment; never store them in the YAML.
@@ -252,7 +281,7 @@ func Load(path string) (*Config, error) {
 		c.ControlAPI.Token = os.Getenv(c.ControlAPI.TokenEnv)
 	}
 
-	return finish(&c, Meta{Mode: "file", ConfigPath: path, Warnings: unknownKeyWarnings(b)})
+	return finish(&c, Meta{Mode: "file", ConfigPath: path, Warnings: unknownKeyWarnings(b)}, dump)
 }
 
 func (c *Config) validate() error {
@@ -285,10 +314,10 @@ func (c *Config) validate() error {
 // it. Non-secret settings use AAB_* vars; secrets use FACTORIO_RCON_PASSWORD,
 // SFTP_PASSWORD and ANTHROPIC_API_KEY.
 func LoadFromEnv() (*Config, error) {
-	return loadFromEnv(Meta{Mode: "env"})
+	return loadFromEnv(Meta{Mode: "env"}, true)
 }
 
-func loadFromEnv(m Meta) (*Config, error) {
+func loadFromEnv(m Meta, dump bool) (*Config, error) {
 	c := &Config{
 		Transport: getenvDefault("AAB_TRANSPORT", "local"),
 		LogFile:   expandPath(os.Getenv("AAB_LOG_FILE")),
@@ -427,16 +456,28 @@ func loadFromEnv(m Meta) (*Config, error) {
 		}
 		c.Agent.QuestionsPerPlayerPerHour = n
 	}
+	if v := os.Getenv("AAB_LEDGER_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_LEDGER_ENABLED: invalid value %q", v)
+		}
+		c.Ledger.Enabled = &b
+	}
+	if v := os.Getenv("AAB_LEDGER_DIR"); v != "" {
+		c.Ledger.Dir = expandPath(v)
+	}
 
 	c.applyAgentDefaults()
-	// Env-var mode has no config file to anchor a relative history path to.
+	// Env-var mode has no config file to anchor a relative history path, or
+	// a relative ledger dir, to.
 	c.History.Path = resolveHistoryPath(c.History.Path, "")
+	c.applyLedgerDefaults("")
 	c.applyControlDefaults()
 
 	if err := c.Model.check(); err != nil {
 		return nil, err
 	}
-	return finish(c, m)
+	return finish(c, m, dump)
 }
 
 // applyAgentDefaults fills the agent caps left unset. A quota below zero is a
@@ -486,14 +527,46 @@ func (c *Config) applyControlDefaults() {
 	}
 }
 
-// resolveHistoryPath keeps the history file beside the config that named it,
-// so a service started from another directory still finds the same database.
-// In env-var mode there is no config file to anchor to and a relative path
-// stays relative to the working directory.
-func resolveHistoryPath(path, configPath string) string {
-	if path == "" {
-		path = defaultHistoryPath
+// applyLedgerDefaults resolves the ledger section: enabled defaults to true
+// (LedgerConfig's own doc comment says why a plain bool cannot do this), and
+// dir defaults to the directory holding the config file, resolved the same
+// way resolveHistoryPath already resolves history.path.
+func (c *Config) applyLedgerDefaults(configPath string) {
+	if c.Ledger.Enabled == nil {
+		enabled := true
+		c.Ledger.Enabled = &enabled
 	}
+	c.Ledger.Dir = resolveLedgerDir(c.Ledger.Dir, configPath)
+}
+
+// resolveLedgerDir applies the ledger.dir default (the directory holding the
+// config file, an empty dir joined to nothing rather than a filename joined
+// to it, since ledger.dir names a directory) and resolves a relative dir
+// against the config file the same way resolveHistoryPath resolves
+// history.path: moving the config moves the ledger with it. Env-var mode has
+// no config file to anchor to, so an unset dir falls back to the working
+// directory rather than an empty string, which ledger.Open cannot create a
+// file under.
+func resolveLedgerDir(dir, configPath string) string {
+	if dir == "" {
+		if configPath == "" {
+			return "."
+		}
+		if d := filepath.Dir(configPath); d != "" {
+			return d
+		}
+		return "."
+	}
+	return anchorTo(dir, configPath)
+}
+
+// anchorTo is the rule both resolveLedgerDir and resolveHistoryPath apply once
+// they have a path: expand it, leave it alone when it is absolute or when
+// there is no config file to anchor to, and otherwise read it relative to the
+// directory holding the config. The two callers differ only in the default
+// they apply before this, so the rule lives here and a change to it cannot
+// reach one path and miss the other.
+func anchorTo(path, configPath string) string {
 	path = expandPath(path)
 	if filepath.IsAbs(path) || configPath == "" {
 		return path
@@ -503,6 +576,23 @@ func resolveHistoryPath(path, configPath string) string {
 		return path
 	}
 	return filepath.Join(dir, path)
+}
+
+// LedgerEnabled is the ledger.enabled setting after defaults are applied:
+// true unless the operator explicitly turned it off.
+func (c *Config) LedgerEnabled() bool {
+	return c.Ledger.Enabled == nil || *c.Ledger.Enabled
+}
+
+// resolveHistoryPath keeps the history file beside the config that named it,
+// so a service started from another directory still finds the same database.
+// In env-var mode there is no config file to anchor to and a relative path
+// stays relative to the working directory.
+func resolveHistoryPath(path, configPath string) string {
+	if path == "" {
+		path = defaultHistoryPath
+	}
+	return anchorTo(path, configPath)
 }
 
 func getenvDefault(key, def string) string {

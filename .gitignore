@@ -16,6 +16,10 @@
 /service/history.*.sqlite
 /service/history.*.sqlite-*
 /service/*.log
+# The ledger holds player names and chat by design (docs/design/
+# phase4-observability-spec.md section 3), and ledger.dir can point anywhere,
+# not just next to the config, so this is unanchored rather than /service/-rooted.
+ledger-*.jsonl
 
 # Git worktrees for feature branches
 /.worktrees/

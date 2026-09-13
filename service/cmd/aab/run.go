@@ -22,6 +22,7 @@ import (
 	"github.com/bits-orio/ai-agent-bridge/service/internal/config"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/controlapi"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/history"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/anthropic"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/fake"
@@ -53,6 +54,14 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	}
 	defer store.Close()
 
+	ledgerWriter := ledger.Open(cfg.Ledger.Dir, cfg.LedgerEnabled())
+	defer ledgerWriter.Close()
+	if cfg.LedgerEnabled() {
+		log.Printf("ledger: writing question and round records to %s", cfg.Ledger.Dir)
+	} else {
+		log.Print("ledger: disabled (ledger.enabled: false)")
+	}
+
 	r := &runner{
 		cfg:      cfg,
 		rpc:      client,
@@ -78,6 +87,8 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	}
 
 	r.agent.Trace = log.Printf
+	r.agent.Ledger = ledgerWriter
+	r.agent.Floor = client.Floor
 
 	go tailEvents(ctx, cfg, store)
 	if cfg.ControlAPI.Addr != "" {
