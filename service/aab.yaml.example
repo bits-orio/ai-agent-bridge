@@ -107,6 +107,15 @@ history:
 #   enabled: true
 #   dir: .            # default: the directory holding this config file
 
+# The per-question game-state snapshot that rides beside every question, before
+# the model is asked anything (docs/design/phase4-spec.md section 3): who is
+# online, what each force is researching, the last few chat lines. Answers a
+# good share of questions with no tool call at all, at a cost of roughly
+# 400-800 tokens on the ones it does ride with. On by default; an operator can
+# turn it off for the pre-Phase-4 behaviour.
+# briefing:
+#   enabled: true
+
 # The service's own HTTP surface: /healthz and /v1/status (connected, mod version,
 # questions answered, tokens, cost, model, uptime). Leave addr empty to turn it off.
 # /healthz is always open; /v1/status needs the bearer token when one is configured.

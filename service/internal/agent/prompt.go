@@ -84,11 +84,28 @@ func askerContext(q Question) string {
 }
 
 // prompt is the user turn: the session so far, when there is one, then who
-// is asking, then the question. Every exchange names its asker, since a
-// session is shared and a follow-up may pile onto someone else's question.
-// The transcript comes first because it only grows at its end, so a
-// follow-up shares its cached prefix with the exchange before it.
-func prompt(q Question, earlier []Exchange) string {
+// is asking, then the briefing when one rode along, then the question.
+// Every exchange names its asker, since a session is shared and a follow-up
+// may pile onto someone else's question. The transcript comes first because
+// it only grows at its end, so a follow-up shares its cached prefix with the
+// exchange before it. The briefing sits ahead of the Question line, after
+// the transcript and the asker-context line, per phase4-spec.md section 3.
+//
+// briefing is variadic so every call site that predates the briefing, the
+// round loop in agent.go included, keeps compiling and behaving exactly as
+// it did: passing none, or "", renders nothing at all, no empty fence, no
+// placeholder. Only the first value is read; a question never carries more
+// than one. It takes the already-fenced text, not a BriefingResult, because
+// BriefingResult.Text is documented as "the fenced block, ready to embed in
+// prompt()" (briefing.go) and is reproduced here character for character:
+// the fence is a security boundary, not decoration.
+//
+// The briefing never touches systemPrompt. That function's cached prefix
+// must stay byte stable regardless of whether a briefing exists for this
+// question, exactly the invariant the asker-line regression of 2026-09-12
+// broke once already; TestSystemPromptIsTheSameForEveryAsker in
+// prompt_cache_test.go guards it against a briefing the same way.
+func prompt(q Question, earlier []Exchange, briefing ...string) string {
 	var b strings.Builder
 	if len(earlier) > 0 {
 		b.WriteString("Earlier in this session, oldest first:\n")
@@ -98,6 +115,11 @@ func prompt(q Question, earlier []Exchange) string {
 		b.WriteString("\n")
 	}
 	b.WriteString(askerContext(q))
+	if len(briefing) > 0 && briefing[0] != "" {
+		b.WriteString("\n\n")
+		b.WriteString(briefing[0])
+		b.WriteString("\n")
+	}
 	b.WriteString("\nQuestion: ")
 	b.WriteString(q.Text)
 	return b.String()

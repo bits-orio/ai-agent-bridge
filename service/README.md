@@ -174,6 +174,7 @@ from environment variables, which is what hosting panels want:
 | `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |
 | `ledger.enabled` | `AAB_LEDGER_ENABLED` | `true` |
 | `ledger.dir` | `AAB_LEDGER_DIR` | the directory holding the config file |
+| `briefing.enabled` | `AAB_BRIEFING_ENABLED` | `true` |
 | `log_file` | `AAB_LOG_FILE` | `aab.log` next to the events file |
 
 Secrets keep their own names in both modes and never sit in the YAML:
@@ -213,6 +214,9 @@ lines to look at when a question cost more than expected.
   openrouter.ai take effect on the next question, no restart needed. The
   startup log prints the balance once, and `check` fails on an empty one.
 - `question 7: new session global` when a question started a session.
+- `briefing: question 7 got no usable game_time reply within 2s, briefing
+  skipped` when the per-question snapshot could not be assembled in time or
+  the companion refused it; the question still answers, just without one.
 - `tool ai-agent-bridge-tools.find_entities took 230ms on the game thread`
   for any tool call over 100 ms.
 - `idle, 12 questions answered` every five minutes with nothing to do.
@@ -270,17 +274,24 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
    provider.
 3. Labels in the question become force names. The session for the
    question's scope and `#name` is opened, or started.
-4. The model gets the rules, every tool the server exposes plus
-   `submit_answer`, the session so far and the question. It calls tools; a
-   round's calls run at once. A tool that fails becomes a failed tool
-   result, never a failed question.
-5. `submit_answer` ends the loop. The artifact is validated and clipped,
+4. Unless `briefing.enabled` is off, a compact snapshot of game state (who's
+   online, what each force is researching, the last few chat lines) is read
+   before the model is asked anything, on its own two-second budget
+   (docs/design/phase4-spec.md section 3). It rides in the user turn beside
+   the question, so a good share of questions ("who's online", "what time is
+   it") never need a tool call at all. A slow or failed attempt is best
+   effort: the question answers exactly as it would without one.
+5. The model gets the rules, every tool the server exposes plus
+   `submit_answer`, the session so far, the briefing and the question. It
+   calls tools; a round's calls run at once. A tool that fails becomes a
+   failed tool result, never a failed question.
+6. `submit_answer` ends the loop. The artifact is validated and clipped,
    then sent over RCON for the companion to render, which turns force names
    back into labels and bare names into icons.
-6. Anything else that can end a question ends it with an artifact too: a
+7. Anything else that can end a question ends it with an artifact too: a
    round cap, a token budget, a tool-call cap, a quota, a model that stops
    talking. A refusal prints to the asker alone.
-7. The rendered answer is what the session keeps for the next question.
+8. The rendered answer is what the session keeps for the next question.
 
 ## Building and testing
 

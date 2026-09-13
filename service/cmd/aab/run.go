@@ -89,6 +89,13 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	r.agent.Trace = log.Printf
 	r.agent.Ledger = ledgerWriter
 	r.agent.Floor = client.Floor
+	r.agent.BriefingEnabled = cfg.BriefingEnabled()
+	r.agent.Chat = newHistoryChat(store)
+	if cfg.BriefingEnabled() {
+		log.Print("briefing: on, riding with every question (briefing.enabled: true)")
+	} else {
+		log.Print("briefing: off (briefing.enabled: false)")
+	}
 
 	go tailEvents(ctx, cfg, store)
 	if cfg.ControlAPI.Addr != "" {

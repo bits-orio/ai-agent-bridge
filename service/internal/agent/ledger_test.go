@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/fake"
@@ -630,5 +631,117 @@ func TestAnswerWorksWithNoLedgerWired(t *testing.T) {
 	a := New(m, caps())
 	if _, err := a.Answer(context.Background(), Question{ID: 1101, PlayerIndex: player(1)}, nil); err != nil {
 		t.Fatalf("answer: %v", err)
+	}
+}
+
+// The briefing wired end to end (docs/design/phase4-observability-spec.md's
+// briefing/briefing_bytes/briefing_tokens/briefing_ms fields; agent.go and
+// ledger.go, not briefing.go itself, which briefing_test.go already covers
+// on its own). happyGroupATools, askerQuestion, withoutTool, withTool and
+// slowTool all come from briefing_test.go, the same package.
+
+// A question with the briefing on records "on", non-zero briefing_bytes and
+// briefing_ms, briefing_tokens as floor(bytes/4), and ms_rcon equal to
+// briefing_ms exactly, since the round itself is a bare submission with no
+// RCON of its own (TestLedgerPureSubmissionRoundDoesNotBillRCON already
+// establishes that half of the equation).
+func TestLedgerRecordsBriefingOn(t *testing.T) {
+	dir := t.TempDir()
+	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"fine"}})}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	a.BriefingEnabled = true
+	// game_time gets a small real delay so briefing_ms is provably non-zero
+	// rather than rounding a sub-millisecond stub call down to 0.
+	ts := withTool(happyGroupATools(), "game_time",
+		slowTool(catalog.ToolName(engineIface, "game_time"), 5*time.Millisecond, `{"tick":184320,"hours":51.2}`))
+
+	if _, err := a.Answer(context.Background(), Question{ID: 2001, Text: "hi", Force: "north", PlayerIndex: player(1)}, ts); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2001)
+	if rec.Briefing != ledger.BriefingOn {
+		t.Fatalf("briefing = %q, want %q", rec.Briefing, ledger.BriefingOn)
+	}
+	if rec.BriefingBytes <= 0 {
+		t.Errorf("briefing_bytes = %d, want > 0", rec.BriefingBytes)
+	}
+	if want := rec.BriefingBytes / 4; rec.BriefingTokens != want {
+		t.Errorf("briefing_tokens = %d, want floor(bytes/4) = %d", rec.BriefingTokens, want)
+	}
+	if rec.BriefingMs <= 0 {
+		t.Errorf("briefing_ms = %d, want > 0", rec.BriefingMs)
+	}
+	if rec.MsRCON != rec.BriefingMs {
+		t.Errorf("ms_rcon = %d, want it to equal briefing_ms (%d): a bare submission round spends nothing else on RCON", rec.MsRCON, rec.BriefingMs)
+	}
+	// zero_lookup becomes meaningful for the first time with a briefing that
+	// can answer on its own: this question ran a round and used no lookups,
+	// and its artifact is a real answer, not a warning notice, so
+	// zeroLookupFor's three conditions all hold.
+	if !rec.ZeroLookup {
+		t.Error("zero_lookup = false, want true: a briefing-answered question with no tool calls is exactly the free tier's own signature")
+	}
+}
+
+// A failed briefing (here: a companion missing game_time, the one trip
+// Assemble cannot go without) records "failed" with every briefing_* field
+// at zero, and the question still answers normally, one round longer than
+// it would have needed.
+func TestLedgerRecordsBriefingFailed(t *testing.T) {
+	dir := t.TempDir()
+	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"fine"}})}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	a.BriefingEnabled = true
+	ts := withoutTool(happyGroupATools(), "game_time")
+
+	res, err := a.Answer(context.Background(), Question{ID: 2002, Text: "hi", Force: "north", PlayerIndex: player(1)}, ts)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if res.Artifact.Shape != ShapeSummary {
+		t.Fatalf("artifact = %+v, want the question to still answer normally", res.Artifact)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2002)
+	if rec.Briefing != ledger.BriefingFailed {
+		t.Fatalf("briefing = %q, want %q", rec.Briefing, ledger.BriefingFailed)
+	}
+	if rec.BriefingBytes != 0 || rec.BriefingTokens != 0 || rec.BriefingMs != 0 {
+		t.Errorf("briefing_bytes/tokens/ms = %d/%d/%d, want 0/0/0 on a failed briefing",
+			rec.BriefingBytes, rec.BriefingTokens, rec.BriefingMs)
+	}
+}
+
+// briefing.enabled off (Agent.BriefingEnabled left at its zero value: the
+// operator turned it off) never calls Assemble at all, and records "off",
+// the same absent value NewQuestionRecord already defaults every question
+// to before this feature existed.
+func TestLedgerRecordsBriefingOff(t *testing.T) {
+	dir := t.TempDir()
+	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{"shape": "summary", "lines": []string{"fine"}})}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	ts := happyGroupATools()
+
+	if _, err := a.Answer(context.Background(), Question{ID: 2003, Text: "hi", Force: "north", PlayerIndex: player(1)}, ts); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2003)
+	if rec.Briefing != ledger.BriefingOff {
+		t.Errorf("briefing = %q, want %q", rec.Briefing, ledger.BriefingOff)
+	}
+	if rec.BriefingBytes != 0 || rec.BriefingTokens != 0 || rec.BriefingMs != 0 {
+		t.Errorf("briefing_bytes/tokens/ms = %d/%d/%d, want 0/0/0 when the briefing is off",
+			rec.BriefingBytes, rec.BriefingTokens, rec.BriefingMs)
+	}
+	if rec.MsRCON != 0 {
+		t.Errorf("ms_rcon = %d, want 0: no briefing ran and the round was a bare submission", rec.MsRCON)
 	}
 }

@@ -216,6 +216,20 @@ type Agent struct {
 	// means nothing is subtracted, which is what every tool call gets when
 	// this is left unset, tests included.
 	Floor func() time.Duration
+
+	// BriefingEnabled turns the per-question briefing on (docs/design/
+	// phase4-spec.md section 3, the operator's briefing.enabled config key):
+	// Assemble runs once before round 1, on its own BriefingBudget, and its
+	// fenced text rides in the user turn ahead of the question. False (the
+	// zero value New returns) skips Assemble entirely, matching the
+	// pre-Phase-4 behaviour and recording ledger.BriefingOff for every
+	// question, the value NewQuestionRecord already defaults to.
+	BriefingEnabled bool
+
+	// Chat, when set, is what Assemble asks for a briefing's last few
+	// organic chat lines (the `ch` key). A nil Chat simply omits `ch`, the
+	// same as any other Group A source that did not land.
+	Chat ChatSource
 }
 
 func New(m model.Model, caps Caps) *Agent {
@@ -261,25 +275,25 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		if req.Command == CommandNew {
 			ledgerSession.Fresh = false
 		}
-		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact)))
+		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
 		return res, nil
 	}
 	if !a.quota.take(q.key(), now) {
 		res := Result{Artifact: refusal(quotaNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
 		return res, nil
 	}
 	if !a.server.take(serverKey, now) {
 		a.quota.refund(q.key(), now)
 		res := Result{Artifact: refusal(serverQuotaNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
 		return res, nil
 	}
 	if a.budget.exhausted(now) {
 		a.quota.refund(q.key(), now)
 		a.server.refund(serverKey, now)
 		res := Result{Artifact: refusal(budgetNotice), Session: mark}
-		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact)))
+		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0))
 		return res, nil
 	}
 	earlier, fresh := a.sess.open(q.scope(), req.Name, now, req.Fresh)
@@ -290,14 +304,50 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	byName := index(ts)
 	defs := defsFor(ts)
 	system := systemPrompt(q)
+
+	var msModel, msRCON int64
+	// The briefing runs once per question, before round 1, on its own budget
+	// (docs/design/phase4-spec.md section 3): most of its cost is RCON, not
+	// model time, so it is folded into msRCON right here rather than carried
+	// as a separate accumulator threaded through every ending. off (the
+	// operator's config) never calls Assemble at all, and every question
+	// still logs ledger.BriefingOff, the value NewQuestionRecord already
+	// defaults to.
+	briefingStatus := ledger.BriefingOff
+	var briefingBytes, briefingTokens int
+	var briefingMs int64
+	briefingText := ""
+	if a.BriefingEnabled {
+		res := Assemble(ctx, byName, q, mark, a.Chat, BriefingBudget)
+		briefingStatus = res.Status
+		// briefing_bytes, briefing_tokens and briefing_ms are all documented
+		// as meaningful only when briefing is "on", zero on "off" or
+		// "failed" (docs/design/phase4-observability-spec.md); Bytes is
+		// already zero on a failed BriefingResult by briefing.go's own
+		// contract, so this branch is what keeps Ms and Tokens matching it
+		// rather than reporting a wasted attempt's real elapsed time.
+		if res.Status == ledger.BriefingOn {
+			briefingText = res.Text
+			briefingBytes = res.Bytes
+			// floor(bytes/4), the estimator docs/design/
+			// phase4-observability-spec.md names: not a figure the model
+			// API reports back, but consistent across every question.
+			briefingTokens = briefingBytes / 4
+			briefingMs = res.Elapsed.Milliseconds()
+		}
+	}
+	// ms_rcon carries briefing_ms as its own summand (docs/design/
+	// phase4-observability-spec.md); briefingMs is still zero above when
+	// there was nothing to add, so this is a no-op on "off" or "failed".
+	msRCON += briefingMs
+
 	msgs := []model.Message{{
 		Role:   model.RoleUser,
-		Blocks: []model.Block{{Type: model.BlockText, Text: prompt(q, earlier)}},
+		Blocks: []model.Block{{Type: model.BlockText, Text: prompt(q, earlier, briefingText)}},
 	}}
 
 	var usage model.Usage
 	toolCalls := 0
-	var msModel, msRCON int64
 	// ledgerOn is tested once per round rather than letting each round
 	// build a RoundRecord and every tool call clip its own args only for
 	// Writer.write to discard them: a disabled ledger (or none wired) must
@@ -335,7 +385,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// artifact here to test, only the placeholder shape above, and
 			// a provider outage is never a free-tier win regardless.
 			errText := err.Error()
-			a.writeQuestion(a.questionRecord(q, rawText, mark, ShapeNotice, round, toolCalls, res.CostUSD, msModel, msRCON, false, nil, &errText, false))
+			a.writeQuestion(a.questionRecord(q, rawText, mark, ShapeNotice, round, toolCalls, res.CostUSD, msModel, msRCON, false, nil, &errText, false, briefingStatus, briefingBytes, briefingTokens, briefingMs))
 			return res, err
 		}
 		usage.Add(step.Usage)
@@ -348,7 +398,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			if ledgerOn {
 				rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, 0, nil))
 			}
-			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
+			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
 		}
 		var results []model.Block
 		var calledTools []ledger.ToolCall
@@ -387,7 +437,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 				if ledgerOn {
 					rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
 				}
-				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
+				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
 			}
 		}
 		if ledgerOn {
@@ -396,10 +446,10 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
 
 		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Budgeted() >= budget {
-			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
+			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
 		}
 	}
-	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds), nil
+	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs), nil
 }
 
 // runCalls executes one round's tool calls and reports whether the round
@@ -553,8 +603,12 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 // flushes the question's accumulated round records and writes its own ledger
 // line, in that order, once the artifact that ends the question already
 // exists. rawText is what the companion actually sent, for the ledger; q.Text
-// may already be the label-substituted form the model saw.
-func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord) Result {
+// may already be the label-substituted form the model saw. The four
+// briefing* arguments are what Answer computed once before round 1
+// (docs/design/phase4-observability-spec.md's briefing/briefing_bytes/
+// briefing_tokens/briefing_ms fields); finish only carries them into the
+// record, it never decides them.
+func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64) Result {
 	clipped, err := validate(artifact)
 	if err != nil {
 		clipped = Notice(LevelWarning, stalledNotice)
@@ -566,7 +620,7 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
 	})
 	a.flushRounds(roundRecords)
-	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped)))
+	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs))
 	return Result{
 		Artifact: clipped,
 		Rounds:   rounds,

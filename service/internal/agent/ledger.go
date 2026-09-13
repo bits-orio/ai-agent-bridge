@@ -24,7 +24,12 @@ import (
 // that one path, where it carries the failure text. zeroLookup is computed by
 // the caller (zeroLookupFor where a real artifact exists, a literal false on
 // the model-error path), never here: this function only records it.
-func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool) ledger.QuestionRecord {
+// briefingStatus, briefingBytes, briefingTokens and briefingMs are the four
+// fields docs/design/phase4-observability-spec.md's briefing/briefing_bytes/
+// briefing_tokens/briefing_ms rows describe; a caller with no briefing to
+// report passes ledger.BriefingOff and zero for the rest, the same absent
+// values NewQuestionRecord already defaults to.
+func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64) ledger.QuestionRecord {
 	r := ledger.NewQuestionRecord()
 	r.QuestionID = q.ID
 	r.Asker = q.askerName()
@@ -40,6 +45,10 @@ func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, sha
 	r.Cost = cost
 	r.MsModel = msModel
 	r.MsRCON = msRCON
+	r.Briefing = briefingStatus
+	r.BriefingBytes = briefingBytes
+	r.BriefingTokens = briefingTokens
+	r.BriefingMs = briefingMs
 	r.Refused = refused
 	r.RefusedReason = refusedReason
 	r.ModelError = modelError

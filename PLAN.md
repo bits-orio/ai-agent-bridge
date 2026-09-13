@@ -271,3 +271,11 @@ Permissioned acting tools. Sub-agents on a cheaper model.
     deaths, joins and chat, so trend questions about those are answerable
     service side. No periodic sample is planned to close the production-rate
     gap; this stands as a limit, not a roadmap item.
+13. **`rcon.Client.Execute` takes no context.** Current plan: leave it, and
+    bound callers instead. A caller that gives up on a call cannot cancel it,
+    so the call keeps running and keeps holding the single RCON mutex behind
+    the client's own 10 second dial and 30 second io timeouts. The briefing
+    (docs/design/phase4-spec.md section 3) therefore never abandons a trip in
+    flight; its budget only stops the next one starting. Giving `Execute` a
+    context would tighten every call path rather than one, and is worth doing
+    when something needs it more than this did.

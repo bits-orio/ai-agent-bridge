@@ -420,3 +420,96 @@ func TestLoadFromEnvInvalidLedgerEnabled(t *testing.T) {
 		t.Fatal("expected an error for an unparsable AAB_LEDGER_ENABLED")
 	}
 }
+
+// The briefing is on by default, the same "unset means on" rule the ledger
+// already follows (docs/design/phase4-spec.md section 19: briefing default on).
+func TestBriefingDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+
+	c, err := Load("/no/such/aab.yaml")
+	if err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if !c.BriefingEnabled() {
+		t.Error("BriefingEnabled() = false, want true by default")
+	}
+	if c.Briefing.Enabled == nil || !*c.Briefing.Enabled {
+		t.Errorf("Briefing.Enabled = %v, want a resolved true so the effective-config dump shows it plainly", c.Briefing.Enabled)
+	}
+}
+
+// An explicit enabled: false must survive (must not be reinterpreted as
+// "unset").
+func TestLoadFileParsesTheBriefingSection(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+
+	cfgPath := filepath.Join(dir, "aab.yaml")
+	yaml := `
+factorio:
+  rcon:
+    address: "game:27015"
+    password_env: FACTORIO_RCON_PASSWORD
+  events_file: /tmp/events.jsonl
+briefing:
+  enabled: false
+`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if c.BriefingEnabled() {
+		t.Error("BriefingEnabled() = true, want false: the config said enabled: false")
+	}
+}
+
+// A config file that says nothing about the briefing still resolves to on.
+func TestLoadFileDefaultsBriefingToOn(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(t.TempDir())
+	t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+
+	cfgPath := filepath.Join(dir, "aab.yaml")
+	yaml := "factorio:\n  rcon:\n    address: \"game:27015\"\n    password_env: FACTORIO_RCON_PASSWORD\n  events_file: /tmp/events.jsonl\n"
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	c, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.BriefingEnabled() {
+		t.Error("BriefingEnabled() = false, want true: enabled was left unset")
+	}
+}
+
+func TestLoadFromEnvBriefingOverride(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_BRIEFING_ENABLED", "false")
+
+	c, err := Load("/no/such/aab.yaml")
+	if err != nil {
+		t.Fatalf("env load: %v", err)
+	}
+	if c.BriefingEnabled() {
+		t.Error("BriefingEnabled() = true, want false")
+	}
+}
+
+func TestLoadFromEnvInvalidBriefingEnabled(t *testing.T) {
+	t.Chdir(t.TempDir())
+	setEnvMode(t)
+	t.Setenv("AAB_BRIEFING_ENABLED", "not-a-bool")
+
+	if _, err := Load("/no/such/aab.yaml"); err == nil {
+		t.Fatal("expected an error for an unparsable AAB_BRIEFING_ENABLED")
+	}
+}

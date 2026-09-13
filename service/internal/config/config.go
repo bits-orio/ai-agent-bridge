@@ -81,6 +81,7 @@ type Config struct {
 	History      HistoryConfig    `yaml:"history"`
 	ControlAPI   ControlAPIConfig `yaml:"control_api"`
 	Ledger       LedgerConfig     `yaml:"ledger"`
+	Briefing     BriefingConfig   `yaml:"briefing"`
 	LogFile      string           `yaml:"log_file"` // also write logs here (default: aab.log next to events; "-" = stderr only)
 }
 
@@ -119,6 +120,16 @@ type HistoryConfig struct {
 type LedgerConfig struct {
 	Enabled *bool  `yaml:"enabled"`
 	Dir     string `yaml:"dir"` // default: the directory holding the config file
+}
+
+// BriefingConfig is the per-question game-state snapshot that rides in the
+// user turn ahead of every question (docs/design/phase4-spec.md section 3):
+// who is online, what each force is researching, the last few chat lines.
+// Enabled is a pointer for the same reason LedgerConfig.Enabled is: the
+// default is true, and an absent "enabled" key in the YAML must read as
+// unset, not as an explicit false, which a plain bool cannot tell apart.
+type BriefingConfig struct {
+	Enabled *bool `yaml:"enabled"`
 }
 
 // ControlAPIConfig is the service's own HTTP surface. An empty addr turns it
@@ -262,6 +273,7 @@ func load(path string, dump bool) (*Config, error) {
 	c.applyAgentDefaults()
 	c.History.Path = resolveHistoryPath(c.History.Path, path)
 	c.applyLedgerDefaults(path)
+	c.applyBriefingDefaults()
 	c.applyControlDefaults()
 
 	// Resolve secrets from the environment; never store them in the YAML.
@@ -466,12 +478,20 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 	if v := os.Getenv("AAB_LEDGER_DIR"); v != "" {
 		c.Ledger.Dir = expandPath(v)
 	}
+	if v := os.Getenv("AAB_BRIEFING_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_BRIEFING_ENABLED: invalid value %q", v)
+		}
+		c.Briefing.Enabled = &b
+	}
 
 	c.applyAgentDefaults()
 	// Env-var mode has no config file to anchor a relative history path, or
 	// a relative ledger dir, to.
 	c.History.Path = resolveHistoryPath(c.History.Path, "")
 	c.applyLedgerDefaults("")
+	c.applyBriefingDefaults()
 	c.applyControlDefaults()
 
 	if err := c.Model.check(); err != nil {
@@ -582,6 +602,22 @@ func anchorTo(path, configPath string) string {
 // true unless the operator explicitly turned it off.
 func (c *Config) LedgerEnabled() bool {
 	return c.Ledger.Enabled == nil || *c.Ledger.Enabled
+}
+
+// applyBriefingDefaults resolves the briefing section: enabled defaults to
+// true, the same "unset means on" rule applyLedgerDefaults already applies
+// to the ledger.
+func (c *Config) applyBriefingDefaults() {
+	if c.Briefing.Enabled == nil {
+		enabled := true
+		c.Briefing.Enabled = &enabled
+	}
+}
+
+// BriefingEnabled is the briefing.enabled setting after defaults are
+// applied: true unless the operator explicitly turned it off.
+func (c *Config) BriefingEnabled() bool {
+	return c.Briefing.Enabled == nil || *c.Briefing.Enabled
 }
 
 // resolveHistoryPath keeps the history file beside the config that named it,

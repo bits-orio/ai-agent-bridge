@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/fake"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
@@ -430,5 +432,138 @@ func TestSystemPromptWarnsAboutUntrustedResults(t *testing.T) {
 	}
 	if turn := prompt(q, nil); !strings.Contains(turn, "enemy") {
 		t.Errorf("the user turn does not name the asker's force:\n%s", turn)
+	}
+}
+
+// The briefing's own five Group A trips (Assemble, briefing.go) run outside
+// the round loop entirely: they must never be mistaken for a lookup the
+// model asked for. A cap of 1 still admits the model's one real call
+// untouched by the five trips the briefing just spent, and the round that
+// ran it carries a ledger.ToolCall for that one call alone. happyGroupATools
+// and askerQuestion come from briefing_test.go, the same package.
+func TestBriefingTripsNeverCountAgainstToolCallsOrTheCap(t *testing.T) {
+	dir := t.TempDir()
+	ts := append(happyGroupATools(), stubTool("probe", `{"ok":true}`, nil))
+	m := &scriptedModel{steps: []model.Step{
+		toolStep("t1", "probe", map[string]any{}),
+		submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"done"}}),
+	}}
+	c := caps()
+	c.MaxToolCalls = 1 // if the briefing's five trips counted here, this alone would refuse the model's one real lookup
+	a := New(m, c)
+	a.Ledger = ledger.Open(dir, true)
+	a.BriefingEnabled = true
+
+	q := askerQuestion()
+	q.ID = 2201
+	q.Text = "status check"
+	res, err := a.Answer(context.Background(), q, ts)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if res.Artifact.Shape != ShapeSummary {
+		t.Fatalf("artifact = %+v, want the model's own answer to go through, not a cap refusal", res.Artifact)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2201)
+	if rec.Lookups != 1 {
+		t.Fatalf("lookups = %d, want 1: the briefing's five Group A trips must never be counted as lookups", rec.Lookups)
+	}
+
+	rounds := roundsFor(t, dir, 2201)
+	if len(rounds) != 2 {
+		t.Fatalf("round records = %d, want 2", len(rounds))
+	}
+	if len(rounds[0].ToolCalls) != 1 {
+		t.Fatalf("round 1 tool_calls = %+v, want exactly the model's own probe call, none of the briefing's five trips", rounds[0].ToolCalls)
+	}
+	if tc := rounds[0].ToolCalls[0]; tc.Name != "probe" || !tc.OK {
+		t.Errorf("round 1's one tool_call = %+v, want an unrefused probe call", tc)
+	}
+	if len(rounds[1].ToolCalls) != 0 {
+		t.Errorf("round 2 (the submit round) tool_calls = %+v, want none", rounds[1].ToolCalls)
+	}
+}
+
+// zero_lookup is the free tier's own signature (ledger.go's zeroLookupFor),
+// not a function of whether the briefing itself succeeded: a failed
+// briefing carries no text into the prompt, so the model must do its own
+// lookups the same as if briefing were off, and this must not read as a
+// free-tier win.
+func TestZeroLookupIsFalseWhenABriefingFailsAndTheModelHasToLookThingsUp(t *testing.T) {
+	dir := t.TempDir()
+	ts := withoutTool(happyGroupATools(), "game_time") // no game_time: the whole briefing fails
+	ts = append(ts, stubTool("probe", `{"ok":true}`, nil))
+	m := &scriptedModel{steps: []model.Step{
+		toolStep("t1", "probe", map[string]any{}),
+		submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"done"}}),
+	}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	a.BriefingEnabled = true
+
+	q := askerQuestion()
+	q.ID = 2301
+	q.Text = "status check"
+	if _, err := a.Answer(context.Background(), q, ts); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2301)
+	if rec.Briefing != ledger.BriefingFailed {
+		t.Fatalf("briefing = %q, want %q", rec.Briefing, ledger.BriefingFailed)
+	}
+	if rec.Lookups != 1 {
+		t.Fatalf("lookups = %d, want 1: the model had to look things up itself once the briefing failed", rec.Lookups)
+	}
+	if rec.ZeroLookup {
+		t.Error("zero_lookup = true, want false: a failed briefing is not the free tier's own signature, and this question needed a real lookup")
+	}
+}
+
+// ms_rcon is briefing_ms and every round's own tool wall clock, added once
+// each (agent.go's Answer: msRCON += briefingMs before the round loop,
+// msRCON += roundToolMs inside it). A later change that recomputes it from
+// the wrong base, or adds either half twice, would slip past every existing
+// test that only ever has one of the two non-zero at a time.
+func TestMsRCONSumsBriefingAndRoundToolTimeExactlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	briefingDelay := 5 * time.Millisecond
+	toolDelay := 5 * time.Millisecond
+	ts := withTool(happyGroupATools(), "game_time",
+		slowTool(catalog.ToolName(engineIface, "game_time"), briefingDelay, `{"tick":1,"hours":1}`))
+	ts = append(ts, slowTool("probe", toolDelay, `{"ok":true}`))
+
+	m := &scriptedModel{steps: []model.Step{
+		toolStep("t1", "probe", map[string]any{}),
+		submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"done"}}),
+	}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	a.BriefingEnabled = true
+
+	q := askerQuestion()
+	q.ID = 2401
+	q.Text = "status check"
+	if _, err := a.Answer(context.Background(), q, ts); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	a.Ledger.Close()
+
+	rec := findQuestion(t, dir, 2401)
+	if rec.BriefingMs <= 0 {
+		t.Fatalf("briefing_ms = %d, want > 0", rec.BriefingMs)
+	}
+	if want := rec.BriefingMs + toolDelay.Milliseconds(); rec.MsRCON < want {
+		t.Errorf("ms_rcon = %d, want at least briefing_ms (%d) plus the model's own tool time (%dms), summed once each",
+			rec.MsRCON, rec.BriefingMs, toolDelay.Milliseconds())
+	}
+	// A generous ceiling: if briefing_ms were folded in twice, or the
+	// round's own tool time were counted twice, ms_rcon would run well past
+	// this rather than sitting just above the sum checked above.
+	if ceiling := 2*rec.BriefingMs + 2*toolDelay.Milliseconds(); rec.MsRCON > ceiling {
+		t.Errorf("ms_rcon = %d, want at most %d: briefing_ms or the round's own tool time looks double-counted", rec.MsRCON, ceiling)
 	}
 }
