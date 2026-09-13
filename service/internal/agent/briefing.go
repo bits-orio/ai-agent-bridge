@@ -30,6 +30,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"log"
 	"time"
 
@@ -402,6 +403,33 @@ func withForceArgs(t tools.Tool, force string, args map[string]any) json.RawMess
 // surfaces.lua, game_time.lua). Only decodeGameTimeReply is load bearing for
 // whether the briefing runs at all; the rest are read best effort.
 
+// fraction is a number the companion rounded before sending. Those arrive as
+// JSON STRINGS, not numbers: bounded.round hands back a short decimal string
+// ("0.73", "37.69") because the engine's JSON writer would otherwise print
+// fifty digits of the float, and companion-mod/README.md says so plainly.
+// A *float64 rejects that, which is how the briefing came to fail on every
+// question against a real server while passing every test written against a
+// hand-made reply. It accepts a number too, since whole numbers stay numbers.
+type fraction float64
+
+func (f *fraction) UnmarshalJSON(b []byte) error {
+	var n float64
+	if json.Unmarshal(b, &n) == nil {
+		*f = fraction(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return err
+	}
+	*f = fraction(v)
+	return nil
+}
+
 type forcesReply struct {
 	Forces *[]struct {
 		Name                 string `json:"name"`
@@ -415,7 +443,7 @@ type researchReply struct {
 		Force       string  `json:"force"`
 		Researching bool    `json:"researching"`
 		Tech        string  `json:"tech"`
-		Progress    float64 `json:"progress"`
+		Progress    fraction `json:"progress"`
 	} `json:"forces"`
 }
 
@@ -434,7 +462,7 @@ type surfacesReply struct {
 // that was ever established (task instruction 4).
 type gameTimeReply struct {
 	Tick  *int64   `json:"tick"`
-	Hours *float64 `json:"hours"`
+	Hours *fraction `json:"hours"`
 }
 
 // Each decoder below requires its array to be present, not merely for the
@@ -499,7 +527,7 @@ func buildPayload(q Question, mark SessionMark, ch []ChatRow, forces *forcesRepl
 	}
 	return BriefingPayload{
 		T:   *gameTime.Tick,
-		H:   *gameTime.Hours,
+		H:   float64(*gameTime.Hours),
 		Me:  meInfo(q),
 		FS:  forceRows(forces, research),
 		SF:  surfaceRows(surfaces),
@@ -554,7 +582,7 @@ func forceRows(forces *forcesReply, research *researchReply) []ForceRow {
 			byForce[r.Force] = struct {
 				tech string
 				prog float64
-			}{r.Tech, r.Progress}
+			}{r.Tech, float64(r.Progress)}
 		}
 	}
 	rows := make([]ForceRow, 0, len(*forces.Forces))

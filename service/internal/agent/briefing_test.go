@@ -584,3 +584,40 @@ func TestAssembleFenceMatchesTheSpecWordForWord(t *testing.T) {
 		t.Errorf("fence footer does not match phase4-spec.md section 3 word for word:\ngot:  %q\nwant: %q", res.Text, wantFooter)
 	}
 }
+
+// Replies captured verbatim from a live AleForge server on 2026-09-13, not
+// written by hand. Every other test in this file feeds the assembler replies
+// invented to match the decoders, which is why they all passed while the
+// briefing failed on every question against a real server: the companion
+// rounds a fraction and sends it as a STRING ("hours":"37.69",
+// "progress":"0.73"), and a *float64 rejects that. game_time is the one trip
+// allowed to fail the whole briefing, so that one string sank it.
+func TestAssembleAgainstRepliesCapturedFromALiveServer(t *testing.T) {
+	const (
+		liveForces   = `{"total":3,"empty":15,"shown":3,"forces":[{"name":"spectator","player_count":11,"connected_player_count":0},{"name":"team-1","player_count":4,"connected_player_count":2},{"name":"team-2","player_count":1,"connected_player_count":1}]}`
+		liveResearch = `{"total":3,"shown":3,"forces":[{"force":"spectator","researching":false},{"force":"team-1","researching":true,"tech":"solar-panel-equipment","level":1,"progress":"0.73"},{"force":"team-2","researching":true,"tech":"logistics-2","level":1,"progress":"0.10"}]}`
+		liveSurfaces = `{"force":"team-1","total":2,"shown":2,"surfaces":[{"name":"landing-pen","index":2,"force_players":0},{"name":"mts-nauvis-1","index":3,"planet":"mts-nauvis-1","force_players":4}]}`
+		liveGameTime = `{"force":"team-1","tick":8141974,"ticks_played":8141974,"hours":"37.69","connected_players":5,"force_connected_players":2}`
+	)
+	ts := withTool(happyGroupATools(), "list_forces", engineTool("list_forces", liveForces, nil))
+	ts = withTool(ts, "current_research", engineTool("current_research", liveResearch, nil))
+	ts = withTool(ts, "list_surfaces", engineTool("list_surfaces", liveSurfaces, nil))
+	ts = withTool(ts, "game_time", engineTool("game_time", liveGameTime, nil))
+
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q: a live reply must not fail the briefing", res.Status, ledger.BriefingOn)
+	}
+	m := fencedBody(t, res.Text)
+	for _, key := range []string{"t", "h", "me", "fs", "sf", "ses"} {
+		if _, present := m[key]; !present {
+			t.Errorf("key %q is missing from a briefing built on live replies: %s", key, res.Text)
+		}
+	}
+	if got := string(m["h"]); got != "37.69" {
+		t.Errorf("h = %s, want 37.69 decoded from the string the companion sent", got)
+	}
+	if rows := rowsOf(t, m["fs"]); len(rows) != 3 {
+		t.Errorf("fs has %d row(s), want 3: the research join must survive a string progress", len(rows))
+	}
+}

@@ -352,12 +352,16 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	if a.BriefingEnabled {
 		res := Assemble(ctx, byName, q, mark, a.Chat, BriefingBudget)
 		briefingStatus = res.Status
-		// briefing_bytes, briefing_tokens and briefing_ms are all documented
-		// as meaningful only when briefing is "on", zero on "off" or
-		// "failed" (docs/design/phase4-observability-spec.md); Bytes is
-		// already zero on a failed BriefingResult by briefing.go's own
-		// contract, so this branch is what keeps Ms and Tokens matching it
-		// rather than reporting a wasted attempt's real elapsed time.
+		// briefing_ms is recorded whether or not the briefing landed. A
+		// failed attempt still spent the trips, and zeroing it hid exactly
+		// that: on 2026-09-13 the briefing failed on every question against
+		// a live server and the ledger reported it costing nothing, so the
+		// only evidence left was one log line. A cost this ledger cannot see
+		// is a cost nobody will find.
+		briefingMs = res.Elapsed.Milliseconds()
+		// bytes and tokens stay zero unless the briefing actually reached
+		// the user turn: they measure what the model was given, and a failed
+		// attempt gave it nothing.
 		if res.Status == ledger.BriefingOn {
 			briefingText = res.Text
 			briefingBytes = res.Bytes
@@ -365,7 +369,6 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// phase4-observability-spec.md names: not a figure the model
 			// API reports back, but consistent across every question.
 			briefingTokens = briefingBytes / 4
-			briefingMs = res.Elapsed.Milliseconds()
 		}
 	}
 	// ms_rcon carries briefing_ms as its own summand (docs/design/
