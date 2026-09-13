@@ -2,7 +2,16 @@
 
 Status: Phases 0, 1 and 2 built and passing the rig harness on 2.0.77 with the
 scripted model, 2026-09-10. No live model call has been made yet (no API key on
-the development machine). The design brief is under `docs/design/`.
+the development machine). The design brief is under `docs/design/`. Phase 4 is
+designed and not yet built, dated 2026-09-12: the briefing, the tiered reads
+and the round-batching op are specified in
+[docs/design/phase4-spec.md](docs/design/phase4-spec.md) and recorded in
+`docs/adr/0008-briefing-in-the-user-turn.md`,
+`docs/adr/0009-tiers-and-bounded-walks.md` and
+`docs/adr/0011-calls-batch-op.md`. The observability ledger has its own
+contract in
+[docs/design/phase4-observability-spec.md](docs/design/phase4-observability-spec.md)
+and `docs/adr/0010-observability-ledger.md`.
 
 AAB is two halves. A Factorio companion mod exposes a tiny protocol over a
 console command. A Go service, one per server, drives that protocol over RCON:
@@ -71,6 +80,32 @@ Each decision has a fuller record in `docs/adr/`.
   breaking changes ship under a new name beside the old one.
 - The Go service is the reference client. A Python script, an MCP server or a
   hosted service can drive the same companion without touching it.
+
+**8. A briefing rides with every question, and reads are tiered by cost.**
+- The briefing is one `briefing` op call where the companion has it,
+  replacing a serialized sequence with a single round trip. Where the
+  companion lacks the op, the service assembles the same snapshot from five
+  serialized `call` trips, about 525 ms added to every question, still far
+  cheaper than the round it removes. Either way the briefing is best effort,
+  with its own 2-second timeout: on timeout, on error, or against a companion
+  that lacks the op, it is omitted, logged once, and the question proceeds
+  exactly as it does today.
+- Reads backed by engine-maintained counters are cheap enough to always sweep
+  every force in one call, never a single force at a time.
+- Entity walks stay per force, bounded by a work budget and a maximum radius.
+  The reply states what was actually covered and whether the budget ran out.
+  A walk with no anchor at all returns a structured refusal instead of
+  running unbounded.
+- Cheap paths go in front of expensive ones: an item lookup checks the
+  logistic networks before it falls back to an anchored walk, and installed
+  power capacity ships as a swept nameplate estimate ahead of the exact
+  per-network read.
+- A round becomes one RCON trip: a new `calls` op carries a whole round's
+  tool calls in one command, replacing N serialized round trips with one.
+- Voice is deliberately small: one setting, `personality`, off by default,
+  whose only other value turns on a short fixed flavour string the service
+  owns. A configurable, free-text or per-player personality system was
+  proposed and cancelled.
 
 ## The protocol, aab-rpc-v1
 
@@ -189,6 +224,12 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    chat are player-typed and flow into the model as data. Current plan: the
    system prompt labels every tool result as untrusted, and artifacts are
    structured so injected text cannot change layout or trigger actions.
+   Extended 2026-09-12: chat and the briefing now enter the prompt on
+   purpose, through the briefing block and the `recent_chat` tool. Both are
+   fenced as quoted data under one untrusted-input line covering player
+   names, force names, chat lines and map marker text. Marker text rides as
+   a label only; the coordinates beside it are the machine-readable part,
+   never an instruction. Specified in docs/design/phase4-spec.md.
 7. **Model providers.** Resolved 2026-09-10 the other way round: models go
    through OpenRouter (ADR 0007), which is what makes Claude and DeepSeek a
    config line apart. The direct Anthropic client stays selectable and
@@ -209,3 +250,24 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    is now off by default, effort is configurable, and the rules-and-tools
    cache entry lives an hour. Floor for a warm simple question: about
    $0.003 on Sonnet 5, $0.0015 on Haiku 4.5.
+10. **Whether model time or RCON time dominates a multi-round question.**
+    Current plan: this is a prediction, not a measurement. It rests on the
+    105 ms RCON floor and the round count, because the service has no
+    per-round timing data yet. The observability ledger
+    (docs/design/phase4-observability-spec.md) is built to settle it, and
+    which side wins changes the priority order of the Phase 4 work.
+11. **MTS needs a records tool for tech records and milestones.** Current
+    plan: a cross-repo follow-up, not an AAB change. MTS milestone and record
+    announcements go through a per-player broadcast helper that calls
+    `player.print`, not `game.print`, so `on_console_chat` never fires and
+    `recent_chat` cannot see them and never could. The fix is an `mts-v1`
+    `records` tool exposing what `tech_records.lua` and `records.lua` already
+    keep in storage, so the companion reads the source of truth instead of
+    parsing chat.
+12. **A rate over time is not answerable today.** Current plan: the engine's
+    flow statistics are the only history of production and they are read
+    live, so a question about whether a rate is rising or falling has no
+    source. The event log already carries timestamped research, rockets,
+    deaths, joins and chat, so trend questions about those are answerable
+    service side. No periodic sample is planned to close the production-rate
+    gap; this stands as a limit, not a roadmap item.
