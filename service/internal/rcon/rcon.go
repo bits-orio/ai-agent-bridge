@@ -71,38 +71,46 @@ func New(addr, password string) *Client {
 // An empty or over-long command is refused locally. That is a bad command, not a
 // broken connection, so it must not tear down a healthy socket: both checks run
 // before the client dials at all.
-func (c *Client) Execute(cmd string) (string, error) {
+func (c *Client) Execute(cmd string) (string, time.Duration, error) {
 	if cmd == "" {
-		return "", ErrCommandEmpty
+		return "", 0, ErrCommandEmpty
 	}
 	if len(cmd) > MaxCommandLen {
-		return "", fmt.Errorf("%w: %d bytes, limit %d", ErrCommandTooLong, len(cmd), MaxCommandLen)
+		return "", 0, fmt.Errorf("%w: %d bytes, limit %d", ErrCommandTooLong, len(cmd), MaxCommandLen)
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// The clock starts here, after the lock, not when the caller called. One
+	// connection serves every command, so a round that dispatches eight tool
+	// calls queues seven of them behind the first, and a caller timing from
+	// its own start measures the queue rather than the server. That is how
+	// eight concurrent calls came to be logged as up to a second of game
+	// thread time each when the game thread never saw it.
+	started := time.Now()
+
 	if c.conn == nil {
 		if err := c.dial(); err != nil {
-			return "", err
+			return "", time.Since(started), err
 		}
 	}
 	resp, err := c.exec(cmd)
 	if err == nil {
-		return resp, nil
+		return resp, time.Since(started), nil
 	}
 
 	// A failed round trip may have left the stream mid-packet, so the socket
 	// goes rather than being reused.
 	c.drop()
 	if err := c.dial(); err != nil {
-		return "", err
+		return "", time.Since(started), err
 	}
 	resp, err = c.exec(cmd)
 	if err != nil {
 		c.drop()
 	}
-	return resp, err
+	return resp, time.Since(started), err
 }
 
 // Close drops the connection. Execute dials again if it is called afterwards.

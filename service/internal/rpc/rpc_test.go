@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"time"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,10 +20,10 @@ type fakeRCON struct {
 	last  string
 }
 
-func (f *fakeRCON) Execute(cmd string) (string, error) {
+func (f *fakeRCON) Execute(cmd string) (string, time.Duration, error) {
 	f.calls++
 	f.last = cmd
-	return f.resp, f.err
+	return f.resp, 0, f.err
 }
 
 func TestCallSendsOpAndParsesOKReply(t *testing.T) {

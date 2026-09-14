@@ -63,7 +63,15 @@ func newFakeCompanion(texts map[int64]string) *fakeCompanion {
 	}
 }
 
-func (f *fakeCompanion) Execute(cmd string) (string, error) {
+// Execute satisfies the rcon executor. The fake does no real I/O, so the
+// wire duration it reports is zero; the real client measures it inside its
+// own connection lock.
+func (f *fakeCompanion) Execute(cmd string) (string, time.Duration, error) {
+	resp, err := f.execute(cmd)
+	return resp, 0, err
+}
+
+func (f *fakeCompanion) execute(cmd string) (string, error) {
 	body, ok := strings.CutPrefix(cmd, "/aab-rpc ")
 	if !ok {
 		return "", fmt.Errorf("not an aab-rpc command: %q", cmd)

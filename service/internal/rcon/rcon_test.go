@@ -39,7 +39,7 @@ func TestAuthFailure(t *testing.T) {
 	c := New(server.Addr(), "wrong")
 	defer c.Close()
 
-	_, err := c.Execute("help")
+	_, _, err := c.Execute("help")
 	wantErr(t, err, ErrAuthFailed)
 
 	c.mu.Lock()
@@ -56,7 +56,7 @@ func TestExecuteEmptyCommandRefusedWithoutDialling(t *testing.T) {
 	c := New(server.Addr(), "pw")
 	defer c.Close()
 
-	_, err := c.Execute("")
+	_, _, err := c.Execute("")
 	wantErr(t, err, ErrCommandEmpty)
 	if got := server.auths.Load(); got != 0 {
 		t.Errorf("auth count = %d, want 0: an empty command must not reach the server", got)
@@ -76,7 +76,7 @@ func TestExecuteCommandTooLongDoesNotRedial(t *testing.T) {
 		t.Fatalf("auth count after the first execute = %d, want 1", got)
 	}
 
-	_, err := c.Execute(strings.Repeat("x", MaxCommandLen+1))
+	_, _, err := c.Execute(strings.Repeat("x", MaxCommandLen+1))
 	wantErr(t, err, ErrCommandTooLong)
 	if got := server.auths.Load(); got != 1 {
 		t.Errorf("auth count after the oversized command = %d, want still 1", got)

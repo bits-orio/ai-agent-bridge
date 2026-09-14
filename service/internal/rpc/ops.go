@@ -5,6 +5,7 @@
 package rpc
 
 import (
+	"time"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -89,7 +90,15 @@ type callRequest struct {
 // CallTool invokes one provider function (iface.fn(args)) via the call op and returns its
 // plain-data return value, unparsed. The caller knows the tool's own reply shape.
 func (c *Client) CallTool(ctx context.Context, iface, fn string, args any) (json.RawMessage, error) {
-	return c.Call(ctx, "call", callRequest{I: iface, F: fn, A: args})
+	out, _, err := c.CallToolTimed(ctx, iface, fn, args)
+	return out, err
+}
+
+// CallToolTimed is CallTool plus the time the command spent on the socket,
+// which is what a slow-tool report wants: the caller's own elapsed time
+// includes waiting behind whatever else the round dispatched.
+func (c *Client) CallToolTimed(ctx context.Context, iface, fn string, args any) (json.RawMessage, time.Duration, error) {
+	return c.CallTimed(ctx, "call", callRequest{I: iface, F: fn, A: args})
 }
 
 // Question is one entry in a poll reply: text plus asker, force hint and tick

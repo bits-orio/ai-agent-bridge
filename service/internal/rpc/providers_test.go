@@ -2,6 +2,7 @@
 package rpc
 
 import (
+	"time"
 	"context"
 	"encoding/json"
 	"strings"
@@ -90,7 +91,12 @@ type opRCON struct {
 	ops     []string
 }
 
-func (o *opRCON) Execute(cmd string) (string, error) {
+func (o *opRCON) Execute(cmd string) (string, time.Duration, error) {
+	resp, err := o.execute(cmd)
+	return resp, 0, err
+}
+
+func (o *opRCON) execute(cmd string) (string, error) {
 	var req struct {
 		Op string `json:"op"`
 		I  string `json:"i"`

@@ -51,7 +51,7 @@ const (
 // RCON is the minimal executor Client needs: one blocking command/response round trip.
 // *rcon.Client satisfies it; tests use a fake.
 type RCON interface {
-	Execute(cmd string) (string, error)
+	Execute(cmd string) (string, time.Duration, error)
 }
 
 // Error is a typed {"ok":false,...} reply, carrying the protocol's error code so callers
@@ -102,38 +102,52 @@ type envelope struct {
 // reply comes back as *Error. payload may be nil (an empty request) or anything that
 // marshals to a JSON object.
 func (c *Client) Call(ctx context.Context, op string, payload any) (json.RawMessage, error) {
+	out, _, err := c.CallTimed(ctx, op, payload)
+	return out, err
+}
+
+// CallTimed is Call plus how long the command actually spent on the socket,
+// measured inside the connection lock. A caller that times the call itself
+// measures its own wait as well, which on a round that dispatches several
+// tool calls at once is mostly queueing behind the other calls rather than
+// anything the game did.
+func (c *Client) CallTimed(ctx context.Context, op string, payload any) (json.RawMessage, time.Duration, error) {
+	var wire time.Duration
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, wire, err
 	}
 
 	cmd, err := buildCommand(op, payload)
 	if err != nil {
-		return nil, fmt.Errorf("aab-rpc: encode %s request: %w", op, err)
+		return nil, wire, fmt.Errorf("aab-rpc: encode %s request: %w", op, err)
 	}
 	if len(cmd) > rcon.MaxCommandLen {
-		return nil, &Error{
+		return nil, wire, &Error{
 			Code:    CodeTooLarge,
 			Message: fmt.Sprintf("%s request is %d bytes, over the %d-byte rcon command limit; refused before sending", op, len(cmd), rcon.MaxCommandLen),
 		}
 	}
 
-	started := time.Now()
-	resp, err := c.rc.Execute(cmd)
+	resp, wire, err := c.rc.Execute(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("aab-rpc: %s: %w", op, err)
+		return nil, wire, fmt.Errorf("aab-rpc: %s: %w", op, err)
 	}
-	c.trips.add(time.Since(started))
+	// wire is the time on the socket, measured inside Execute after the
+	// connection lock. The ring holds those rather than what the caller
+	// waited, so Floor stays the cost of reaching the server and does not
+	// creep upward every time a round dispatches several calls at once.
+	c.trips.add(wire)
 
 	var env envelope
 	if err := json.Unmarshal([]byte(resp), &env); err != nil {
 		// The server spoke, but not the companion: "Unknown command" is what
 		// a server without the mod says, and the operator should read it.
-		return nil, fmt.Errorf("aab-rpc: %s: the server answered with text, not the companion's JSON: %q", op, snippet(resp))
+		return nil, wire, fmt.Errorf("aab-rpc: %s: the server answered with text, not the companion's JSON: %q", op, snippet(resp))
 	}
 	if !env.OK {
-		return nil, &Error{Code: env.E, Message: env.M}
+		return nil, wire, &Error{Code: env.E, Message: env.M}
 	}
-	return env.R, nil
+	return env.R, wire, nil
 }
 
 // buildCommand renders "/aab-rpc <json>" for op and payload.

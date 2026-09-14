@@ -72,6 +72,10 @@ func systemPrompt(voice string) string {
 	b.WriteString("answer with what it did find and say the rest went unchecked, or search again with a narrower filter, a type beside a product for instance. ")
 	b.WriteString("Never answer that there are none of something from a truncated search.\n\n")
 
+	b.WriteString("A question about what happened rather than what is, what did I miss, what has been said, when did something last happen, is answered from the recorded history, not by reading the game: ")
+	b.WriteString("catch_up for one player's absence, recent_chat for what players have been saying, recent_events, last_event and count_events for the rest. ")
+	b.WriteString("They cost no game time at all, so reach for them before any tool that reads the map.\n\n")
+
 	b.WriteString("Give one short, precise answer. No padding, no restating the question, no working unless asked. ")
 	b.WriteString("If the tools cannot answer, say so in a notice rather than guessing.")
 

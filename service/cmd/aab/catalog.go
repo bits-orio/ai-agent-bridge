@@ -122,11 +122,23 @@ const slowTool = 100 * time.Millisecond
 
 func (t *toolCaller) CallTool(ctx context.Context, iface, fn string, args any) (json.RawMessage, error) {
 	started := time.Now()
-	out, err := t.client.CallTool(ctx, iface, fn, args)
+	out, wire, err := t.client.CallToolTimed(ctx, iface, fn, args)
 	took := time.Since(started)
-	if inGame := took - t.client.Floor(); inGame > slowTool {
-		log.Printf("tool %s.%s took %s, about %s of it on the game thread; players felt that",
-			iface, fn, took.Round(time.Millisecond), inGame.Round(time.Millisecond))
+	// wire is the time on the socket; took includes waiting for the single
+	// RCON connection, which on a round that dispatched several calls at once
+	// is mostly the other calls. Only wire, less the floor of recent trips,
+	// can be the game thread. Timing from started here once reported eight
+	// concurrent calls as up to a second of game time each when the game was
+	// never busy; the queue was.
+	if inGame := wire - t.client.Floor(); inGame > slowTool {
+		queued := took - wire
+		if queued > slowTool {
+			log.Printf("tool %s.%s spent %s on the game thread, after waiting %s for the connection; players felt the %s",
+				iface, fn, inGame.Round(time.Millisecond), queued.Round(time.Millisecond), inGame.Round(time.Millisecond))
+		} else {
+			log.Printf("tool %s.%s took %s, about %s of it on the game thread; players felt that",
+				iface, fn, wire.Round(time.Millisecond), inGame.Round(time.Millisecond))
+		}
 	}
 	if rpc.HasCode(err, rpc.CodeNoProvider) || rpc.HasCode(err, rpc.CodeNoTool) {
 		t.stale.Store(true)

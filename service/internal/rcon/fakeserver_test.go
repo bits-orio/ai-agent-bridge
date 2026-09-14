@@ -127,7 +127,7 @@ func echo(cmd string) string { return cmd }
 // mustExecute fails the test if a command does not come back cleanly.
 func mustExecute(t *testing.T, c *Client, cmd string) string {
 	t.Helper()
-	resp, err := c.Execute(cmd)
+	resp, _, err := c.Execute(cmd)
 	if err != nil {
 		t.Fatalf("execute %q: %v", truncateForMessage(cmd), err)
 	}
