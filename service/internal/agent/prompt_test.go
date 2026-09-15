@@ -223,3 +223,19 @@ func TestSystemPromptDoesNotOfferTheTeamCountForFree(t *testing.T) {
 		t.Error("the team count is still advertised as a briefing answer, contradicting the fs rule")
 	}
 }
+
+// Question 66 on 2026-09-15 told a player "the game doesn't record which
+// player placed each entity". It does: LuaEntity.last_user records it, and no
+// tool here reads it. A refusal is fine; a false reason teaches the player
+// something untrue about their own game.
+func TestSystemPromptRefusesWhoBuiltWithATrueReason(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"The game does record who last built or changed each entity",
+		"never that the game does not keep it",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the who-built rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}

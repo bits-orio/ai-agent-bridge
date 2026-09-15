@@ -2,6 +2,15 @@
 Version: 1.0.5
 Date: 2026-09-15
   Changes:
+    - sweep: one tool for every "which team has the most" question. Name a metric and, if it
+      needs one, a subject; get one row per force, largest first, ranked by the service with the
+      leader and its margin on top. metric is a closed list the tool's own description carries, and
+      an unknown one answers with a card for each rather than an error. axis groups the rows by
+      surface, space platform, player or force-and-surface instead of by force. Every metric
+      delegates to a tool that already exists, so nothing is measured twice, and a sweep the
+      companion would have to cut is refused whole rather than ranked over whoever survived.
+    - list_surfaces says which space platform a surface is, who owns it, where it is stopped and
+      what it is doing, so "which space ship" questions no longer guess an owner force by force.
     - entity_count takes all=true and answers for every force that has players in one call, one row
       each, largest count first, so "how many solar panels does each team have" is one lookup and
       not one per team. Leave surface out and it reports each force's total everywhere from the
@@ -14,6 +23,10 @@ Date: 2026-09-15
       list_surfaces does. This is what makes "which space ship has most thrusters, where is it"
       one call instead of a many-round search.
   Bugfixes:
+    - list_forces hid the asking force whenever nobody had joined it. Forces nobody has ever joined
+      are left out as empty slots since 1.0.3, and on a server with no one connected that is every
+      force, the asker's included: "what forces are there" answered with none. The asker's own
+      force is always listed now, whoever has joined it.
     - list_surfaces returned 20 rows by default, sorted by name, and a space platform is named
       platform-N, so every platform sorted after every planet and fell off the end. On a server
       with 25 surfaces the reply held no platform at all, which is why "which space ship has most

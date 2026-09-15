@@ -381,6 +381,49 @@ def scenario_ask_hello(ctx: Ctx) -> Tuple[Status, str]:
     return "FAIL", "qid=%d answer did not carry %r: %r" % (qid, marker, entry)
 
 
+def scenario_sweep_provider_metric(ctx: Ctx) -> Tuple[Status, str]:
+    """A metric the test provider declares in its own manifest, swept by the
+    companion's sweep tool and ranked by the service, across two mods and two
+    processes. Nothing in the companion or the service names the provider:
+    this is the whole point of docs/design/phase5-sweep.md's
+    "Provider-declared metrics", and the only place it is proven against a
+    real game."""
+    if ctx.provider_iface is None:
+        return "SKIP", "no provider in the tools catalog (tests/provider-mod not present or not registered yet)"
+
+    # The provider's own reply, direct, so the assertion below keys on what it
+    # actually said rather than on a name this scenario guessed.
+    probe = aab_rpc(ctx.server_rcon, "call", i=ctx.provider_iface, f="standings", a={})
+    if not probe.get("ok"):
+        return "FAIL", "direct call %s.standings failed: %r" % (ctx.provider_iface, probe)
+    rows = (probe.get("r") or {}).get("forces") or []
+    if not rows:
+        return "FAIL", "%s.standings returned no rows: %r" % (ctx.provider_iface, probe.get("r"))
+    leader = max(rows, key=lambda r: r.get("score", 0)).get("force")
+    if not leader:
+        return "FAIL", "%s.standings rows carry no force: %r" % (ctx.provider_iface, rows)
+
+    qid = ask_via_remote(ctx.server_rcon, "standings", force="player")
+    try:
+        entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    # The scripted model echoes a bounded prefix of the tool result, and the
+    # ranker marshals its fields in key order, so the fields to key on are the
+    # ones that sort early enough to survive the cut: leader, margin, metric.
+    # sweep_v sorts last and is exactly the field that does not.
+    lines = " | ".join(entry.get("lines") or [])
+    if '"metric":"standings"' not in lines:
+        return "FAIL", "qid=%d answer is not a sweep of standings: %r" % (qid, entry)
+    if '"leader":"%s"' % leader not in lines:
+        return "FAIL", "qid=%d sweep reply was not ranked to %r by the service: %r" % (qid, leader, entry)
+    return "PASS", "qid=%d swept %s.standings across %d forces and the service ranked %s first" % (
+        qid, ctx.provider_iface, len(rows), leader)
+
+
 def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
     """Asks "table of players" and requires both the shape and the content
     (second review-fix contract item 10, finding 14): the fake model derives
@@ -840,6 +883,7 @@ SCENARIOS: List[Scenario] = [
     Scenario("providers + manifest ops: companion's own provider", scenario_providers_and_manifest),
     Scenario("ask via remote interface: what forces are there", scenario_ask_forces),
     Scenario("ask hello: provider greeting", scenario_ask_hello),
+    Scenario("sweep a metric the provider declared", scenario_sweep_provider_metric),
     Scenario("ask: table of players", scenario_ask_table_of_players),
     Scenario("ask: what is in the research queue", scenario_research_queue),
     Scenario("ask: tech status of automation", scenario_tech_status),

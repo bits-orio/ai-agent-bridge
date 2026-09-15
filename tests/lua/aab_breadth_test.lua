@@ -643,6 +643,112 @@ local whole = call("sweep", { metric = "players" })
 check("sweep players answers normally once the roster fits",
       whole.ok and whole.r.found ~= false and whole.r.rows ~= nil, F.encode(whole))
 
+-- ── sweep entities delegates, and refuses a cut it cannot see past ────
+-- entities.lua looks its delegate up at call time, so a stub can stand in
+-- for entity_count and hand back the one shape the fixture can never produce:
+-- a per_surface sweep the tool had to cut. Two forces on two surfaces is four
+-- rows at most; the tool cuts at a hundred and at a byte budget. A ranking
+-- over the survivors of a cut names whoever survived, so it is refused whole.
+local entity_count_tool = require("scripts.tools.entity_count")
+local real_entity_count = entity_count_tool.functions.entity_count
+entity_count_tool.functions.entity_count = function(a)
+  if a.all == true and a.per_surface == true then
+    return { found = true, name = a.name, surface = "all", total = 80, shown = 50,
+             forces = { { force = "team-1", surface = "platform-1", count = 9, platform = "platform-1" } } }
+  end
+  return real_entity_count(a)
+end
+local cut_sweep = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
+check("sweep entities refuses when its delegate cut the per-surface rows",
+      cut_sweep.ok and cut_sweep.r.found == false and cut_sweep.r.rows == nil, F.encode(cut_sweep))
+check("the refusal carries the delegate's own shown and total",
+      cut_sweep.ok and cut_sweep.r.shown == 50 and cut_sweep.r.total == 80, F.encode(cut_sweep))
+entity_count_tool.functions.entity_count = real_entity_count
+local whole_sweep = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
+check("sweep entities answers again once the delegate shows everything",
+      whole_sweep.ok and whole_sweep.r.found ~= false and whole_sweep.r.rows ~= nil, F.encode(whole_sweep))
+
+-- ── a platform counting down to deletion carries no platform columns ──
+-- scheduled_for_deletion is how many ticks are left, not a boolean, and 0 is
+-- truthy in Lua. platform_lookup's exclusion branch is the one that fires on
+-- a non-zero count; the fixture ships 0, so this is the only coverage the
+-- branch has on the list_surfaces path.
+local orbit = game.surfaces["platform-1"]
+orbit.platform.scheduled_for_deletion = 600
+local doomed = call("list_surfaces", { force = "player", limit = 50 })
+local doomed_row
+for _, row in ipairs(doomed.ok and doomed.r.surfaces or {}) do
+  if row.name == "platform-1" then doomed_row = row end
+end
+check("list_surfaces still lists a platform counting down to deletion as a surface",
+      doomed_row ~= nil, F.encode(doomed))
+check("but carries none of the platform columns for it",
+      doomed_row ~= nil and doomed_row.platform == nil and doomed_row.owner == nil
+      and doomed_row.location == nil and doomed_row.state == nil, F.encode(doomed_row))
+orbit.platform.scheduled_for_deletion = 0
+local live_again = call("list_surfaces", { force = "player", limit = 50 })
+local live_row
+for _, row in ipairs(live_again.ok and live_again.r.surfaces or {}) do
+  if row.name == "platform-1" then live_row = row end
+end
+check("and carries them again once the countdown is cleared",
+      live_row ~= nil and live_row.platform == "platform-1" and live_row.owner ~= nil, F.encode(live_row))
+
+-- ── a metric another mod declares, discovered without naming the mod ──
+-- The companion knows nothing about "aab-fake-teams". It exposes a tool with a
+-- sweep block in its own agent_tools_v1 manifest, and the sweep finds it
+-- through the same probe every provider is already read with. This is what
+-- makes a multi-team mod of any kind sweepable, MTS or an OARC-like one,
+-- without a companion release.
+remote.add_interface("aab-fake-teams", {
+  agent_tools_v1 = function()
+    return { v = 1, tools = {
+      standings = {
+        desc = "Each team's score.",
+        params = {},
+        sweep = { axes = { "force" }, rows = "forces", name = "force", value = "score", unit = "points" },
+      },
+      plain = { desc = "A tool with no sweep block, so not a metric.", params = {} },
+    } }
+  end,
+  standings = function(args)
+    if args.cut then
+      return { total = 3, shown = 2, forces = { { force = "team-a", score = 5 }, { force = "team-b", score = "12.5" } } }
+    end
+    return { total = 2, shown = 2, forces = { { force = "team-a", score = 5 }, { force = "team-b", score = "12.5" } } }
+  end,
+  plain = function() return {} end,
+})
+
+local foreign = call("sweep", { metric = "standings" })
+check("sweep finds a metric another provider declared",
+      foreign.ok and foreign.r.found ~= false and foreign.r.metric == "standings", F.encode(foreign))
+-- 12.5 leaves the wire as the short decimal string bounded.round makes of
+-- every fraction; the service's ranker reads it back as a number. It must not
+-- have been rounded to 13 on the way.
+check("its rows arrive largest first, a string value read as a number and kept whole",
+      foreign.ok and foreign.r.rows and foreign.r.rows[1][1] == "team-b" and tonumber(foreign.r.rows[1][2]) == 12.5
+      and foreign.r.rows[2][1] == "team-a", F.encode(foreign))
+check("a provider tool with no sweep block is not a metric",
+      call("sweep", { metric = "plain" }).r.found == false, "plain was swept")
+local cards = call("sweep", { metric = "no-such-metric" })
+local card_by = {}
+for _, card in ipairs(cards.ok and cards.r.metrics or {}) do card_by[card.metric] = card end
+check("the cards a wrong guess gets back include the provider's metric and name its provider",
+      card_by.standings ~= nil and card_by.standings.provider == "aab-fake-teams", F.encode(cards.r.metrics))
+check("and still include the companion's own",
+      card_by.entities ~= nil and card_by.entities.provider == nil, F.encode(cards.r.metrics))
+
+-- The delegate cut its rows: refused whole, never ranked over the survivors.
+S.interfaces["aab-fake-teams"].standings = function() 
+  return { total = 3, shown = 2, forces = { { force = "team-a", score = 5 }, { force = "team-b", score = 12 } } }
+end
+local cut_foreign = call("sweep", { metric = "standings" })
+check("a provider metric whose delegate cut its rows is refused, not ranked",
+      cut_foreign.ok and cut_foreign.r.found == false and cut_foreign.r.rows == nil
+      and cut_foreign.r.shown == 2 and cut_foreign.r.total == 3, F.encode(cut_foreign))
+S.interfaces["aab-fake-teams"] = nil
+
 local bounded = require("scripts.tools.bounded")
 local function wide_rows(n)
   local rows = {}

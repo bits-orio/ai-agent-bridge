@@ -52,10 +52,16 @@ M.manifest = {
 -- so it stays in.
 local function list_forces(a)
   a = a or {} -- the only tool that is useful with no arguments at all
+  -- The asker's own force is never an empty slot, whoever has joined it. The
+  -- service fills force with the asker's, and on a server with nobody
+  -- connected every force has zero players, so the empty-slot rule hid all of
+  -- them including the one asking: the e2e rig answered "what forces are
+  -- there" with forces {} and empty 3 from the moment 1.0.3 shipped the rule.
+  local mine = a.force
   local rows, empty = {}, 0
   for _, force in pairs(game.forces) do
     local ever = #force.players
-    if ever > 0 or a.include_empty == true then
+    if ever > 0 or a.include_empty == true or force.name == mine then
       rows[#rows + 1] = {
         name = force.name,
         player_count = ever,

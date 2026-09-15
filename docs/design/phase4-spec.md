@@ -100,7 +100,7 @@ The payload is one JSON object, embedded as literal text between the fence marke
 | `day` | object `{ daytime, darkness }` | the asker's surface: `LuaSurface.daytime` and `LuaSurface.darkness`, both 0 to 1, rounded to 2 decimals the same way | Group B |
 | `me` | object `{ n, f, s, ps, p }` | the asker: name (`n`), force (`f`), surface (`s`), physical surface (`ps`), position (`p`, `{x, y}`) | `n`, `f`, `s` Group A; `ps` Group A, present only when it differs from `s`; `p` Group B |
 | `fs` | array of `{ n, ever, on, res, prog }`, capped at 50 rows | the set `list_forces` returns: one row per force that has ever had a player, the same empty-slot rule the system prompt already applies elsewhere, so a force nobody has joined is left out rather than given a row; name (`n`), players ever (`ever`), players connected now (`on`), the technology being researched (`res`) joined in from `current_research{all}` by force name, its progress 0 to 1 (`prog`); `res` and `prog` are both left out on a force with no active research. The 50-row cap is `list_forces`'s own default limit (`DEFAULT_FORCES`, companion-mod/scripts/tools/basics.lua), not a separate one this payload imposes | Group A |
-| `sf` | array of `{ n, on }` | surfaces the asker's force has players on: surface name (`n`), that force's player count there (`on`) | Group A |
+| `sf` | array of `{ n, on, platform?, owner?, location? }` | surfaces the asker's force has players on, plus every live space platform whoever owns it: surface name (`n`), that force's player count there (`on`), and on a platform row its name, owning force and the location it is stopped at (absent in flight). Omitted whole when `list_surfaces` could not show its full list, the rule `pl` follows. Since Phase 5: a platform in flight has nobody standing on it, and filtering on `on` alone is why question 80 was never shown one | Group A |
 | `mk` | array of `{ x, y, s, txt }` | at most five chart tags on the asker's current surface, found with `find_chart_tags(surface, area)` over a 512-tile box centred on the asker, nearest first by distance from the asker, omitted when the surface has none: position (`x`, `y`), surface (`s`), the marker's own text (`txt`), a label only | Group B |
 | `ch` | array of `{ who, msg }`, oldest first | the last 5 organic human chat lines: who said it (`who`), what they said (`msg`) | Group A |
 | `pl` | array of `{ n, f }`, capped at 50 rows | connected players across every force, from `list_players{all}`'s sweep reply: name (`n`), force (`f`). The 50-row cap is `list_players`'s own `MAX_PLAYERS` limit (companion-mod/scripts/tools/basics.lua), the same family of cap `fs` already carries. Omitted entirely, not sent short, when the reply is not a genuine sweep: a companion older than 1.0.4 answers with the asker's own force instead of every force, carrying a top-level `force` field a genuine sweep reply never has, and a sweep that came back truncated (`shown` less than `total`) is rejected the same way, since either shape would misrepresent a partial or single-force roster as the whole connected player list | Group A |
@@ -120,7 +120,7 @@ One filled instance, an asker on the `north` force standing in ordinary view on 
     { "n": "north", "ever": 6, "on": 3, "res": "automation-2", "prog": 0.62 },
     { "n": "south", "ever": 4, "on": 1 }
   ],
-  "sf": [ { "n": "nauvis", "on": 3 } ],
+  "sf": [ { "n": "nauvis", "on": 3 }, { "n": "platform-1", "on": 0, "platform": "platform-1", "owner": "north", "location": "fulgora" } ],
   "mk": [ { "x": 340.5, "y": -120.0, "s": "nauvis", "txt": "ore drop-off" } ],
   "ch": [
     { "who": "Xx_Steve_xX", "msg": "anyone need iron?" },
@@ -314,6 +314,16 @@ per force, which is the 21-lookup bug this design exists to remove. So a
 tool widens by keeping its name and gaining `all` or a list parameter; it
 never gains a sibling tool for the width it replaces. Every row in the
 catalog below carries exactly one of five dispositions:
+
+One exception, decided with Phase 5 (docs/design/phase5-sweep.md): `sweep`
+is a sibling to every tool it delegates to, and it is allowed because it
+answers a different question, not the same one wider. `entity_count` answers
+"how many labs does team-7 have"; `sweep` answers "which team has the most
+labs". The narrow tool keeps its single-subject question and `sweep` never
+takes one, so the model has no reason to call the narrow tool once per force
+to reach an answer `sweep` gives in one. The rule this section guards, that no
+two tools answer the same question at two widths, still holds; `sweep` and its
+delegates answer two questions.
 
 - `widened in place`: the tool keeps its name and gains `all` or a list
   parameter. No separate row remains for the narrower version it replaced.

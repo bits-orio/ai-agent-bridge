@@ -25,6 +25,15 @@ local MANIFEST = {
   boom = {
     desc = "Always fails. Used to check that an error inside a provider is reported and never crashes the caller.",
   },
+  -- A metric the agent's sweep tool can rank across every force, declared
+  -- here and nowhere in the companion (docs/design/phase5-sweep.md,
+  -- "Provider-declared metrics"). This is the shape any multi-team mod
+  -- declares to make one of its tools sweepable: which reply field holds the
+  -- rows, which row field names the force, which holds the number.
+  standings = {
+    desc = "Each force's score, one row per force, the way a team mod ranks its teams.",
+    sweep = { axes = { "force" }, rows = "forces", name = "force", value = "score", unit = "points" },
+  },
 }
 
 -- `force` is injected into every tool's argument table by the service and is
@@ -40,6 +49,19 @@ end
 
 local function boom()
   error("boom from the test provider")
+end
+
+-- A score nobody would compute for real, chosen so the leader is fixed by the
+-- game rather than by this file: the highest force index wins. total and
+-- shown are reported the way every bounded reply does, so the sweep can tell
+-- a whole list from a cut one.
+local function standings()
+  local rows = {}
+  for _, force in pairs(game.forces) do
+    rows[#rows + 1] = { force = force.name, score = force.index * 10 }
+  end
+  table.sort(rows, function(x, y) return x.force < y.force end)
+  return { total = #rows, shown = #rows, forces = rows }
 end
 
 -- A chat scope provider as well (docs/design/phase3-spec.md part 2), so the
@@ -77,6 +99,7 @@ remote.add_interface(INTERFACE, {
   agent_tools_v1 = function() return { v = 1, tools = MANIFEST } end,
   hello = hello,
   boom = boom,
+  standings = standings,
   chat_scope_v1 = chat_scope_v1,
   set_private = set_private,
   -- A labels provider too: what players call the player force.

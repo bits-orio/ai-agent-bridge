@@ -706,6 +706,16 @@ local forces = call("ai-agent-bridge-tools", "list_forces", { force = "player" }
 check("list_forces reports total, shown and what it left out",
       forces.ok and forces.r.total == 1 and forces.r.shown == 1 and forces.r.empty == 1,
       F.encode(forces))
+-- The asking force is never an empty slot. team-3 has nobody, so asked as
+-- player it is left out (above); asked as team-3 it is the asker's own and
+-- must be listed, with empty no longer counting it. This is the e2e rig's
+-- case exactly: zero players connected, every force empty, the asker hidden.
+local own = call("ai-agent-bridge-tools", "list_forces", { force = "team-3" })
+local own_names = {}
+for _, row in ipairs(own.ok and own.r.forces or {}) do own_names[row.name] = true end
+check("list_forces never hides the asking force, even one nobody has joined",
+      own.ok and own_names["team-3"] == true and own.r.total == 2 and own.r.empty == 0,
+      F.encode(own))
 
 -- ── the probe drops what it cannot use ────────────────────────────────
 S.logs = {}

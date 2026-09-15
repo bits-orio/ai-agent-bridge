@@ -19,8 +19,11 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strconv"
+	"strings"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/arith"
 )
@@ -86,28 +89,50 @@ func rankSweep(ctx context.Context, raw json.RawMessage) json.RawMessage {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return raw // unreachable: sweepRankableRows already parsed raw as an object.
 	}
-	leaderJSON, err := json.Marshal(verdict.Leader)
+	leaderJSON, err := marshalNoEscape(verdict.Leader)
 	if err != nil {
 		return raw
 	}
-	marginJSON, err := json.Marshal(verdict.Margin)
+	marginJSON, err := marshalNoEscape(verdict.Margin)
 	if err != nil {
 		return raw
 	}
 	fields["leader"] = leaderJSON
 	fields["margin"] = marginJSON
 	if verdict.MarginPercent != nil {
-		marginPctJSON, err := json.Marshal(*verdict.MarginPercent)
+		marginPctJSON, err := marshalNoEscape(*verdict.MarginPercent)
 		if err != nil {
 			return raw
 		}
 		fields["margin_percent"] = marginPctJSON
+	} else {
+		// arith leaves the percentage out when second place is zero, since
+		// there is no percentage of nothing. A reply that already carried one
+		// would otherwise keep it beside a margin that contradicts it.
+		delete(fields, "margin_percent")
 	}
-	out, err := json.Marshal(fields)
+	out, err := marshalNoEscape(fields)
 	if err != nil {
 		return raw
 	}
 	return out
+}
+
+// marshalNoEscape is json.Marshal without the HTML escaping json.Marshal
+// applies by default. The rows carry names players typed, and a platform can
+// be called "A & B <fast>": json.Marshal turns each of those characters into
+// six bytes of \u escape, on a reply that agent.go cuts at 4096 bytes, and
+// does it to the rows this function promises to forward untouched, because
+// a RawMessage is re-encoded on the way through. The companion never escaped
+// them, so the ranker must not start.
+func marshalNoEscape(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 // rankRow is one row of arith's rank tool's own "rows" argument.
@@ -163,8 +188,8 @@ func sweepRankableRows(raw json.RawMessage) ([]rankRow, bool) {
 		if err := json.Unmarshal(cells[0], &name); err != nil || name == "" {
 			return nil, false
 		}
-		var value float64
-		if err := json.Unmarshal(cells[1], &value); err != nil {
+		value, ok := numberCell(cells[1])
+		if !ok {
 			return nil, false
 		}
 		rows = append(rows, rankRow{Name: name, Value: value})
@@ -182,4 +207,27 @@ func sameCols(got, want []string) bool {
 		}
 	}
 	return true
+}
+
+// numberCell reads a value cell as a number whether the companion sent it as
+// one or as a string. It sends every fraction as a short decimal string,
+// because the engine's JSON writer prints a rounded 0.79 as fifty digits
+// otherwise (bounded.round's own comment), and the briefing decoders learned
+// the same lesson the hard way: a strict float64 here rejected every fraction
+// and turned the ranker into the identity on any metric with decimals, which
+// is why the research metric rounded itself to whole numbers to stay ranked.
+func numberCell(raw json.RawMessage) (float64, bool) {
+	var n float64
+	if json.Unmarshal(raw, &n) == nil {
+		return n, true
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }

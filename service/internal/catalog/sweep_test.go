@@ -123,3 +123,72 @@ func TestRankSweepRanksWhenFoundIsExplicitlyTrue(t *testing.T) {
 		t.Errorf("found:true should still be ranked: %s", got)
 	}
 }
+
+// The rows are names players typed, and a platform may be called "A & B
+// <fast>". json.Marshal escapes each of those characters to six bytes of \u
+// sequence, including inside the rows this function promises to forward
+// untouched, because a RawMessage is re-encoded on the way through. Against
+// agent.go's 4096-byte cut on a tool result that is a real cost, and the
+// companion never escaped them in the first place.
+func TestRankSweepForwardsPlayerTypedNamesByteForByte(t *testing.T) {
+	sweep := `{"sweep_v":1,"axis":"platform","metric":"entities","subject":"thruster","unit":"count","cols":["name","value"],"rows":[["A & B <fast>",50],["plain",1]],"total":2,"shown":2,"skipped":0,"why":null}`
+
+	got := string(rankSweep(context.Background(), json.RawMessage(sweep)))
+
+	if !strings.Contains(got, `"A & B <fast>"`) {
+		t.Errorf("the platform name did not survive byte for byte:\n%s", got)
+	}
+	for _, escaped := range []string{`\u0026`, `\u003c`, `\u003e`} {
+		if strings.Contains(got, escaped) {
+			t.Errorf("ranked reply carries the HTML escape %s:\n%s", escaped, got)
+		}
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(got), &fields); err != nil {
+		t.Fatalf("ranked reply is not valid JSON: %v\n%s", err, got)
+	}
+	if string(fields["leader"]) != `"A & B <fast>"` {
+		t.Errorf("leader = %s, want the name unescaped", fields["leader"])
+	}
+}
+
+// arith leaves margin_percent out when second place is zero: there is no
+// percentage of nothing. A reply that already carried one used to keep it,
+// beside a fresh margin it contradicted.
+func TestRankSweepDropsAMarginPercentArithRefusedToCompute(t *testing.T) {
+	sweep := `{"sweep_v":1,"axis":"force","metric":"rockets","unit":"count","cols":["name","value"],"rows":[["a",5],["b",0]],"total":2,"shown":2,"skipped":0,"why":null,"margin_percent":99}`
+
+	got := rankSweep(context.Background(), json.RawMessage(sweep))
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(got, &fields); err != nil {
+		t.Fatalf("ranked reply is not valid JSON: %v\n%s", err, got)
+	}
+	if raw, present := fields["margin_percent"]; present {
+		t.Errorf("stale margin_percent survived the merge: %s, beside margin %s", raw, fields["margin"])
+	}
+	if !strings.Contains(string(fields["margin"]), "over b") {
+		t.Errorf("margin = %s, want a fresh verdict over b", fields["margin"])
+	}
+}
+
+// A fraction reaches the wire as a short decimal string, the companion's own
+// convention for every non-integer, so a metric with decimals must still be
+// ranked, and ranked by its real value. A strict number decode made the
+// ranker the identity on exactly those metrics.
+func TestRankSweepRanksAStringEncodedFraction(t *testing.T) {
+	sweep := `{"sweep_v":1,"axis":"force","metric":"standings","unit":"points","cols":["name","value"],"rows":[["team-b","12.5"],["team-a",5]],"total":2,"shown":2,"skipped":0,"why":null}`
+
+	got := rankSweep(context.Background(), json.RawMessage(sweep))
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(got, &fields); err != nil {
+		t.Fatalf("ranked reply is not valid JSON: %v\n%s", err, got)
+	}
+	if string(fields["leader"]) != `"team-b"` {
+		t.Errorf("leader = %s, want team-b: the string-encoded 12.5 was not ranked", fields["leader"])
+	}
+	if !strings.Contains(string(fields["margin"]), "7.5") {
+		t.Errorf("margin = %s, want 7.5 over team-a, so the fraction was read as its real value", fields["margin"])
+	}
+}

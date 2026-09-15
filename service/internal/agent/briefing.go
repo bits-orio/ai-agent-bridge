@@ -210,11 +210,17 @@ type ForceRow struct {
 // absent fact as a real one, the same mistake this file has been fixed twice
 // for elsewhere (fraction, playersReply.Force).
 type SurfaceRow struct {
-	N        string  `json:"n"`
-	On       int     `json:"on"`
-	Platform *string `json:"platform,omitempty"`
-	Owner    *string `json:"owner,omitempty"`
-	Location *string `json:"location,omitempty"`
+	N  string `json:"n"`
+	On int    `json:"on"`
+	// Plain strings, not the pointer idiom the decoders above use. A pointer
+	// distinguishes "absent" from "empty", and for a platform's name that
+	// distinction is a trap: a player can rename a platform to nothing, and a
+	// non-nil pointer to "" is not omitted, so the model would read
+	// "platform":"" as a fact about a nameless ship. Here absent and empty
+	// mean the same thing, no platform worth naming, and omitempty says so.
+	Platform string `json:"platform,omitempty"`
+	Owner    string `json:"owner,omitempty"`
+	Location string `json:"location,omitempty"`
 }
 
 // MarkerRow is one row of mk, Group B.
@@ -584,11 +590,11 @@ type surfacesReply struct {
 	Total    int `json:"total"`
 	Shown    int `json:"shown"`
 	Surfaces *looseArray[struct {
-		Name         string  `json:"name"`
-		ForcePlayers int     `json:"force_players"`
-		Platform     *string `json:"platform"`
-		Owner        *string `json:"owner"`
-		Location     *string `json:"location"`
+		Name         string `json:"name"`
+		ForcePlayers int    `json:"force_players"`
+		Platform     string `json:"platform"`
+		Owner        string `json:"owner"`
+		Location     string `json:"location"`
 	}] `json:"surfaces"`
 }
 
@@ -824,7 +830,11 @@ func surfaceRows(surfaces *surfacesReply) []SurfaceRow {
 	}
 	rows := make([]SurfaceRow, 0, len(*surfaces.Surfaces))
 	for _, s := range *surfaces.Surfaces {
-		if s.ForcePlayers == 0 && s.Platform == nil {
+		// A platform row survives with nobody standing on it: nobody stands
+		// on a platform in flight, and that filter is why question 80's asker
+		// was never shown one. A row that names no platform and has none of
+		// the asker's players on it is a planet the asker has no presence on.
+		if s.ForcePlayers == 0 && s.Platform == "" {
 			continue
 		}
 		rows = append(rows, SurfaceRow{

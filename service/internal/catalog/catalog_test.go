@@ -631,3 +631,33 @@ func TestBuildKeepsTheFirstOfAColliding(t *testing.T) {
 		t.Errorf("kept %q, want the first provider", target.Iface)
 	}
 }
+
+// A vocabulary written with ordinary spacing after the commas is still one
+// type word. parseParam used to cut at the first space, read "enum<force," as
+// an unknown word, and fall back to a bare string with required=false, so a
+// declaration that looked correct in Lua silently lost both its type and its
+// required flag.
+func TestParamGrammarEnumSurvivesASpaceAfterTheComma(t *testing.T) {
+	prop, required := parseParam("enum<force, surface, platform>! how to group the rows")
+
+	if !required {
+		t.Error("the trailing ! was lost: required = false")
+	}
+	if prop["type"] != "string" {
+		t.Errorf("type = %v, want string", prop["type"])
+	}
+	got, _ := prop["enum"].([]string)
+	want := []string{"force", "surface", "platform"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("enum = %v, want %v", got, want)
+	}
+	if prop["description"] != "how to group the rows" {
+		t.Errorf("description = %q, want the text after the word", prop["description"])
+	}
+
+	// The plain grammar is untouched: a word still ends at its first space.
+	plain, req := parseParam("integer! rows to return")
+	if !req || plain["type"] != "integer" || plain["description"] != "rows to return" {
+		t.Errorf("plain word parse changed: %v required=%v", plain, req)
+	}
+}

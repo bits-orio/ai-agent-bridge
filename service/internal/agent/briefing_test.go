@@ -1061,3 +1061,42 @@ func TestAssembleKeepsSfWhenTheSurfaceListIsWhole(t *testing.T) {
 		t.Errorf("sf should ship when list_surfaces showed everything it had:\n%s", res.Text)
 	}
 }
+
+// A platform renamed to nothing is not a fact about a nameless ship. With
+// pointer fields a non-nil pointer to "" was not omitted, and the model read
+// "platform":"" as data; as plain strings, absent and empty both mean "no
+// platform worth naming" and the key is left out.
+func TestAssembleOmitsAnEmptyPlatformNameRatherThanAssertingIt(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces",
+		`{"force":"north","total":2,"shown":2,"surfaces":[
+			{"name":"nauvis","index":1,"force_players":3},
+			{"name":"platform-1","index":2,"force_players":0,"platform":"","owner":"north","location":"fulgora"}
+		]}`, nil))
+
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	sf := string(fencedBody(t, res.Text)["sf"])
+	if strings.Contains(sf, `"platform":""`) {
+		t.Errorf("an empty platform name reached the model as a fact:\n%s", sf)
+	}
+}
+
+// A 1.0.4 companion sends no platform columns at all. Every row must then
+// carry none, never an empty one: this is the presence guard the file's other
+// decoders enforce with pointers, expressed for these fields with omitempty.
+func TestAssembleSurfaceRowsCarryNoPlatformKeysFromAnOlderCompanion(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces",
+		`{"force":"north","total":1,"shown":1,"surfaces":[{"name":"nauvis","index":1,"force_players":3}]}`, nil))
+
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	sf := string(fencedBody(t, res.Text)["sf"])
+	for _, key := range []string{`"platform"`, `"owner"`, `"location"`} {
+		if strings.Contains(sf, key) {
+			t.Errorf("sf carries %s from a companion that never sent it:\n%s", key, sf)
+		}
+	}
+}

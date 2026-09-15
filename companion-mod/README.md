@@ -237,6 +237,13 @@ remote.add_interface("my-mod-tools", {
             milestone = "string! a milestone key",
             rank_by   = "string 'elapsed' (default) or 'online_elapsed'",
           },
+          -- Optional: lets the agent's sweep tool rank this across every
+          -- team in one call. Say which reply field holds the rows, which
+          -- row field names the team and which holds the number.
+          sweep = {
+            axes = { "force" }, rows = "teams", name = "force", value = "elapsed",
+            unit = "seconds", subject_param = "milestone",
+          },
         },
       },
     }
@@ -248,6 +255,11 @@ remote.add_interface("my-mod-tools", {
 
 - `force` is reserved: the agent injects it into every call; declare it
   nowhere.
+- `sweep` is optional. A tool that carries one becomes a metric of the
+  agent's `sweep` tool, so "which team has the most X" is one call across
+  every team; the full contract is in the repo under
+  docs/design/phase5-sweep.md, "Provider-declared metrics". Nothing in the
+  agent names your mod: any multi-team mod can declare it.
 - Return plain data only; a Lua object leaks through `remote.call` intact
   and a value that cannot be JSON breaks the caller.
 - Your tool is always handed a table, so `args.force` is safe to read.

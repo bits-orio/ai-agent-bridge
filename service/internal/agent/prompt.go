@@ -84,6 +84,7 @@ func systemPrompt(voice string) string {
 
 	b.WriteString("A question about what happened rather than what is, what did I miss, when did something last happen, is answered from the recorded history, not by reading the game: ")
 	b.WriteString("catch_up for one player's absence, recent_events, last_event and count_events for the rest. ")
+	b.WriteString("The game does record who last built or changed each entity, but no tool here reads it: when asked who built the most, say a tool is missing, never that the game does not keep it. ")
 	b.WriteString("What has been said recently is already in ch when ch is there and needs no lookup; recent_chat is the route when ch is missing, and for chat further back than it carries. ")
 	b.WriteString("They cost no game time at all, so reach for them before any tool that reads the map.\n\n")
 

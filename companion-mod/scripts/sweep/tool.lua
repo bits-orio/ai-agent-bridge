@@ -27,7 +27,7 @@ M.manifest = {
     -- registry").
     desc = "Which force, surface, platform or player has the most of something, in one call " ..
            "instead of one per force. metric is one of: " .. registry.metric_line() ..
-           ". axis groups the rows; each metric's own list above is what it accepts, and its " ..
+           ". Another mod may declare more; an unrecognised name answers with every metric's card, theirs included. axis groups the rows; each metric's own list above is what it accepts, and its " ..
            "first is the default when axis is left out. subject names the specific thing a " ..
            "metric measures, an entity prototype name for entities, e.g. lab; only entities " ..
            "needs one. Rows sort largest value first. An unrecognised metric, or an axis a " ..

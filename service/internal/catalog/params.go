@@ -74,7 +74,7 @@ func schema(manifest rpc.ToolManifest) map[string]any {
 // parseParam turns one "<type>[!] <description>" line into a schema property
 // and whether the parameter is required.
 func parseParam(spec string) (map[string]any, bool) {
-	head, rest, _ := strings.Cut(strings.TrimSpace(spec), " ")
+	head, rest := typeWord(strings.TrimSpace(spec))
 	required := strings.HasSuffix(head, "!")
 	word := strings.TrimSuffix(head, "!")
 
@@ -94,6 +94,32 @@ func parseParam(spec string) (map[string]any, bool) {
 		return map[string]any{"type": "string", "description": strings.TrimSpace(spec)}, false
 	}
 	return map[string]any{"type": kind, "description": strings.TrimSpace(rest)}, required
+}
+
+// typeWord splits a spec into its leading type word and the description
+// after it. A plain word ends at the first space. A bracketed word, list<...>
+// or enum<...>, ends at the first space AFTER its closing bracket, so a
+// vocabulary written with ordinary spacing, "enum<force, surface>!", is still
+// one word. Cutting at the first space read that as the unknown word
+// "enum<force," and the fallback below then dropped its type AND its required
+// flag, silently, on a line that read as correct in the Lua that declared it.
+func typeWord(spec string) (head, rest string) {
+	depth := 0
+	for i, r := range spec {
+		switch r {
+		case '<':
+			depth++
+		case '>':
+			if depth > 0 {
+				depth--
+			}
+		case ' ':
+			if depth == 0 {
+				return spec[:i], spec[i+1:]
+			}
+		}
+	}
+	return spec, ""
 }
 
 // listItemSchema reports the JSON Schema for one element of a list<...>

@@ -3,40 +3,37 @@
 -- License: MIT
 --
 -- The entities sweep metric: how many of one entity prototype each force,
--- surface, platform or force-surface pair has. Delegates every count to
--- scripts/tools/entity_count.lua's own `entity_count` function, the tool
--- that already owns count_entities_filtered and get_entity_count; nothing
--- here calls either engine method itself, so there is exactly one
--- implementation of the measurement no matter how many axes read it.
+-- surface, platform or force-surface pair has. Every measurement is
+-- delegated to scripts/tools/entity_count.lua, the tool that already owns
+-- count_entities_filtered and get_entity_count. Nothing here calls either
+-- engine method, walks a surface, or bounds a walk: there is exactly one
+-- implementation of the count and one MAX_PASSES, and both live in the tool.
 --
--- Two different delegated shapes, chosen by axis:
---   axis "force": one call, entity_count{all=true}, which reads
---     LuaForce::get_entity_count, documented O(1) (entity_count.lua's own
---     header comment). No surface is asked about anything, so this costs
---     nothing however many forces or surfaces the save holds.
---   axis "surface" / "platform" / "force+surface": entity_count has no
---     equivalent one-call sweep for these (its own per_surface path, when it
---     has one, still keys rows by force first). So this metric drives its
---     own per-cell walk, force by force and surface by surface, calling the
---     SAME single-force single-surface entity_count for each cell walk.lua's
---     prefilter and predict already bounded. Every one of those calls is a
---     direct Lua function call inside this one tool invocation, not a
---     separate RPC round trip, so however many cells it walks the model
---     still spent exactly one call.
+-- Two delegated shapes, chosen by axis:
+--   axis "force": entity_count{all=true}, which reads
+--     LuaForce::get_entity_count, documented O(1). No surface is asked
+--     anything, so this costs nothing however many forces or surfaces exist.
+--   every other axis: entity_count{all=true, per_surface=true}, one row per
+--     force-and-surface that has any, which this metric only regroups under
+--     the axis asked for. The tool bounds that walk itself and refuses when
+--     it would be too many passes; the refusal comes back through read() as
+--     a sweep refusal with the tool's own reason.
+--
+-- The first version of this file re-drove the force-by-surface walk itself,
+-- beside an identical walk in entity_count.lua, with a second copy of
+-- MAX_PASSES kept equal "on purpose". docs/design/phase5-sweep.md chose a
+-- delegating registry precisely so that no measurement exists twice; the
+-- gate on that build found the walk duplicated anyway. Delegating is what
+-- makes the design true rather than described.
 
 local entity_count_tool = require("scripts.tools.entity_count")
-local platform          = require("scripts.sweep.platform")
 local axes              = require("scripts.sweep.axes")
 
-local ENTITY_COUNT = entity_count_tool.functions.entity_count
-
--- Mirrors entity_count.lua's own MAX_PASSES (companion-mod/scripts/tools/
--- entity_count.lua, "measured server runs 23 surfaces against 14 populated
--- forces, 322 passes"). That constant is local to entity_count.lua and not
--- exported, so this is a second number rather than a shared one; it is kept
--- equal on purpose and this comment is the tripwire if the two are ever
--- meant to diverge.
-local MAX_PASSES = 600
+-- Looked up at call time rather than captured at load, so the seam between
+-- this metric and its delegate is something a test can stand a stub into:
+-- the fixture can never produce more force-surface rows than the tool's own
+-- cut, so the truncation refusal below is only reachable that way.
+local function ENTITY_COUNT(a) return entity_count_tool.functions.entity_count(a) end
 
 local M = {
   axes = { "force", "surface", "platform", "force+surface" },
@@ -49,7 +46,6 @@ local M = {
   -- metric is the only one of the four that can ever walk the map at all, so
   -- its card says so.
   costly = true,
-  max_passes = MAX_PASSES,
 }
 
 function M.check(a)
@@ -65,25 +61,6 @@ function M.check(a)
   return nil
 end
 
---- Narrows the surface scope to live platforms only, for the platform axis.
---- Every other axis walks every surface, unchanged.
-function M.prefilter(ctx, axis)
-  if axis ~= "platform" then return ctx.surfaces end
-  local out = {}
-  for _, surface in ipairs(ctx.surfaces) do
-    if platform.name_of(surface) then out[#out + 1] = surface end
-  end
-  return out
-end
-
---- The force axis reads the engine's own per-force counter in one call, no
---- surface loop, so it costs nothing regardless of how many surfaces exist.
---- Every other axis is one pass per force per surface still in scope.
-function M.predict(ctx, axis)
-  if axis == "force" then return 0 end
-  return #ctx.forces * #ctx.surfaces
-end
-
 local function read_force(a)
   local reply = ENTITY_COUNT({ all = true, name = a.subject })
   if reply.found == false then
@@ -96,27 +73,34 @@ local function read_force(a)
   return rows
 end
 
---- One row per (force, surface) cell whose count is non-zero, grouped and
---- summed by the requested axis's label. A cell that measured zero is left
---- out entirely: a force owns entities on almost none of the surfaces it is
---- not standing on, and those passes are cheap precisely because they find
---- nothing (entity_count.lua's own header comment), so they are not worth a
---- row of zero in a "which has the most" answer.
-local function read_cells(ctx, axis, a)
+--- One row per (force, surface) cell that has any, from the tool's own
+--- per_surface sweep, regrouped and summed under the axis asked for. A cell
+--- that measured zero is already absent: the tool leaves those out, since a
+--- force owns entities on almost none of the surfaces it is not standing on.
+---
+--- The tool cuts its rows to a count and a byte budget and reports total
+--- beside shown. A cut list of cells ranked and published as a leader would
+--- name whoever happened to survive the cut, so shown below total is refused
+--- whole, the rule the players metric and the briefing's own pl key follow.
+local function read_cells(_ctx, axis, a)
+  local reply = ENTITY_COUNT({ all = true, per_surface = true, name = a.subject })
+  if reply.found == false then
+    return nil, { subject = a.subject, reason = reply.reason, passes = reply.passes, max_passes = reply.max_passes }
+  end
+  if reply.total and reply.shown and reply.shown < reply.total then
+    return nil, {
+      subject = a.subject, shown = reply.shown, total = reply.total,
+      reason = "entity_count showed " .. reply.shown .. " of " .. reply.total ..
+               " force-and-surface rows, so a ranking over them would name whoever survived the cut: " ..
+               "use the force axis for each force's total, or name a surface",
+    }
+  end
   local by_cell, order = {}, {}
-  for _, force in ipairs(ctx.forces) do
-    for _, surface in ipairs(ctx.surfaces) do
-      local reply = ENTITY_COUNT({ force = force.name, surface = surface.name, name = a.subject })
-      if reply.found and reply.count and reply.count > 0 then
-        local cell = axes[axis]({
-          force = force.name, surface = surface.name,
-          platform = platform.name_of(surface),
-        })
-        if cell then
-          if not by_cell[cell] then order[#order + 1] = cell end
-          by_cell[cell] = (by_cell[cell] or 0) + reply.count
-        end
-      end
+  for _, row in ipairs(reply.forces or {}) do
+    local cell = axes[axis]({ force = row.force, surface = row.surface, platform = row.platform })
+    if cell then
+      if not by_cell[cell] then order[#order + 1] = cell end
+      by_cell[cell] = (by_cell[cell] or 0) + row.count
     end
   end
   local rows = {}

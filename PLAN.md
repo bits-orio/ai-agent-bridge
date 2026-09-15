@@ -1,23 +1,17 @@
 # AI Agent Bridge (AAB): plan
 
-Status: Phases 0, 1 and 2 built and passing the rig harness on 2.0.77 with the
-scripted model, 2026-09-10. No live model call has been made yet (no API key on
-the development machine). The design brief is under `docs/design/`. Phase 4 is
-designed and not yet built, dated 2026-09-12: the briefing, the tiered reads
-and the round-batching op are specified in
-[docs/design/phase4-spec.md](docs/design/phase4-spec.md) and recorded in
-`docs/adr/0008-briefing-in-the-user-turn.md`,
-`docs/adr/0009-tiers-and-bounded-walks.md` and
-`docs/adr/0011-calls-batch-op.md`. The observability ledger has its own
-contract in
-[docs/design/phase4-observability-spec.md](docs/design/phase4-observability-spec.md)
-and `docs/adr/0010-observability-ledger.md`. The free tier's zero-lookup rate
-(phase4-spec.md section 4) was measured at 0 of 7 on 2026-09-15
-(`aab stats 2026-09-15`), taken before the system prompt taught the model the
-briefing existed. The prompt now teaches it; whether that moved the rate is
-unmeasured until a service restart and a fresh `aab stats` run say so. Check
-that against phase4-spec.md section 4 rather than treating "0 of 7" as either
-still current or already fixed.
+Status, 2026-09-15: Phases 0 through 4 built and running on a live server.
+Phase 4's briefing was measured against the live ledger the day it shipped:
+the free tier's zero-lookup rate went from 0 of 7 questions, when nothing
+told the model the briefing existed, to 10 of 17 once the prompt did, with
+the briefing paying for itself nine times over (`aab stats 2026-09-15`).
+Phase 5 is built on `main` and unreleased: the `sweep` tool with a
+delegating metric registry, provider-declared metrics that any multi-team mod
+opts into from its own manifest, an `enum` type in the param grammar, and
+platform ownership in `list_surfaces` and the briefing. The companion stays at
+1.0.4 in `info.json` until the owner has tested it; the 1.0.5 changelog entry
+is written and waiting. The design and the decisions behind it are in
+[docs/design/phase5-sweep.md](docs/design/phase5-sweep.md).
 
 AAB is two halves. A Factorio companion mod exposes a tiny protocol over a
 console command. A Go service, one per server, drives that protocol over RCON:

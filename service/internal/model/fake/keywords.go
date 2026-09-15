@@ -36,6 +36,12 @@ func firstCall(text string, defs []model.ToolDef) *call {
 			"item":    itemOf(text),
 			"window":  "one_minute",
 		})
+	// A metric another mod declares (docs/design/phase5-sweep.md,
+	// "Provider-declared metrics"): the harness's test provider exposes
+	// standings with a sweep block, and the companion's sweep must find it
+	// without the companion, or this model, ever naming that mod.
+	case has(text, "standings"):
+		return resolve(defs, "sweep", map[string]any{"metric": "standings"})
 	case has(text, "forces"), has(text, "teams"):
 		return resolve(defs, "list_forces", nil)
 	case has(text, "players"):

@@ -1,6 +1,10 @@
 # Phase 5: answering "which one has the most" in one call
 
-Status: designed, not built. Stage 1 is scoped into the unreleased 1.0.5.
+Status: stages 1 to 4 built and the `enum` grammar with them, plus provider-declared
+metrics (the generic form of stage 5's cross-provider item), all on `main` and all
+unreleased: `info.json` stays at 1.0.4 until the owner has tested it. Proven end to
+end by `tests/e2e`, which sweeps a metric the test provider declares across two mods
+and two processes.
 
 ## The question this exists to answer
 
@@ -135,9 +139,9 @@ change, so it cannot break a 1.0.4 companion by construction.
 |---|---|---|
 | 1 | platform columns on `list_surfaces`, its default limit raised, `per_surface` on `entity_count`, `rockets` sorted by value, `tier=2` on `find_entities` | companion 1.0.5 |
 | 2 | briefing carries platform owner and location; stops filtering platform rows out on `ForcePlayers > 0` | service, feature-detecting |
-| 3 | the `sweep` tool and its delegating registry | companion 1.1.0 |
+| 3 | the `sweep` tool and its delegating registry | companion, built; version is the owner's call |
 | 4 | service-side ranker in the return path, so a sweep reply is ranked through the same `arith.order` that `rank` uses | service |
-| 5 | remaining metrics, `enum` in the grammar, cross-provider metrics | optional |
+| 5 | remaining metrics (open); `enum` in the grammar (built); provider-declared metrics (built, generic) | partly built |
 
 Stage 1 alone makes question 80 a single call, because `per_surface` on the
 existing `entity_count` sweep returns one row per force-and-surface and the
@@ -167,6 +171,79 @@ confidently not know things. They also answer "what is", not "which has most".
 - Not making `sweep` answer single-row questions. `entity_count` keeps "how many
   labs does team-7 have"; `sweep` owns "which team has the most labs". The
   overlap is deliberate.
+
+## Decisions taken, 2026-09-15
+
+1. **`enum` in the param grammar: yes.** Built. `enum<a, b>!` is one type word
+   whatever the spacing, and reaches the model as a JSON Schema enum.
+2. **Cross-provider metrics: yes, generically.** Never by naming a mod. A
+   provider that wants its tool swept declares it in its own `agent_tools_v1`
+   manifest and the companion's registry discovers it at call time, so a
+   multi-team mod of any kind, MTS or an OARC-like one, participates without
+   the companion knowing its name. See "Provider-declared metrics" below.
+3. **`last_user`: correct the claim, do not build the walk.** The prompt now
+   says the game records who built each entity and no tool here reads it.
+4. **Spec section 5: the rule stands, with the exception written in.**
+   `sweep` is a sibling that answers a different question, not the same one
+   wider. phase4-spec.md section 5 records it.
+5. **Release: the owner tests before anything ships.** Nothing here bumps
+   `info.json`.
+
+## Provider-declared metrics
+
+The registry delegates to the companion's own tools. A tool another mod owns
+is delegated to the same way, and the mod declares it, in the manifest its
+`agent_tools_v1` probe already returns, with a `sweep` block beside the tool's
+`desc` and `params`:
+
+```lua
+standings = {
+  desc = "Each team's score this round.",
+  params = {},
+  sweep = {
+    axes = { "force" },       -- the axes its rows can be grouped by
+    default_axis = "force",   -- optional; the first axis otherwise
+    rows = "forces",          -- the reply field that holds the rows
+    name = "force",           -- the row field naming the cell; or a table
+                              -- { force = "f", surface = "s" } for a compound axis
+    value = "score",          -- the row field holding the number
+    unit = "points",          -- optional
+    metric = "standings",     -- optional; the tool's own name otherwise
+    args = { all = true },    -- optional; what the tool needs to sweep
+    subject_param = "item",   -- optional; which param receives a subject
+  },
+}
+```
+
+That is the whole contract. **Nothing in the companion names a mod.** A
+multi-team mod of any kind, MTS or an OARC-like one, becomes sweepable by
+declaring that block, and the companion needs no release to learn about it.
+
+How it is read:
+
+- Discovery is at **call time**, never at load. Another mod's remote interface
+  is not guaranteed to exist while the companion's files are being required,
+  and `probe.lua` already re-reads every provider on every call rather than
+  trusting a catalog.
+- The companion's own metrics win a name collision, and the companion's own
+  interface is skipped so `sweep` cannot discover itself. Among other providers,
+  interfaces and tools are walked in sorted order, so two identical games
+  resolve a collision the same way.
+- A block that declares too little (no axes, an axis the companion does not
+  know, no `rows`/`name`/`value`) is ignored quietly. The tool is still a tool;
+  it is just not a metric.
+- A reply carrying `total` and `shown` with `shown < total` is refused whole,
+  never ranked over the survivors. The same rule every companion metric follows.
+- A value the tool sends as a string is read as a number, because the
+  companion's own tools send rounded fractions as strings and a provider may
+  copy that.
+- The `found=false` cards for an unrecognised metric include the provider's
+  metrics too, each naming its provider, so the model learns they exist from a
+  wrong guess rather than from the manifest description, which is generated at
+  load and cannot list what is not loaded yet.
+
+The Go manifest decoder ignores fields it does not know, so a `sweep` block
+costs a provider nothing on a service that predates it.
 
 ## Open questions for the owner
 
