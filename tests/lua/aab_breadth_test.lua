@@ -285,13 +285,16 @@ check("entity_count all=true answers for every force with players, largest first
 -- pass on a single term plus zeroes: 12 on nauvis and 5 on orbit is 17.
 S.entity_counts_by_surface = { nauvis = { lab = 12 }, ["platform-1"] = { lab = 5 } }
 local count_sum = call("entity_count", { all = true, name = "lab" })
-check("entity_count all=true with no surface sums the force across every surface",
-      count_sum.ok and count_sum.r.forces[1].count == 17
-      and count_sum.r.surfaces_counted == 2, F.encode(count_sum))
+check("entity_count all=true with no surface covers every surface the force has",
+      count_sum.ok and count_sum.r.forces[1].count == 17, F.encode(count_sum))
 S.entity_counts_by_surface = {}
-check("entity_count all=true with no surface counts every surface and says so",
+-- No surface named goes through LuaForce::get_entity_count, the engine's own
+-- O(1) per-force counter, which asks no surface anything. Reporting a surface
+-- count there would be inventing one, so its absence is part of the contract
+-- rather than an oversight.
+check("entity_count all=true with no surface reports no surface count",
       count_all.ok and count_all.r.surface == "all"
-      and count_all.r.surfaces_counted ~= nil, F.encode(count_all))
+      and count_all.r.surfaces_counted == nil, F.encode(count_all))
 
 local count_one = call("entity_count", { all = true, name = "lab", surface = "nauvis" })
 check("entity_count all=true on one named surface reports that surface",

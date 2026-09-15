@@ -43,7 +43,7 @@ local M = {}
 
 M.manifest = {
   entity_count = {
-    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false. all=true answers for every force that has players in one call, one row each, largest count first: use it for any each-team or every-force question instead of one call per force. Under all=true, leave surface out to count every surface a force has, the right call for a per-team total, or name one to compare the same surface across teams.",
+    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false. all=true answers for every force that has players in one call, one row each, largest count first: use it for any each-team or every-force question instead of one call per force. Under all=true, leave surface out for each force's total everywhere, which the engine keeps and which costs nothing however many teams there are, the right call for any which-team-has-most question; name a surface only when the answer must be about that one place.",
     params = {
       surface = "string surface name or index, e.g. nauvis; required unless all=true, where omitting it counts every surface",
       name    = "string! entity prototype name, e.g. lab, assembling-machine-2",
@@ -87,6 +87,22 @@ end
 --- all=true is the every-team question in one call. The reply carries no
 --- top-level force field: that absence is what tells a sweep from the
 --- single-force shape, which carries one, and both carry rows.
+--- Sorting, bounding and the reply shape, shared by both sweep paths so the
+--- wire shape cannot drift between them. surfaces_counted is nil on the
+--- engine-counter path: that path asks no surface anything, so reporting a
+--- number there would be inventing one.
+local function finish_rows(rows, name, label, surfaces_counted)
+  table.sort(rows, function(x, y)
+    if x.count ~= y.count then return x.count > y.count end
+    return x.force < y.force
+  end)
+  local shown = bounded.cut(rows, bounded.MAX_FORCES)
+  return {
+    found = true, name = name, surface = label, surfaces_counted = surfaces_counted,
+    total = #rows, shown = #shown, forces = shown,
+  }
+end
+
 local function entity_count_all(a)
   if type(a.name) ~= "string" or a.name == "" then error("name is required", 0) end
   if not prototypes.entity[a.name] then
@@ -96,25 +112,43 @@ local function entity_count_all(a)
     }
   end
 
+  local forces = sweep_forces()
+  local rows = {}
+
+  -- No surface named means "how many does each force have", and the engine
+  -- already knows: LuaForce::get_entity_count is documented O(1), "entity
+  -- counts are kept and maintained in the game engine" (2.0.77). There is no
+  -- pass budget to spend and nothing to refuse, so this answers at 40 forces
+  -- exactly as fast as at 4.
+  --
+  -- The first version of this sweep summed count_entities_filtered over every
+  -- force against every surface to reach the same number. On the measured
+  -- server that was 322 chunk passes; at 40 teams across 45 surfaces it is
+  -- 1800, past MAX_PASSES, so the sweep would have refused precisely the
+  -- question it was built for.
+  if a.surface == nil or a.surface == "" or a.surface == "all" then
+    for _, force in ipairs(forces) do
+      rows[#rows + 1] = { force = force.name, count = force.get_entity_count(a.name) }
+    end
+    return finish_rows(rows, a.name, "all", nil)
+  end
+
+  -- A named surface is the only case the engine keeps no counter for, and it
+  -- costs one pass per force rather than one per force per surface, so the
+  -- cross product that made the bound necessary cannot arise.
   local surfaces, label, miss = sweep_surfaces(a)
   if not surfaces then return miss end
-  local forces = sweep_forces()
-
-  -- Refused before a single pass runs, never half-counted: a partial sweep
-  -- would answer with numbers that look complete.
   local passes = #forces * #surfaces
   if passes > MAX_PASSES then
     return {
       found = false, name = a.name, surface = label,
       force_count = #forces, surface_count = #surfaces,
       passes = passes, max_passes = MAX_PASSES,
-      reason = "counting every force on every surface would be " .. passes ..
+      reason = "counting every force on this surface would be " .. passes ..
                " passes over the map, past the " .. MAX_PASSES .. " one call may spend: " ..
-               "name a surface to compare the same one across forces",
+               "ask about fewer forces, or leave surface out for the engine's own per-force totals",
     }
   end
-
-  local rows = {}
   for _, force in ipairs(forces) do
     local count = 0
     for _, surface in ipairs(surfaces) do
@@ -122,17 +156,12 @@ local function entity_count_all(a)
     end
     rows[#rows + 1] = { force = force.name, count = count }
   end
-  table.sort(rows, function(x, y)
-    if x.count ~= y.count then return x.count > y.count end
-    return x.force < y.force
-  end)
-
-  local shown = bounded.cut(rows, bounded.MAX_FORCES)
-  return {
-    found = true, name = a.name, surface = label, surfaces_counted = #surfaces,
-    total = #rows, shown = #shown, forces = shown,
-  }
+  return finish_rows(rows, a.name, label, #surfaces)
 end
+
+--- Sorting, bounding and the reply shape, shared by both paths above so the
+--- wire shape cannot drift between them.
+
 
 local function entity_count(a)
   a = a or {}

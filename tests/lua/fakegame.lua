@@ -392,6 +392,19 @@ function F.install(opts)
     technologies = techs,
     research_queue = S.research_queue,
     rockets_launched = 7,
+    -- LuaForce::get_entity_count(name) -> uint32. The engine keeps this per
+    -- force, documented O(1), which is why a sweep over forces needs no pass
+    -- budget. Derived here from the same per-surface fixture the surface
+    -- counts use, so the two can never disagree and a test cannot pass against
+    -- a number nothing else in the fake believes.
+    get_entity_count = function(name)
+      assert(type(name) == "string", "get_entity_count wants a prototype name")
+      local total = 0
+      for _, surface in pairs(S.surfaces) do
+        total = total + surface.count_entities_filtered{ force = "player", name = name }
+      end
+      return total
+    end,
     items_launched = { satellite = 3, ["space-science-pack"] = 1000, ["cargo-pod"] = 7 },
     logistic_networks = { nauvis = S.networks },
     -- SurfaceIdentification: an index, a name, or the LuaSurface itself.
