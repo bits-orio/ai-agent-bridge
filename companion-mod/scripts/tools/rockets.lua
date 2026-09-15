@@ -50,7 +50,14 @@ local function rockets_all()
       }
     end
   end
-  table.sort(rows, function(x, y) return x.force < y.force end)
+  -- Largest first, not alphabetical. bounded.cut keeps the first rows, so a
+  -- sweep sorted by name discards the biggest launcher before the smallest on
+  -- any server with more forces than the cap, on the one tool whose entire
+  -- purpose is naming the biggest.
+  table.sort(rows, function(x, y)
+    if x.rockets_launched ~= y.rockets_launched then return x.rockets_launched > y.rockets_launched end
+    return x.force < y.force
+  end)
   local shown = bounded.cut(rows, MAX_FORCES)
   return { total = #rows, shown = #shown, forces = shown }
 end

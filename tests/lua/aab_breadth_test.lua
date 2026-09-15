@@ -267,6 +267,18 @@ check("rockets all=true returns one row per force with players or a launch",
 check("rockets all=true carries no items list, single-force answer only",
       rockets_all.ok and rockets_all.r.forces[1].items == nil, F.encode(rockets_all))
 
+-- Largest first, not alphabetical. bounded.cut keeps the FIRST rows, so a sweep
+-- ordered by name discards the biggest launcher before the smallest, on the one
+-- tool whose whole purpose is naming the biggest. team-3 sorts before player by
+-- name and must sort after it by launches.
+S.team3.rockets_launched = 99
+local rockets_order = call("rockets", { all = true })
+check("rockets all=true ranks by launches, not by force name",
+      rockets_order.ok and rockets_order.r.forces[1].force == "team-3"
+      and rockets_order.r.forces[1].rockets_launched == 99
+      and rockets_order.r.forces[2].force == "player", F.encode(rockets_order))
+S.team3.rockets_launched = 0
+
 -- ── entity_count all=true ─────────────────────────────────────────────
 -- Question 64 on 2026-09-15 asked how many solar panels each team had and
 -- spent fourteen entity_count calls in one round, one per force. The sweep

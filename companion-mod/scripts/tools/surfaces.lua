@@ -13,7 +13,14 @@
 local force_lookup = require("scripts.tools.force_lookup")
 local bounded      = require("scripts.tools.bounded")
 
-local DEFAULT_SURFACES = 20
+-- Rows sort by name and a space platform is named platform-N, so every platform
+-- sorts after every planet. At a default of 20 the measured server returned 20
+-- of 25 surfaces and not one platform, which is why question 80 guessed
+-- platform-1 before it had seen one and then spent a round re-listing with a
+-- limit to find out it had guessed right. The default is the cap now: a surface
+-- row is small, and a list that silently omits a whole class of surface is
+-- worse than a longer one.
+local DEFAULT_SURFACES = 50
 local MAX_SURFACES = 50
 
 local M = {}

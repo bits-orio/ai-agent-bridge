@@ -525,6 +525,12 @@ function F.install(opts)
   S.team3 = {
     name = "team-3", valid = true, players = {}, connected_players = {},
     print = function(text) S.printed[#S.printed + 1] = { who = "force:team-3", text = text } end,
+    -- Every LuaForce carries these two; leaving them off made a force sweep
+    -- unable to see a second force at all, so no test could observe the order
+    -- rows arrive in.
+    rockets_launched = 0,
+    items_launched = {},
+    get_entity_count = function() return 0 end,
   }
 
   _G.game = {

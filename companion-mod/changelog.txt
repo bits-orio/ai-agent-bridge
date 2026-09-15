@@ -8,6 +8,15 @@ Date: 2026-09-15
       counter the engine already keeps, which costs nothing whether a server runs 4 teams or 40.
       Name a surface when the answer has to be about that one place, and that path counts one pass
       per force and refuses rather than half-answering if even that would be too many.
+  Bugfixes:
+    - list_surfaces returned 20 rows by default, sorted by name, and a space platform is named
+      platform-N, so every platform sorted after every planet and fell off the end. On a server
+      with 25 surfaces the reply held no platform at all, which is why "which space ship has most
+      thrusters" guessed a platform name before it had seen one and then spent a round listing
+      again with a limit. The default is the cap now.
+    - rockets with all=true sorted its rows by force name before cutting them to the row cap, so a
+      server with more forces than the cap discarded the biggest launcher first, on the one tool
+      whose purpose is naming the biggest. Largest first now, force name only as a tiebreak.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.4
 Date: 2026-09-14
