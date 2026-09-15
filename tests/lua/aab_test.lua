@@ -37,7 +37,8 @@ check("status names the live ask command", status.r.ask_command == "ask", status
 
 local tools = rpc({ op = "tools" })
 local by_iface = {}
-for _, p in ipairs(tools.r) do by_iface[p.iface] = p.tools end
+check("the tools op answered at all", tools.ok, F.encode(tools))
+for _, p in ipairs(tools.r or {}) do by_iface[p.iface] = p.tools end
 check("catalog has the companion's tools", by_iface["ai-agent-bridge-tools"] ~= nil)
 check("catalog has the test provider", by_iface["aab-test-provider"] ~= nil)
 local want = { "list_forces", "list_players", "current_research", "list_surfaces",
@@ -351,6 +352,8 @@ check("find_entities passes force and the scan cap to the engine, ghosts second"
       S.last_find_filter.force == "player" and S.last_find_filter.limit == 2000 - 2 and S.last_find_filter.ghost_name == "lab",
       F.encode(S.last_find_filter))
 local repair = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-pack" } })
+check("a recipe search scans crafters only, not every entity the force owns",
+      repair.ok and repair.r.scanned == 6, F.encode(repair))
 check("find_entities by recipe keeps only the machine on that recipe", repair.ok and repair.r.total == 1
       and repair.r.entities[1].name == "assembling-machine-2" and repair.r.entities[1].gps == "[gps=-20,33,nauvis]"
       and repair.r.entities[1].recipe == "repair-pack", F.encode(repair))
@@ -671,13 +674,37 @@ local silly_limit = call("ai-agent-bridge-tools", "list_players",
   { force = "player", connected = false, limit = 0 })
 check("list_players clamps a limit of zero up to one", silly_limit.ok and silly_limit.r.shown == 1)
 
+-- ── list_players all=true: the sweep the phase4 follow-up contract added ──
+-- Load-bearing per that contract: the sweep reply must carry no top-level
+-- `force` field, since that absence is the only thing the service can use to
+-- tell a 1.0.4 sweep from a 1.0.3 single-force reply. Mutation-tested: adding
+-- `force = "player"` to the sweep's own return, the exact "for symmetry or
+-- tidiness" mistake the contract names, turns every check below red.
+local pl_all = call("ai-agent-bridge-tools", "list_players", { all = true })
+check("list_players all=true carries no top-level force field",
+      pl_all.ok and pl_all.r.force == nil, F.encode(pl_all))
+check("list_players all=true returns connected players across every force",
+      pl_all.ok and pl_all.r.total == 1 and pl_all.r.shown == 1
+      and pl_all.r.players[1].name == "Bob" and pl_all.r.players[1].force == "player"
+      and pl_all.r.players[1].connected == true, F.encode(pl_all))
+check("list_players all=true row drops admin", pl_all.ok and pl_all.r.players[1].admin == nil,
+      F.encode(pl_all))
+
+local pl_all_everyone = call("ai-agent-bridge-tools", "list_players",
+  { all = true, connected = false })
+check("list_players all=true connected=false lists every player on every force, by name",
+      pl_all_everyone.ok and pl_all_everyone.r.total == 2
+      and pl_all_everyone.r.players[1].name == "Ann" and pl_all_everyone.r.players[1].force == "player"
+      and pl_all_everyone.r.players[2].name == "Bob", F.encode(pl_all_everyone))
+
 local one_surface = call("ai-agent-bridge-tools", "list_surfaces", { force = "player", limit = 1 })
 check("list_surfaces cuts to limit and reports the total",
       one_surface.ok and one_surface.r.shown == 1 and one_surface.r.total == 2
       and one_surface.r.surfaces[1].name == "nauvis", F.encode(one_surface))
 
 local forces = call("ai-agent-bridge-tools", "list_forces", { force = "player" })
-check("list_forces reports total and shown", forces.ok and forces.r.total == 2 and forces.r.shown == 2,
+check("list_forces reports total, shown and what it left out",
+      forces.ok and forces.r.total == 1 and forces.r.shown == 1 and forces.r.empty == 1,
       F.encode(forces))
 
 -- ── the probe drops what it cannot use ────────────────────────────────
@@ -704,7 +731,10 @@ remote.add_interface("aab-empty-provider", {
 
 local catalog = rpc({ op = "tools" })
 local ifaces = {}
-for _, provider in ipairs(catalog.r) do ifaces[provider.iface] = provider.tools end
+-- Guarded: an over-cap catalog answers { ok = false }, and indexing the missing
+-- r used to abort the run with a nil index, taking every later check with it.
+check("the catalog op answered at all", catalog.ok, F.encode(catalog))
+for _, provider in ipairs(catalog.r or {}) do ifaces[provider.iface] = provider.tools end
 check("the catalog survives a broken provider", catalog.ok and ifaces["ai-agent-bridge-tools"] ~= nil)
 check("a provider whose probe errors is dropped", ifaces["aab-angry-provider"] == nil)
 check("a provider that returns no manifest is dropped", ifaces["aab-empty-provider"] == nil)
@@ -816,7 +846,7 @@ S.interfaces["aab-verbose-provider"] = nil
 -- service's own JSON omits it for a tool with no arguments.
 local no_args = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "list_forces" })
 check("a zero-argument tool called with no argument table works",
-      no_args.ok and no_args.r.total == 2, F.encode(no_args))
+      no_args.ok and no_args.r.total == 1, F.encode(no_args))
 local needs_force = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "game_time" })
 check("a tool that needs force says so in its own words",
       (not needs_force.ok) and needs_force.e == "provider_error"

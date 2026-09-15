@@ -42,6 +42,13 @@ lua-check:
 	fi
 
 ## Companion protocol tests against the fake game (needs liblua5.4, no Factorio).
+## Both files always run: make stops a recipe at its first failing line, so a
+## red aab_test.lua used to mean aab_breadth_test.lua was never invoked at all
+## and its own failures went unseen. Run both, then fail if either did.
 lua-test:
-	python3 tests/lua/luarun.py tests/lua/aab_test.lua
-	python3 tests/lua/luarun.py tests/lua/aab_breadth_test.lua
+	@rc=0; \
+	for f in tests/lua/aab_test.lua tests/lua/aab_breadth_test.lua; do \
+		echo "== $$f"; \
+		python3 tests/lua/luarun.py "$$f" || rc=1; \
+	done; \
+	exit $$rc

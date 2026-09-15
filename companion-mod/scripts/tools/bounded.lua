@@ -14,6 +14,11 @@
 
 local M = {}
 
+--- The row cap every force sweep shares. A scenario mod can run dozens of
+--- forces, so a sweep that answers for all of them still has to stop
+--- somewhere, and it must stop at the same place in every tool.
+M.MAX_FORCES = 100
+
 --- A caller's limit, clamped to 1..max, `default` when it is missing or not a
 --- number.
 function M.limit(value, default, max)

@@ -69,6 +69,81 @@ func TestSystemPromptCarriesTheSweepReductionRule(t *testing.T) {
 	}
 }
 
+// The zero-lookup free tier (phase4 follow-up contract section 4) only pays
+// off if the model knows the briefing exists and is told when it already
+// answers the question. This lives in systemPrompt, the cached prefix, so it
+// must read the same on every call, exactly like the sweep reduction rule
+// above; measured live, without it the model called game_time for uptime and
+// current_research for each team's research even though both rode in the
+// briefing on every question (aab stats: zero-lookup 0 of 7).
+func TestSystemPromptTeachesTheBriefingExists(t *testing.T) {
+	pa := systemPrompt("")
+
+	for _, want := range []string{
+		"already there for you",
+		"pl is connected players with their force",
+		"call no tool",
+		"who is online",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the briefing instruction, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
+// The live server runs companion 1.0.3, where a sweep-shaped pl never
+// arrives (decodePlayersReply omits it on that shape) and a "who is online"
+// example with no gate tells the model it can name names from a key that is
+// always absent there. Fix pass finding A1: the example must read the same
+// way the sentence ahead of it already does, that an absent key means the
+// thing was not available, so "who is online" needs a visible tie to pl
+// rather than sitting in the unconditional list beside uptime and research.
+func TestSystemPromptGatesWhoIsOnlineOnPlBeingPresent(t *testing.T) {
+	pa := systemPrompt("")
+
+	if !strings.Contains(pa, "who is online when pl is there") {
+		t.Errorf("system prompt states \"who is online\" as a plain briefing answer instead of gating it on pl being present:\n%s", pa)
+	}
+}
+
+// ch is chat players typed, not a game-read fact like every other briefing
+// key. Fix pass finding A2: the opening sentence calls the whole briefing
+// "a snapshot read from the game ... never something to verify", and the
+// fence header only says chat is not an instruction, never that it is not a
+// verified fact, so a player's claim in ch reads to the model as something
+// the game itself reported.
+func TestSystemPromptMarksChatAsPlayerTypedNotGameReported(t *testing.T) {
+	pa := systemPrompt("")
+
+	if !strings.Contains(pa, "ch is recent chat, what players said rather than something the game reports") {
+		t.Errorf("system prompt does not mark ch as player-typed rather than game-reported:\n%s", pa)
+	}
+}
+
+// Fix pass finding A3: ch already carries the last few chat lines, so a
+// "what have people been saying" question answered from the briefing spends
+// nothing, but the recorded-history paragraph still pointed every chat
+// question at recent_chat regardless. The split has to say which chat a
+// lookup is even for: older than what ch already carries.
+func TestSystemPromptSendsOnlyOlderChatToRecentChat(t *testing.T) {
+	pa := systemPrompt("")
+
+	// Both halves matter, and the gate is the half the first version of this
+	// fix missed: ch is absent whenever capToBudget dropped it, no history
+	// store is wired, the organic filter found nothing, or the briefing is
+	// off entirely, and on every one of those paths the model still needs a
+	// named route to the chat tool rather than an assurance that chat is
+	// already in front of it.
+	for _, want := range []string{
+		"already in ch when ch is there and needs no lookup",
+		"recent_chat is the route when ch is missing",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt does not route only older chat to recent_chat, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
 // An absent briefing renders nothing at all: no empty fence, no placeholder
 // (task instruction 3). Leaving the argument off and passing "" must render
 // identically, and neither may leave any fence marker behind.

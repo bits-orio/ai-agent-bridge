@@ -12,7 +12,7 @@ local bounded      = require("scripts.tools.bounded")
 local DEFAULT_PLAYERS = 20
 local MAX_PLAYERS = 50
 local DEFAULT_FORCES = 50
-local MAX_FORCES = 100
+local MAX_FORCES = bounded.MAX_FORCES
 
 local M = {}
 
@@ -25,10 +25,11 @@ M.manifest = {
     },
   },
   list_players = {
-    desc = "Players of one force: name, connected, admin. Connected only unless connected=false. Quote total and known, not the row count.",
+    desc = "Players of one force: name, connected, admin. Connected only unless connected=false. Quote total and known, not the row count. all=true answers every force in one call, name and force per row, with total and shown but no known, and limit is ignored: use it for any who-is-online or every-player question instead of one call per force.",
     params = {
       connected = "boolean default true: connected only; false: every player ever",
       limit     = "integer rows, default " .. DEFAULT_PLAYERS .. ", max " .. MAX_PLAYERS,
+      all       = "boolean default false: one row per player, every force; force ignored",
     },
   },
   current_research = {
@@ -69,10 +70,36 @@ local function list_forces(a)
   return { total = #rows, empty = empty, shown = #shown, forces = shown }
 end
 
+-- all=true is the who-is-online question in one call, across every force
+-- instead of one list_players per force. The row drops `admin`, which repeats
+-- once per player across every force here and buys nothing a who-is-online
+-- question asks for, and adds `force`, since that is now the only thing that
+-- says whose player a row is. Sorted by name
+-- and bounded like every other sweep; a limit argument is for the single-force
+-- case, so all=true is capped at MAX_PLAYERS the same way current_research's
+-- all=true is capped at MAX_FORCES rather than reading a.limit.
+local function list_players_all(a)
+  local connected_only = a.connected ~= false
+  local rows = {}
+  for _, force in pairs(game.forces) do
+    for _, player in pairs(force.players) do
+      if player.connected or not connected_only then
+        rows[#rows + 1] = { name = player.name, force = force.name, connected = player.connected }
+      end
+    end
+  end
+  bounded.by_name(rows)
+  local shown = bounded.cut(rows, MAX_PLAYERS)
+  return { total = #rows, shown = #shown, players = shown }
+end
+
 -- force.players holds every player the force has ever had, not the ones online
 -- now, so a public server's list runs to hundreds. Connected only by default,
 -- and bounded either way.
 local function list_players(a)
+  if a.all == true then
+    return list_players_all(a)
+  end
   local force = force_lookup.require_force(a.force)
   local connected_only = a.connected ~= false
   local rows = {}

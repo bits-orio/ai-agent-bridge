@@ -242,6 +242,21 @@ function F.install(opts)
     this.get_total_pollution = function() return S.pollution[this.name] or 0 end
     -- LuaSurface::find_entities_filtered: name, type, force and limit are
     -- honoured; everything lives on nauvis.
+    --
+    -- EntitySearchFilters.name, .type, .ghost_name and .ghost_type each take a
+    -- single prototype id OR an array of them (2.0.77 docs, LuaSurface.html).
+    -- This fake compared with == until 1.0.4 and so matched nothing whenever a
+    -- caller passed the array form, which is what find_entities does for a
+    -- recipe or product search: three find_entities checks went red against a
+    -- scan the live server had already been measured doing correctly.
+    local function matches(want, got)
+      if want == nil then return false end
+      if type(want) ~= "table" then return want == got end
+      for _, one in ipairs(want) do
+        if one == got then return true end
+      end
+      return false
+    end
     this.find_entities_filtered = function(filter)
       assert(type(filter) == "table", "find_entities_filtered wants one table")
       assert(type(filter.force) == "string", "find_entities_filtered wants a force name")
@@ -250,8 +265,8 @@ function F.install(opts)
       if this.name ~= "nauvis" then return out end
       for _, e in ipairs(S.entities) do
         local by_real = filter.name == nil and filter.type == nil
-        local built = (filter.name and e.name == filter.name) or (filter.type and e.type == filter.type)
-        local ghost = (filter.ghost_name and e.ghost_name == filter.ghost_name) or (filter.ghost_type and e.ghost_type == filter.ghost_type)
+        local built = matches(filter.name, e.name) or matches(filter.type, e.type)
+        local ghost = matches(filter.ghost_name, e.ghost_name) or matches(filter.ghost_type, e.ghost_type)
         if by_real and (filter.ghost_name or filter.ghost_type) then by_real = false end
         if by_real or built or ghost then
           out[#out + 1] = e

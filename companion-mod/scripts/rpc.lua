@@ -33,7 +33,11 @@ local PROTOCOL_VERSION = 1
 -- so they get room to grow (RCON itself carries megabytes, TESTING.md 1.5).
 -- The Phase 0 big op measures the transport and is never capped.
 local DEFAULT_CAP = 65536
-local CAPS = { call = 8000, tools = 8000, manifest = 32768 }
+-- tools is a catalog read, not a call, so it gets the room the comment above
+-- promises catalog reads. It sat at the call cap until 1.0.4, 13 bytes below
+-- the companion's own reply, where one more sentence of tool description
+-- would have turned the whole catalog into a too_large refusal.
+local CAPS = { call = 8000, tools = 32768, manifest = 32768 }
 
 local function reply_cap(op)
   return CAPS[op] or DEFAULT_CAP

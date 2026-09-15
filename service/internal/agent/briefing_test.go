@@ -1,4 +1,4 @@
-// Group A of the briefing (phase4-spec.md section 3): the four-trip fetch,
+// Group A of the briefing (phase4-spec.md section 3): the five-trip fetch,
 // the fs join, what gets left out of the payload and why, and the paths
 // that must never turn into a failed question. Uses the package's existing
 // stubTool idiom (agent_test.go) and index() (agent.go) to build the
@@ -26,11 +26,11 @@ func engineTool(fn, out string, err error) tools.Tool {
 	return stubTool(catalog.ToolName(engineIface, fn), out, err)
 }
 
-// happyGroupATools is all four Group A trips answering, worked from the
+// happyGroupATools is all five Group A trips answering, worked from the
 // same scenario phase4-spec.md section 3 uses in its own filled instance:
 // two forces, north researching and connected, south idle; one surface with
-// north's players on it. list_players is not one of these: task instruction
-// 3 drops it, since no Group A payload key can hold anything it returns.
+// north's players on it. list_players answers with the 1.0.4 sweep shape,
+// four connected players across both forces, no top-level force field.
 func happyGroupATools() []tools.Tool {
 	return []tools.Tool{
 		engineTool("list_forces", `{"total":2,"empty":0,"shown":2,"forces":[
@@ -45,6 +45,12 @@ func happyGroupATools() []tools.Tool {
 			{"name":"nauvis","index":1,"planet":"nauvis","force_players":3}
 		]}`, nil),
 		engineTool("game_time", `{"force":"north","tick":184320,"ticks_played":184320,"hours":51.2,"connected_players":4,"force_connected_players":3}`, nil),
+		engineTool("list_players", `{"total":4,"shown":4,"players":[
+			{"name":"Frankenpump","force":"south","connected":true},
+			{"name":"Xx_Steve_xX","force":"north","connected":true},
+			{"name":"Ziggs","force":"north","connected":true},
+			{"name":"Rho","force":"south","connected":true}
+		]}`, nil),
 	}
 }
 
@@ -282,26 +288,169 @@ func TestAssembleOmitsForceRowsWhenListForcesIsMissingFromTheCatalog(t *testing.
 	}
 }
 
-// list_players is no longer one of Group A's trips (task instruction 3): no
-// key in the payload can hold anything it returns (name, connected, admin,
-// never a position), so it bought one RCON round trip per question for
-// nothing. Proven by a tool that fails the test outright if it is ever
-// called; Assemble no longer runs a trip inside a spawned goroutine (task
-// instruction 2), so a t.Fatal from inside the call lands on the test's own
-// goroutine and is safe here.
-func TestAssembleNeverCallsListPlayers(t *testing.T) {
+// list_players is Group A's fifth trip (contract section 3, q62 on
+// 2026-09-15: "who is online?" cost three list_players calls plus game_time
+// because no payload key held what one sweep call already answers). Proven
+// by a stub that records its own arguments rather than by inspecting pl,
+// since the args are the only way to tell this from a single-force call.
+func TestAssembleCallsListPlayersWithAllTrue(t *testing.T) {
+	var gotArgs json.RawMessage
 	ts := withTool(happyGroupATools(), "list_players", tools.Tool{
 		Name:        catalog.ToolName(engineIface, "list_players"),
-		Description: "must not be called",
-		Schema:      tools.ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}}, "force"),
-		Call: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
-			t.Fatal("list_players should never be called: Group A has no payload key for it")
-			return nil, nil
+		Description: "records its own arguments",
+		Schema:      tools.ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}, "all": map[string]any{"type": "boolean"}}, "force"),
+		Call: func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+			gotArgs = args
+			return json.RawMessage(`{"total":1,"shown":1,"players":[{"name":"Xx_Steve_xX","force":"north","connected":true}]}`), nil
 		},
 	})
 	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
 	if res.Status != ledger.BriefingOn {
 		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	if gotArgs == nil {
+		t.Fatal("list_players was never called")
+	}
+	var args map[string]any
+	if err := json.Unmarshal(gotArgs, &args); err != nil {
+		t.Fatalf("args do not parse: %v", err)
+	}
+	if all, _ := args["all"].(bool); !all {
+		t.Errorf("args = %s, want all=true", gotArgs)
+	}
+}
+
+// pl, built straight from a genuine sweep reply: name and force carried
+// through for every connected player, across both forces, in the order the
+// companion sent them.
+func TestAssembleFillsPlFromASweepListPlayersReply(t *testing.T) {
+	byName := index(happyGroupATools())
+	res := Assemble(context.Background(), byName, askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["pl"])
+	if len(rows) != 4 {
+		t.Fatalf("pl has %d rows, want 4: %v", len(rows), rows)
+	}
+	if stringField(t, rows[0], "n") != "Frankenpump" || stringField(t, rows[0], "f") != "south" {
+		t.Errorf("pl[0] = %v, want n=Frankenpump f=south", rows[0])
+	}
+	if stringField(t, rows[1], "n") != "Xx_Steve_xX" || stringField(t, rows[1], "f") != "north" {
+		t.Errorf("pl[1] = %v, want n=Xx_Steve_xX f=north", rows[1])
+	}
+}
+
+// The compatibility guard this key exists for: a companion running 1.0.3
+// does not know list_players's all argument and answers with the asker's
+// own force only, captured verbatim from companion-mod/scripts/tools/
+// basics.lua's list_players (force, connected_only, known, total, shown,
+// players; unchanged in that version). That reply carries a players array
+// exactly like a genuine sweep does, so the top-level force field is the
+// ONLY discriminator, and pl must be left out entirely rather than present
+// one force's roster as "who is online".
+func TestAssembleOmitsPlWhenTheListPlayersReplyCarriesATopLevelForce(t *testing.T) {
+	const legacyReply = `{"force":"north","connected_only":true,"known":6,"total":3,"shown":3,"players":[
+		{"name":"Frankenpump","connected":true,"admin":false},
+		{"name":"Xx_Steve_xX","connected":true,"admin":true},
+		{"name":"Ziggs","connected":true,"admin":false}
+	]}`
+	ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", legacyReply, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	m := fencedBody(t, res.Text)
+	if raw, present := m["pl"]; present {
+		t.Errorf("pl should be left out against a 1.0.3-shaped reply (top-level force present): got %s", raw)
+	}
+	if _, present := m["fs"]; !present {
+		t.Error("fs should still be present: list_forces and current_research did not fail")
+	}
+}
+
+// A reply with no players array at all, whatever the reason, is a trip that
+// did not land, not an empty server: pl is left out the same way every other
+// Group A key is on an unparseable reply.
+func TestAssembleOmitsPlWhenTheListPlayersReplyCarriesNoPlayersArray(t *testing.T) {
+	for _, reply := range []string{`{}`, `null`} {
+		ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", reply, nil))
+		res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+		if res.Status != ledger.BriefingOn {
+			t.Fatalf("reply %s: status = %q, want the briefing to still ride", reply, res.Status)
+		}
+		if raw, present := fencedBody(t, res.Text)["pl"]; present {
+			t.Errorf("reply %s: pl should be absent, no players array to build rows from: got %s", reply, raw)
+		}
+	}
+}
+
+// A failing or missing list_players trip loses only pl, same as every other
+// optional key.
+func TestAssembleOmitsPlWhenListPlayersErrors(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", "", errors.New("provider_error: boom")))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("one failing tool should not fail the whole briefing: status = %q", res.Status)
+	}
+	m := fencedBody(t, res.Text)
+	if raw, present := m["pl"]; present {
+		t.Errorf("pl should be left out when list_players errors, got %s", raw)
+	}
+	if _, present := m["fs"]; !present {
+		t.Error("fs should still be present: list_forces and current_research did not fail")
+	}
+}
+
+// B1, the blocker: basics.lua's list_players_all bounds the roster at
+// MAX_PLAYERS and reports total (everyone the sweep found) beside shown
+// (the rows it actually sent) precisely so a cut scan can be told from a
+// complete one. With 60 players connected, a sweep still comes back with a
+// players array that decodes cleanly and no top-level force field, so
+// shown/total are the only signal that this is not everyone. Shipping it
+// anyway would answer "who is online?" with a confident but wrong roster,
+// the first 2 names alphabetically here standing in for the first
+// MAX_PLAYERS in production; pl must be omitted entirely instead, the same
+// family as the 1.0.3 guard above.
+func TestAssembleOmitsPlWhenTheSweepReplyWasTruncated(t *testing.T) {
+	const truncated = `{"total":60,"shown":2,"players":[
+		{"name":"Frankenpump","force":"south"},
+		{"name":"Xx_Steve_xX","force":"north"}
+	]}`
+	ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", truncated, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	m := fencedBody(t, res.Text)
+	if raw, present := m["pl"]; present {
+		t.Errorf("pl should be omitted when the sweep reports shown < total (truncated), got %s", raw)
+	}
+	if _, present := m["fs"]; !present {
+		t.Error("fs should still be present: list_forces and current_research did not fail")
+	}
+}
+
+// The guard is a strict less-than, not a heuristic on the row count: shown
+// equal to total, even at a large count, is a complete sweep and must still
+// fill pl.
+func TestAssembleFillsPlWhenShownEqualsTotalEvenAtALargeCount(t *testing.T) {
+	rows := make([]map[string]any, 50)
+	for i := range rows {
+		rows[i] = map[string]any{"name": fmt.Sprintf("player-%02d", i), "force": "north"}
+	}
+	raw, err := json.Marshal(map[string]any{"total": 50, "shown": 50, "players": rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", string(raw), nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	got := rowsOf(t, fencedBody(t, res.Text)["pl"])
+	if len(got) != 50 {
+		t.Errorf("pl has %d rows, want 50: shown == total must not be treated as truncated", len(got))
 	}
 }
 
@@ -345,12 +494,13 @@ func budgetGateTool(name string, called *bool, out string) tools.Tool {
 // proof there is no orphaned call left running behind it, still holding the
 // RCON mutex, once Assemble has returned.
 func TestAssembleStopsStartingNewTripsOnceItsBudgetIsSpentButNeverAbandonsOneInFlight(t *testing.T) {
-	var researchCalled, surfacesCalled, gameTimeCalled bool
+	var researchCalled, surfacesCalled, gameTimeCalled, playersCalled bool
 	ts := happyGroupATools()
 	ts = withTool(ts, "list_forces", slowTool(catalog.ToolName(engineIface, "list_forces"), 60*time.Millisecond, `{"forces":[]}`))
 	ts = withTool(ts, "current_research", budgetGateTool(catalog.ToolName(engineIface, "current_research"), &researchCalled, `{"forces":[]}`))
 	ts = withTool(ts, "list_surfaces", budgetGateTool(catalog.ToolName(engineIface, "list_surfaces"), &surfacesCalled, `{"surfaces":[]}`))
 	ts = withTool(ts, "game_time", budgetGateTool(catalog.ToolName(engineIface, "game_time"), &gameTimeCalled, `{"tick":1,"hours":1}`))
+	ts = withTool(ts, "list_players", budgetGateTool(catalog.ToolName(engineIface, "list_players"), &playersCalled, `{"total":0,"shown":0,"players":[]}`))
 
 	budget := 10 * time.Millisecond
 	started := time.Now()
@@ -371,6 +521,9 @@ func TestAssembleStopsStartingNewTripsOnceItsBudgetIsSpentButNeverAbandonsOneInF
 	}
 	if gameTimeCalled {
 		t.Error("game_time should never have started: the budget was already spent by the time its turn came")
+	}
+	if playersCalled {
+		t.Error("list_players should never have started: the budget was already spent by the time its turn came")
 	}
 	if res.Status != ledger.BriefingFailed {
 		t.Fatalf("status = %q, want %q: game_time never ran", res.Status, ledger.BriefingFailed)
@@ -487,10 +640,63 @@ func manyForcesReply(n int) string {
 	return string(raw)
 }
 
-// ch is the lowest-value key and the first one capToBudget drops (task
-// instruction 6): a single chat line long enough on its own pushes the
-// payload over the byte cap, and dropping it alone is enough to fit, so fs
-// is left untouched.
+// manyPlayersReply builds a list_players sweep reply large enough, on its
+// own, to push the assembled payload past briefingByteCap once decoded into
+// pl, so a test can exercise the pl-dropping half of capToBudget. total
+// equals shown, a complete sweep: capToBudget's byte cap is a different
+// failure mode from B1's truncation guard, and this test is not exercising
+// that one.
+func manyPlayersReply(n int) string {
+	players := make([]map[string]any, n)
+	for i := range players {
+		players[i] = map[string]any{
+			"name":  fmt.Sprintf("player-%04d-%s", i, strings.Repeat("x", 400)),
+			"force": "north",
+		}
+	}
+	raw, err := json.Marshal(map[string]any{"total": n, "shown": n, "players": players})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// pl is the first key capToBudget drops (B4/capToBudget's own doc comment):
+// it is the only key that scales with server population, so a busy
+// server's full roster is the likeliest single cause of a payload running
+// over. A large but complete sweep alone pushes this one over the cap,
+// and dropping it alone is enough to fit, so ch and fs are left untouched.
+func TestAssembleCapsPayloadByDroppingPlBeforeChOrFsWhenThatAloneIsEnough(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_players", engineTool("list_players", manyPlayersReply(100), nil))
+	// A chat line has to be present for this test to mean what its name says.
+	// With a nil ChatSource there is no ch to drop, so dropping ch is a no-op
+	// and the payload fits whichever key capToBudget reaches for first: the
+	// test passed with the precedence reversed, which is no test at all.
+	chat := fakeChat{lines: []ChatLine{{Who: "Xx_Steve_xX", Msg: "anyone got spare rails"}}}
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), chat, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	if res.Bytes > briefingByteCap+len(fenceHeader)+len(fenceFooter) {
+		t.Errorf("payload is %d bytes, want at most the %d-byte cap plus the fence", res.Bytes, briefingByteCap)
+	}
+	m := fencedBody(t, res.Text)
+	if raw, present := m["pl"]; present {
+		t.Errorf("pl should be dropped once it alone pushes the payload over the byte cap, got %s", raw)
+	}
+	if _, present := m["ch"]; !present {
+		t.Error("ch should survive: pl is dropped before ch, and dropping pl alone was enough to fit the cap")
+	}
+	if _, present := m["fs"]; !present {
+		t.Error("fs should still be present: dropping pl alone was enough to fit the cap")
+	}
+}
+
+// ch is the second key capToBudget drops, once dropping pl alone was not
+// enough: this scenario's pl is the happy path's four connected players,
+// too small to matter, so a single chat line long enough on its own still
+// pushes the payload over the byte cap, and dropping pl and ch together is
+// enough to fit, so fs is left untouched.
 func TestAssembleCapsPayloadByDroppingChWhenThatAloneIsEnough(t *testing.T) {
 	bigChat := fakeChat{lines: []ChatLine{
 		{Who: "Xx_Steve_xX", Msg: strings.Repeat("iron ore please come get it, ", 700)},
@@ -507,15 +713,16 @@ func TestAssembleCapsPayloadByDroppingChWhenThatAloneIsEnough(t *testing.T) {
 		t.Errorf("ch should be dropped once it alone pushes the payload over the byte cap, got %s", raw)
 	}
 	if _, present := m["fs"]; !present {
-		t.Error("fs should still be present: dropping ch alone was enough to fit the cap")
+		t.Error("fs should still be present: dropping pl and ch was enough to fit the cap")
 	}
 }
 
-// When dropping ch is not enough, fs goes entirely rather than coming off row
-// by row. A short fs asserts that the forces it leaves out do not exist, and
-// the free tier answers "how many teams are there" from this key with no tool
-// call, so a silently trimmed list tells the same lie a failed
-// current_research trip would. 500 forces is well past the cap on its own.
+// When dropping pl and ch is not enough, fs goes entirely rather than coming
+// off row by row, the last resort of the three: a short fs asserts that the
+// forces it leaves out do not exist, and the free tier answers "how many
+// teams are there" from this key with no tool call, so a silently trimmed
+// list tells the same lie a failed current_research trip would. 500 forces
+// is well past the cap on its own.
 func TestAssembleDropsFsWholeRatherThanTrimmingItWhenTheForceListIsHuge(t *testing.T) {
 	ts := withTool(happyGroupATools(), "list_forces", engineTool("list_forces", manyForcesReply(500), nil))
 	ts = withTool(ts, "current_research", engineTool("current_research", `{"forces":[]}`, nil))
@@ -619,5 +826,66 @@ func TestAssembleAgainstRepliesCapturedFromALiveServer(t *testing.T) {
 	}
 	if rows := rowsOf(t, m["fs"]); len(rows) != 3 {
 		t.Errorf("fs has %d row(s), want 3: the research join must survive a string progress", len(rows))
+	}
+}
+
+// B3: Factorio's own JSON writer, helpers.table_to_json, cannot tell an
+// empty Lua array from an empty Lua object, so a genuine sweep with zero
+// rows sends the array-bearing key as a JSON OBJECT, "players":{}, never
+// "players":[]. Every hand-made reply in this file is a Go string literal,
+// and json.Marshal always writes an empty Go slice as [], so this exact
+// shape only ever appears against the real game. This is the same class of
+// bug as the string-encoded fractions above (fraction, TestAssembleAgainst
+// RepliesCapturedFromALiveServer): every test passed while the trip read as
+// "did not land" against a real, working reply. Tested with the literal {}
+// bytes below, not a hand-made array, on every array-bearing reply in this
+// file a sweep can return empty.
+func TestDecodersAcceptAnEmptySweepEncodedAsAJSONObjectNotAnArray(t *testing.T) {
+	if r := decodeForcesReply(json.RawMessage(`{"total":0,"empty":0,"shown":0,"forces":{}}`)); r == nil || r.Forces == nil || len(*r.Forces) != 0 {
+		t.Errorf("decodeForcesReply rejected forces:{}, want a present, empty slice: %+v", r)
+	}
+	if r := decodeResearchReply(json.RawMessage(`{"total":0,"shown":0,"forces":{}}`)); r == nil || r.Forces == nil || len(*r.Forces) != 0 {
+		t.Errorf("decodeResearchReply rejected forces:{}, want a present, empty slice: %+v", r)
+	}
+	if r := decodeSurfacesReply(json.RawMessage(`{"force":"north","total":0,"shown":0,"surfaces":{}}`)); r == nil || r.Surfaces == nil || len(*r.Surfaces) != 0 {
+		t.Errorf("decodeSurfacesReply rejected surfaces:{}, want a present, empty slice: %+v", r)
+	}
+	if r := decodePlayersReply(json.RawMessage(`{"total":0,"shown":0,"players":{}}`)); r == nil || r.Players == nil || len(*r.Players) != 0 {
+		t.Errorf("decodePlayersReply rejected players:{}, want a present, empty slice: %+v", r)
+	}
+}
+
+// looseArray must not turn a genuinely wrong shape into a silent empty
+// slice: a non-empty object where an array was expected is still a decode
+// error, not this one specific ambiguity.
+func TestLooseArrayStillRejectsANonEmptyObjectWhereAnArrayWasExpected(t *testing.T) {
+	if r := decodeForcesReply(json.RawMessage(`{"forces":{"oops":"not a row"}}`)); r != nil {
+		t.Errorf("decodeForcesReply accepted a non-empty object in place of an array: %+v", r)
+	}
+	if r := decodePlayersReply(json.RawMessage(`{"total":0,"shown":0,"players":{"oops":"not a row"}}`)); r != nil {
+		t.Errorf("decodePlayersReply accepted a non-empty object in place of an array: %+v", r)
+	}
+}
+
+// The Assemble-level consequence of the {} bug, proven end to end: before
+// looseArray, a current_research{all} reply that genuinely has nothing to
+// report (nobody researching, encoded the way a Lua sweep with zero rows
+// encodes it) failed json.Unmarshal outright, and forceRows could not tell
+// that from current_research never landing at all, so it took the whole of
+// fs down with it even though list_forces had already answered.
+func TestAssembleBuildsForceRowsWhenTheResearchSweepIsGenuinelyEmpty(t *testing.T) {
+	ts := withTool(happyGroupATools(), "current_research", engineTool("current_research", `{"total":0,"shown":0,"forces":{}}`, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["fs"])
+	if len(rows) != 2 {
+		t.Fatalf("fs has %d row(s), want 2: a genuinely empty research sweep must not take fs down with it: %v", len(rows), rows)
+	}
+	for _, row := range rows {
+		if _, present := row["res"]; present {
+			t.Errorf("row %v should show no active research: the sweep reported none for anyone", row)
+		}
 	}
 }

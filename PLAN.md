@@ -11,7 +11,13 @@ and the round-batching op are specified in
 `docs/adr/0011-calls-batch-op.md`. The observability ledger has its own
 contract in
 [docs/design/phase4-observability-spec.md](docs/design/phase4-observability-spec.md)
-and `docs/adr/0010-observability-ledger.md`.
+and `docs/adr/0010-observability-ledger.md`. The free tier's zero-lookup rate
+(phase4-spec.md section 4) was measured at 0 of 7 on 2026-09-15
+(`aab stats 2026-09-15`), taken before the system prompt taught the model the
+briefing existed. The prompt now teaches it; whether that moved the rate is
+unmeasured until a service restart and a fresh `aab stats` run say so. Check
+that against phase4-spec.md section 4 rather than treating "0 of 7" as either
+still current or already fixed.
 
 AAB is two halves. A Factorio companion mod exposes a tiny protocol over a
 console command. A Go service, one per server, drives that protocol over RCON:
@@ -210,8 +216,10 @@ Permissioned acting tools. Sub-agents on a cheaper model.
 3. **RCON size caps.** Measured 2026-09-10 on 2.0.77: replies up to 4 MB
    arrive complete in one packet and commands up to 1 MB are accepted, no
    truncation either way. The companion's cap is therefore
-   a token-budget choice. Resolved: tool results and the legacy tools op are capped at 8000 bytes,
-   one manifest at 32 KB, other reads at 64 KB, refused above, never truncated.
+   a token-budget choice. Resolved: tool results are capped at 8000 bytes, the
+   legacy tools op and one manifest at 32 KB each, other reads at 64 KB, refused
+   above, never truncated. The tools op shared the 8000 cap until 1.0.4, by which
+   point the companion's own catalog had reached 8087 bytes and no longer fit.
 4. **Command handlers may block the simulation for every player while they
    run.** Current plan: measure in Phase 0; if true, each tool gets a hard
    time budget in Lua as well as a byte cap.

@@ -38,8 +38,13 @@ local function call(fn, args) return rpc({ op = "call", i = "ai-agent-bridge-too
 local mine = rpc({ op = "manifest", i = "ai-agent-bridge-tools" })
 local manifest = mine.ok and mine.r.tools or nil
 check("the companion still has a manifest", manifest ~= nil, F.encode(mine))
+-- 7000 was a guess made when this op did not exist, and the manifest outgrew it
+-- honestly as tools were added. The cap that governs is rpc.lua's own
+-- CAPS.manifest = 32768, the op the service actually builds its catalog from,
+-- so assert at half of it: still a real guard against a runaway manifest, and no
+-- longer a reason to trim descriptions the model needs.
 check("the companion's own manifest fits one reply with room to spare",
-      #F.encode(mine.r) < 7000, #F.encode(mine.r))
+      #F.encode(mine.r) < 16384, #F.encode(mine.r))
 local NEW = { "research_queue", "tech_status", "logistics_summary", "entity_count",
               "evolution", "rockets", "game_time", "pollution" }
 for _, name in ipairs(NEW) do
@@ -244,6 +249,23 @@ check("rockets reports how many kinds went up", rockets.ok and rockets.r.distinc
 local one_item = call("rockets", { force = "player", limit = 1 })
 check("rockets cuts to limit and keeps the total",
       one_item.ok and one_item.r.shown == 1 and one_item.r.distinct_items == 3, F.encode(one_item))
+
+-- ── rockets all=true: the sweep the phase4 follow-up contract added ────
+-- Load-bearing per that contract: no top-level `force` field (same reason as
+-- list_players' sweep), and no `items` list in sweep mode, since fourteen
+-- forces of item rows would blow the reply budget. Mutation-tested: adding
+-- `force = "player"` to the row, or an `items` list, turns every check below
+-- red.
+local rockets_all = call("rockets", { all = true })
+check("rockets all=true carries no top-level force field",
+      rockets_all.ok and rockets_all.r.force == nil, F.encode(rockets_all))
+check("rockets all=true returns one row per force with players or a launch",
+      rockets_all.ok and rockets_all.r.total == 1 and rockets_all.r.shown == 1
+      and rockets_all.r.forces[1].force == "player"
+      and rockets_all.r.forces[1].rockets_launched == 7
+      and rockets_all.r.forces[1].distinct_items == 3, F.encode(rockets_all))
+check("rockets all=true carries no items list, single-force answer only",
+      rockets_all.ok and rockets_all.r.forces[1].items == nil, F.encode(rockets_all))
 
 -- ── game_time ─────────────────────────────────────────────────────────
 S.ticks_played = 216000 * 3 + 108000 -- three and a half hours

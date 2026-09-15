@@ -1,4 +1,23 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.4
+Date: 2026-09-14
+  Changes:
+    - list_players takes all=true and answers for every player on every force in one call, so
+      "who is online" is one lookup, not one per force.
+    - rockets takes all=true and answers for every force that has players or has launched a rocket
+      in one call, so "how many rockets has each team launched" is one lookup, not one per force.
+      Item lists stay a single-force answer.
+    - The tools op, which reads the whole catalog at once, is capped at 32 KB rather than 8 KB,
+      the room the manifest op has always had. The companion's own catalog had grown to within
+      13 bytes of the old cap, where one more sentence of tool description would have turned
+      every catalog read into a refusal.
+  Bugfixes:
+    - find_entities named a product or recipe but no type scanned every entity the force owns on
+      the surface, capped at 2000, which on a busy server was belts and inserters discarded by the
+      filter before a crafting machine was ever reached. "Where are we making red ammo" answered
+      that no machine made it on a server with six. A search naming a product or recipe but no
+      type now asks for the three crafter types instead.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.3
 Date: 2026-09-11
   Changes:
