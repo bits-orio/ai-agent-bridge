@@ -448,7 +448,36 @@ function F.install(opts)
       one_thousand_hours = 8,
     },
     gui_type = { custom = 1 },
+    -- The nine LuaSpacePlatform states (2.0.77 docs). Values only have to be
+    -- distinct, since platform_lookup.lua looks them up by identity, not by
+    -- number.
+    space_platform_state = {
+      no_path = 0, no_schedule = 1, on_the_path = 2, paused = 3,
+      starter_pack_on_the_way = 4, starter_pack_requested = 5,
+      waiting_at_station = 6, waiting_for_departure = 7, waiting_for_starter_pack = 8,
+    },
   }
+
+  -- platform-1 carries a real LuaSpacePlatform, stopped at fulgora, owned by
+  -- the one force the suite runs as. scheduled_for_deletion is 0 here on
+  -- purpose, never nil: the real engine always returns a tick count, "0 if
+  -- not scheduled for deletion" (2.0.77), and a fake that left it nil would
+  -- hide the bug this exists to catch. In Lua, unlike most languages, 0 is
+  -- truthy, so `if not platform.scheduled_for_deletion` reads a healthy
+  -- platform's 0 the same as a pending one's tick count and skips both;
+  -- platform_lookup.lua's `(x or 0) == 0` is the test that tells them apart,
+  -- and this fixture is what a wrong test would get right here for the wrong
+  -- reason and wrong on a save with a platform genuinely pending deletion.
+  orbit.platform = {
+    name = "platform-1", index = 1, valid = true,
+    force = force, surface = orbit,
+    space_location = { name = "fulgora", valid = true },
+    state = defines.space_platform_state.waiting_at_station,
+    scheduled_for_deletion = 0,
+  }
+  -- LuaForce::platforms, dictionary[uint32 -> LuaSpacePlatform], "will
+  -- include platforms that are pending deletion" (2.0.77).
+  force.platforms = { [1] = orbit.platform }
 
   _G.helpers = {
     table_to_json = encode,
@@ -531,6 +560,7 @@ function F.install(opts)
     rockets_launched = 0,
     items_launched = {},
     get_entity_count = function() return 0 end,
+    platforms = {},
   }
 
   _G.game = {

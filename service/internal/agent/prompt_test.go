@@ -144,6 +144,26 @@ func TestSystemPromptSendsOnlyOlderChatToRecentChat(t *testing.T) {
 	}
 }
 
+// D3: the verdict rule gains a third route, a sweep reply's own ranking,
+// beside the two arith tools, without relaxing the rule itself. The rule
+// exists because a reasoning-off model wrote a wrong verdict from figures it
+// had right, so "never decide the verdict yourself" must survive verbatim
+// and every route named must still end in taking a tool's own leader, never
+// the model's own comparison.
+func TestSystemPromptAddsTheSweepRouteToTheVerdictRuleWithoutRelaxingIt(t *testing.T) {
+	pa := systemPrompt("")
+
+	if !strings.Contains(pa, "Never decide the verdict yourself") {
+		t.Errorf("system prompt dropped the verdict rule itself:\n%s", pa)
+	}
+	if !strings.Contains(pa, "hand the figures to rank_by_rate (totals and online hours) or rank (any values) and write the leader it names") {
+		t.Errorf("system prompt dropped the existing rank_by_rate/rank routes:\n%s", pa)
+	}
+	if !strings.Contains(pa, "or take the leader a ranked sweep reply already names") {
+		t.Errorf("system prompt is missing the sweep route added for D3:\n%s", pa)
+	}
+}
+
 // An absent briefing renders nothing at all: no empty fence, no placeholder
 // (task instruction 3). Leaving the argument off and passing "" must render
 // identically, and neither may leave any fence marker behind.

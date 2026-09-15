@@ -390,5 +390,295 @@ for _, name in ipairs(NEW) do
   check(name .. " reply is small (" .. bytes .. " bytes)", bytes < 4000, bytes)
 end
 
+-- ── sweep: the tier-3 metric registry, its walk and its envelope ──────
+-- Phase 5 Unit B (docs/design/phase5-sweep.md, the phase5 implementation
+-- contract). Kept in its own section, not folded into the NEW-tools loops
+-- above: sweep answers across every force by design, so "refuses an unknown
+-- force" and the other loops built for a single-force tool do not apply to
+-- it, and forcing it into them would test the wrong contract.
+
+local sweep_registry = require("scripts.sweep.registry")
+local sweep_platform = require("scripts.sweep.platform")
+
+local function row_eq(row, name, value)
+  return type(row) == "table" and row[1] == name and row[2] == value
+end
+
+-- The manifest entry: present, generated, and clean of the reserved `force`
+-- param the way every other sweep-shaped tool already is.
+local sweep_entry = manifest and manifest.sweep
+check("sweep is in the manifest with a real description",
+      sweep_entry ~= nil and type(sweep_entry.desc) == "string" and #sweep_entry.desc > 60,
+      sweep_entry)
+-- Proves the description is actually BUILT from the registry rather than
+-- typed out by hand and merely kept in sync by discipline: tool.lua calls
+-- registry.metric_line() to build `desc`, so that exact string has to appear
+-- inside it verbatim. Mutation-tested: hardcoding the four metric names as a
+-- literal string in tool.lua instead of calling registry.metric_line()
+-- turns this red (the generated line's own "(axes)" formatting no longer
+-- appears anywhere in desc).
+check("the manifest description is generated from the registry, not hand-copied",
+      sweep_entry and sweep_entry.desc:find(sweep_registry.metric_line(), 1, true) ~= nil,
+      sweep_entry and sweep_entry.desc)
+check("sweep.metric is required", sweep_entry and sweep_entry.params.metric:match("^string!") ~= nil,
+      sweep_entry and sweep_entry.params.metric)
+for param, spec in pairs((sweep_entry or {}).params or {}) do
+  check("sweep." .. param .. " parses", spec:match("^%a+!? .") ~= nil, spec)
+  check("sweep does not declare force", param ~= "force", param)
+end
+
+-- The registry itself: exactly the four metrics the contract names, entities
+-- the only one needing a subject.
+local cards = sweep_registry.cards()
+check("the registry carries all four contracted metrics and no more", #cards == 4, #cards)
+local by_name = {}
+for _, card in ipairs(cards) do by_name[card.metric] = card end
+for _, name in ipairs({ "entities", "rockets", "research", "players" }) do
+  check("the registry carries " .. name, by_name[name] ~= nil)
+end
+check("only entities declares a subject",
+      by_name.entities.subject ~= nil and by_name.rockets.subject == nil
+      and by_name.research.subject == nil and by_name.players.subject == nil)
+
+-- ── unrecognised metric or axis: found=false with every card, before any
+-- pass runs, so a wrong guess recovers in one round (the phase5 contract's
+-- envelope section) ────────────────────────────────────────────────────
+local no_metric = call("sweep", {})
+check("sweep with no metric is a refusal, not a Lua error", no_metric.ok, F.encode(no_metric))
+check("sweep with no metric answers found=false and carries sweep_v",
+      no_metric.r.sweep_v == 1 and no_metric.r.found == false, F.encode(no_metric))
+check("the found=false reply carries every metric's own card",
+      no_metric.r.metrics ~= nil and #no_metric.r.metrics == 4, F.encode(no_metric))
+
+local bad_metric = call("sweep", { metric = "standings" })
+check("an unknown metric name answers found=false the same way",
+      bad_metric.ok and bad_metric.r.found == false and bad_metric.r.metrics ~= nil
+      and bad_metric.r.reason:find("standings") ~= nil, F.encode(bad_metric))
+
+local bad_axis = call("sweep", { metric = "rockets", axis = "surface" })
+check("an axis a metric does not sweep by is refused, not silently coerced to the default",
+      bad_axis.ok and bad_axis.r.found == false and bad_axis.r.reason:find("force") ~= nil,
+      F.encode(bad_axis))
+local nonsense_axis = call("sweep", { metric = "entities", subject = "lab", axis = "teleport" })
+check("a nonsense axis is refused the same way a real-but-unsupported one is",
+      nonsense_axis.ok and nonsense_axis.r.found == false, F.encode(nonsense_axis))
+
+-- ── entities: delegates every count to entity_count, never counts itself ──
+local no_subject = call("sweep", { metric = "entities" })
+check("entities without a subject is refused before any pass runs",
+      no_subject.ok and no_subject.r.found == false and no_subject.r.reason:find("subject") ~= nil,
+      F.encode(no_subject))
+local bad_subject = call("sweep", { metric = "entities", subject = "not-a-real-prototype" })
+check("entities with an unknown prototype is found=false, the same reason entity_count gives",
+      bad_subject.ok and bad_subject.r.found == false
+      and bad_subject.r.reason:find("no entity prototype") ~= nil, F.encode(bad_subject))
+local unsupported_axis = call("sweep", { metric = "entities", subject = "lab", axis = "player" })
+check("entities does not sweep by player, and says which axes it does",
+      unsupported_axis.ok and unsupported_axis.r.found == false
+      and unsupported_axis.r.reason:find("force, surface, platform, force%+surface") ~= nil,
+      F.encode(unsupported_axis))
+
+local entities_force = call("sweep", { metric = "entities", subject = "lab" })
+check("entities axis=force ok", entities_force.ok, F.encode(entities_force))
+check("entities defaults to the force axis, one row, via entity_count's own O(1) counter",
+      entities_force.r.sweep_v == 1 and entities_force.r.axis == "force"
+      and entities_force.r.metric == "entities" and entities_force.r.subject == "lab"
+      and entities_force.r.unit == "count" and entities_force.r.found == nil,
+      F.encode(entities_force))
+check("entities force axis names cols name/value and one row for player, 12 labs",
+      entities_force.r.cols[1] == "name" and entities_force.r.cols[2] == "value"
+      and row_eq(entities_force.r.rows[1], "player", 12)
+      and entities_force.r.total == 1 and entities_force.r.shown == 1
+      and entities_force.r.skipped == 0 and entities_force.r.why == nil,
+      F.encode(entities_force))
+
+local entities_compound = call("sweep", { metric = "entities", subject = "lab", axis = "force+surface" })
+check("the force+surface axis names each row \"<force> on <surface>\"",
+      entities_compound.ok and row_eq(entities_compound.r.rows[1], "player on nauvis", 12),
+      F.encode(entities_compound))
+
+-- The platform axis against today's fake, which has no surface carrying a
+-- real LuaSpacePlatform yet: a valid, empty answer, not an error. This stays
+-- true whether or not a future fixture adds a live platform, so it is
+-- intentionally a shape check, not a row count.
+local entities_platform = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
+check("the platform axis answers cleanly even with zero live platforms",
+      entities_platform.ok and entities_platform.r.found == nil
+      and entities_platform.r.axis == "platform" and type(entities_platform.r.rows) == "table"
+      and entities_platform.r.total == #entities_platform.r.rows, F.encode(entities_platform))
+
+-- The surface axis has to re-sort by value: ctx.surfaces is walked in NAME
+-- order (nauvis, then platform-1), so if envelope.lua's own sort were
+-- dropped or applied to the wrong field, this would come back nauvis-first
+-- despite platform-1 holding the larger count. Mutation-tested: removing
+-- envelope.lua's table.sort call turns this row order red while every count
+-- stays right.
+S.entity_counts_by_surface = { ["platform-1"] = { lab = 50 } }
+local entities_surface = call("sweep", { metric = "entities", subject = "lab", axis = "surface" })
+check("the surface axis sorts by value, not by the order surfaces were walked",
+      entities_surface.ok and row_eq(entities_surface.r.rows[1], "platform-1", 50)
+      and row_eq(entities_surface.r.rows[2], "nauvis", 12) and entities_surface.r.total == 2,
+      F.encode(entities_surface))
+S.entity_counts_by_surface = {}
+
+-- ── rockets and research: force axis only, straight delegation ────────
+local rockets_sweep = call("sweep", { metric = "rockets" })
+check("rockets sweep delegates to rockets{all=true}",
+      rockets_sweep.ok and rockets_sweep.r.unit == "count" and rockets_sweep.r.subject == nil
+      and row_eq(rockets_sweep.r.rows[1], "player", 7) and rockets_sweep.r.total == 1,
+      F.encode(rockets_sweep))
+
+local research_sweep = call("sweep", { metric = "research" })
+check("research sweep delegates to current_research{all=true}",
+      research_sweep.ok and research_sweep.r.unit == "percent"
+      and row_eq(research_sweep.r.rows[1], "player", 25), F.encode(research_sweep))
+
+-- The regression this metric's own file documents: current_research's row
+-- already rounds progress for display, a bare number 0 for an idle force
+-- beside a rounded STRING for a running one. Comparing those two in Lua
+-- throws outright, so this is not just a wrong-order risk, it is a crash
+-- risk. Mutation-tested against scripts/sweep/metrics/research.lua: reading
+-- the delegate's own already-rounded `progress` field instead of
+-- LuaForce::research_progress directly turns this into a provider_error,
+-- "attempt to compare string with number".
+S.team3.players = { { name = "Zed", valid = true, connected = true } }
+local research_mixed = call("sweep", { metric = "research" })
+check("research sweeps an idle force beside a running one without erroring",
+      research_mixed.ok and research_mixed.r.total == 2
+      and row_eq(research_mixed.r.rows[1], "player", 25)
+      and row_eq(research_mixed.r.rows[2], "team-3", 0), F.encode(research_mixed))
+S.team3.players = {}
+
+-- ── players: the one metric with a real player axis ───────────────────
+local players_force = call("sweep", { metric = "players" })
+check("players axis=force counts heads per force",
+      players_force.ok and row_eq(players_force.r.rows[1], "player", 1), F.encode(players_force))
+local players_player = call("sweep", { metric = "players", axis = "player" })
+check("players axis=player lists one row per connected player",
+      players_player.ok and row_eq(players_player.r.rows[1], "Bob", 1)
+      and players_player.r.total == 1, F.encode(players_player))
+
+-- ── limit, skipped and why: bounded the same way every other sweep is ──
+-- Three forces with players, none from the baseline fixture, so the row
+-- count and the leader are unambiguous. Cleaned up immediately after.
+game.forces["sweep-synth-1"] = { name = "sweep-synth-1", players = { {} }, rockets_launched = 100, items_launched = {} }
+game.forces["sweep-synth-2"] = { name = "sweep-synth-2", players = { {} }, rockets_launched = 50, items_launched = {} }
+local limited = call("sweep", { metric = "rockets", limit = 2 })
+check("a limit cuts the tail, keeps the leaders, and says why",
+      limited.ok and limited.r.total == 3 and limited.r.shown == 2 and limited.r.skipped == 1
+      and limited.r.why == "limit" and row_eq(limited.r.rows[1], "sweep-synth-1", 100)
+      and row_eq(limited.r.rows[2], "sweep-synth-2", 50), F.encode(limited))
+game.forces["sweep-synth-1"] = nil
+game.forces["sweep-synth-2"] = nil
+local cleaned_up = call("sweep", { metric = "rockets" })
+check("removing the synthetic forces leaves the sweep back at baseline",
+      cleaned_up.ok and cleaned_up.r.total == 1, F.encode(cleaned_up))
+
+-- ── no sweep call writes storage, and every reply stays well under the
+-- rpc byte cap (CAPS.call = 8000, scripts/rpc.lua) ─────────────────────
+local sweep_before = F.encode(storage)
+call("sweep", { metric = "entities", subject = "lab", axis = "force+surface" })
+call("sweep", { metric = "players", axis = "player" })
+check("sweep writes no storage", F.encode(storage) == sweep_before)
+
+S.rcon_replies = {}
+rpc({ op = "call", i = "ai-agent-bridge-tools", f = "sweep", a = { metric = "entities", subject = "lab" } })
+local sweep_bytes = #S.rcon_replies[#S.rcon_replies]
+check("a sweep reply is small (" .. sweep_bytes .. " bytes)", sweep_bytes < 4000, sweep_bytes)
+
+-- ── the platform landmine, isolated from any fake game at all ─────────
+-- LuaSpacePlatform::scheduled_for_deletion is a tick count, not a boolean
+-- (verified against ~/factorio/doc-html/runtime-api.json: "Returns how many
+-- ticks are left before the platform will be deleted. 0 if not scheduled for
+-- deletion."). scripts/sweep/platform.lua is the one place this is read, and
+-- it takes a plain table rather than a real LuaSurface, so the landmine is
+-- covered here directly rather than waiting on a fixture elsewhere to carry
+-- one. Mutation-tested: swapping the `(scheduled_for_deletion or 0) ~= 0`
+-- check for the naive `if platform.scheduled_for_deletion then` turns the
+-- first of these four red, since 0 is truthy in Lua.
+check("a live platform (scheduled_for_deletion = 0) contributes its name",
+      sweep_platform.name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 0 } }) == "orbit-1")
+check("a platform mid-countdown to deletion (non-zero ticks left) is excluded",
+      sweep_platform.name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 1800 } }) == nil)
+check("a platform whose field is simply absent still contributes",
+      sweep_platform.name_of({ platform = { name = "orbit-1" } }) == "orbit-1")
+check("a plain surface with no platform at all contributes nothing",
+      sweep_platform.name_of({}) == nil)
+
+-- ── bounded.fit: rows bounded by bytes, not by count ──────────────────
+-- entity_count per_surface and list_surfaces both grew rows that carry a
+-- platform, its owner, its location and its state. A row cap was the right
+-- bound while a row was {force, count} and the wrong one the moment rows got
+-- wide: 100 of them encode past rpc.lua's CAPS.call = 8000, and an over-cap
+-- reply is refused whole, so the tool spends every pass and then answers
+-- nothing the model can use. Measured before this bound: entity_count
+-- per_surface died at 32 surfaces, list_surfaces reached 7794 bytes at its own
+-- default row count.
+-- ── sweep{metric="players"} over a roster the delegate truncated ──────
+-- list_players{all=true} sorts by PLAYER NAME and cuts at its own row cap
+-- before returning, so past that cap its rows are an alphabetical slice. A
+-- sweep that counts the slice and lets the ranker publish a leader names the
+-- wrong force whenever the cut bites, because the forces whose players sort
+-- late are simply not in the sample. Refusing whole is the rule the briefing's
+-- pl key already follows.
+local saved_players = game.forces.player.players
+local many = {}
+for i = 1, 51 do
+  many[i] = { name = string.format("p%03d", i), connected = true, admin = false, valid = true }
+end
+game.forces.player.players = many
+game.forces.player.connected_players = many
+
+local truncated = call("sweep", { metric = "players" })
+check("sweep players refuses rather than ranking a truncated roster",
+      truncated.ok and truncated.r.found == false, F.encode(truncated))
+check("the refusal says how much of the roster it saw",
+      truncated.ok and truncated.r.shown == 50 and truncated.r.total == 51, F.encode(truncated))
+check("a refused sweep carries no rows at all",
+      truncated.ok and truncated.r.rows == nil, F.encode(truncated))
+
+game.forces.player.players = saved_players
+game.forces.player.connected_players = { saved_players[1] }
+local whole = call("sweep", { metric = "players" })
+check("sweep players answers normally once the roster fits",
+      whole.ok and whole.r.found ~= false and whole.r.rows ~= nil, F.encode(whole))
+
+local bounded = require("scripts.tools.bounded")
+local function wide_rows(n)
+  local rows = {}
+  for i = 1, n do
+    rows[i] = { name = "Cargo Hauler Mark " .. i .. " Heavy", index = i, force_players = 0,
+      platform = "Cargo Hauler Mark " .. i .. " Heavy", owner = "team-123",
+      location = "solar-system-edge", state = "waiting_for_starter_pack" }
+  end
+  return rows
+end
+
+local narrow = { { force = "team-1", count = 5 }, { force = "team-2", count = 3 } }
+check("bounded.fit leaves rows alone when they already fit",
+      #bounded.fit(narrow) == 2, F.encode(narrow))
+
+for _, n in ipairs({ 32, 50, 100 }) do
+  local rows = wide_rows(n)
+  local raw = #F.encode(rows)
+  local fitted = bounded.fit(rows)
+  local after = #F.encode(fitted)
+  check("bounded.fit keeps " .. n .. " wide rows under the byte budget",
+        after <= bounded.ROW_BUDGET, n .. " rows: raw " .. raw .. " -> kept " .. #fitted .. ", " .. after .. " bytes")
+  check("bounded.fit keeps rows rather than emptying the reply at " .. n,
+        #fitted > 0, "kept " .. #fitted)
+  -- The rows that survive are the FIRST ones, so a caller that sorted by value
+  -- keeps the leaders rather than whatever the cut happened to reach.
+  check("bounded.fit keeps the first rows at " .. n,
+        fitted[1].name == rows[1].name, F.encode(fitted[1]))
+end
+
+-- The case the byte bound exists for: rows wide enough that the count cap
+-- alone would have shipped an over-cap reply.
+local hundred = wide_rows(100)
+check("100 wide rows would have blown the call cap without the byte bound",
+      #F.encode(hundred) > 8000, #F.encode(hundred))
+
+
 print(("\n%d passed, %d failed"):format(passes, fails))
 if fails > 0 then os.exit(1) end

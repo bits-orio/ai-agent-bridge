@@ -269,6 +269,107 @@ func TestAssembleOmitsSurfaceRowsWhenListSurfacesErrors(t *testing.T) {
 	}
 }
 
+// The critical fix (contract docs/design/phase5-sweep.md, Stage 2; question
+// 80, 2026-09-15): nobody stands on a platform's own surface while it is in
+// flight, so the old force_players > 0 filter silently dropped every
+// platform row, however many thrusters were on it. A platform row must now
+// survive that filter on its own, at on=0, as long as list_surfaces sent a
+// platform name for it, and it carries the owner and location columns A1
+// adds alongside it.
+func TestAssembleKeepsPlatformRowsRegardlessOfForcePlayers(t *testing.T) {
+	const reply = `{"force":"north","total":1,"shown":1,"surfaces":[
+		{"name":"platform-1","index":5,"force_players":0,"platform":"Icarus","owner":"north","location":"vulcanus"}
+	]}`
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces", reply, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["sf"])
+	if len(rows) != 1 {
+		t.Fatalf("sf has %d rows, want 1: a platform row with zero players must not be filtered out (question 80)", len(rows))
+	}
+	if stringField(t, rows[0], "n") != "platform-1" || numberField(t, rows[0], "on") != 0 {
+		t.Errorf("sf[0] = %v, want n=platform-1 on=0", rows[0])
+	}
+	if stringField(t, rows[0], "platform") != "Icarus" || stringField(t, rows[0], "owner") != "north" || stringField(t, rows[0], "location") != "vulcanus" {
+		t.Errorf("sf[0] missing platform columns: %v", rows[0])
+	}
+}
+
+// An ordinary planet row must stay byte-identical to before the platform
+// columns existed: no platform, owner or location key at all, not even a
+// null one, on a row list_surfaces never sent them for. happyGroupATools's
+// own list_surfaces reply is the pre-1.0.5 shape (name, index, planet,
+// force_players only), so this also doubles as the backward-compat case
+// against a companion that has not updated.
+func TestAssembleOmitsPlatformColumnsFromAnOrdinaryPlanetRow(t *testing.T) {
+	byName := index(happyGroupATools())
+	res := Assemble(context.Background(), byName, askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["sf"])
+	if len(rows) != 1 {
+		t.Fatalf("sf has %d rows, want 1: %v", len(rows), rows)
+	}
+	for _, key := range []string{"platform", "owner", "location"} {
+		if raw, present := rows[0][key]; present {
+			t.Errorf("an ordinary planet row should carry no %q key at all, got %s", key, raw)
+		}
+	}
+}
+
+// Location alone stays absent while a platform is mid-flight
+// (LuaSpacePlatform.space_location is nil then, per the contract's landmine
+// section), even though platform and owner both landed. Sent here as an
+// explicit JSON null, the shape A1 uses, to prove the *string decode treats
+// it the same as the key being left out entirely rather than turning it into
+// the empty string.
+func TestAssembleOmitsLocationWhilePlatformIsInFlight(t *testing.T) {
+	const reply = `{"force":"north","total":1,"shown":1,"surfaces":[
+		{"name":"platform-2","index":6,"force_players":0,"platform":"Voyager","owner":"north","location":null}
+	]}`
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces", reply, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["sf"])
+	if len(rows) != 1 {
+		t.Fatalf("sf has %d rows, want 1: %v", len(rows), rows)
+	}
+	if stringField(t, rows[0], "platform") != "Voyager" || stringField(t, rows[0], "owner") != "north" {
+		t.Errorf("platform and owner should still land while the platform is in flight: %v", rows[0])
+	}
+	if raw, present := rows[0]["location"]; present {
+		t.Errorf("location should be left out while the platform is in flight (space_location nil), got %s", raw)
+	}
+}
+
+// A companion that has not shipped the platform columns at all (pre-1.0.5,
+// or 1.0.5 without A1) must not regress the half of the rule that already
+// worked: an ordinary surface with nobody on it is still dropped, only a
+// platform row's own inclusion rule changed.
+func TestAssembleStillDropsAnEmptyOrdinarySurfaceAgainstACompanionWithNoPlatformColumns(t *testing.T) {
+	const reply = `{"force":"north","total":2,"shown":2,"surfaces":[
+		{"name":"nauvis","index":1,"planet":"nauvis","force_players":3},
+		{"name":"vulcanus","index":2,"planet":"vulcanus","force_players":0}
+	]}`
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces", reply, nil))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	rows := rowsOf(t, fencedBody(t, res.Text)["sf"])
+	if len(rows) != 1 {
+		t.Fatalf("sf has %d rows, want 1: an empty ordinary surface should still be dropped: %v", len(rows), rows)
+	}
+	if stringField(t, rows[0], "n") != "nauvis" {
+		t.Errorf("sf[0] = %v, want nauvis", rows[0])
+	}
+}
+
 // A tool missing from the catalog entirely behaves like one that errored:
 // its own keys are left out, nothing else is touched. list_forces missing
 // means fs cannot be built at all (there is nothing to join current_research
@@ -927,5 +1028,36 @@ func TestAssembleOmitsFseWhenNothingWasLeftOut(t *testing.T) {
 
 	if _, present := fencedBody(t, res.Text)["fse"]; present {
 		t.Errorf("fse should be absent when list_forces left nothing out:\n%s", res.Text)
+	}
+}
+
+// sf is omitted when list_surfaces could not show its whole list, the rule pl
+// already follows. The key became truncatable the moment it started carrying
+// every platform with an owner and a location each: a cut list of places reads
+// to the model as the list of places, which is how question 77 came to answer
+// "team-1 through team-15" off partial rows.
+func TestAssembleOmitsSfWhenTheSurfaceListWasTruncated(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_surfaces", engineTool("list_surfaces",
+		`{"force":"north","total":80,"shown":2,"surfaces":[
+			{"name":"nauvis","index":1,"force_players":3},
+			{"name":"platform-1","index":2,"force_players":0,"platform":"platform-1","owner":"north","location":"nauvis"}
+		]}`, nil))
+
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	if raw, present := fencedBody(t, res.Text)["sf"]; present {
+		t.Errorf("sf should be omitted when the reply showed 2 of 80 surfaces, got %s", raw)
+	}
+}
+
+// The ordinary case still ships: a complete list is not a truncated one.
+func TestAssembleKeepsSfWhenTheSurfaceListIsWhole(t *testing.T) {
+	res := Assemble(context.Background(), index(happyGroupATools()), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	if _, present := fencedBody(t, res.Text)["sf"]; !present {
+		t.Errorf("sf should ship when list_surfaces showed everything it had:\n%s", res.Text)
 	}
 }

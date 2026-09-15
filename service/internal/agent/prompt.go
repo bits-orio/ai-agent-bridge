@@ -69,7 +69,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("To say which force is ahead on anything cumulative, production, research, rockets, take each force's total over every surface since its own start tick divided by its own online hours from the clock tool, and show both figures; ")
 	b.WriteString("a rate over a server window counts the time a force was offline as nothing and is not a comparison. ")
 	b.WriteString("A question asking which or who is answered with the verdict first: the title of a comparison or table, or the first line of a summary, names who is ahead and by what measure; the rows carry the figures. Numbers alone are not an answer. ")
-	b.WriteString("Never decide the verdict yourself: hand the figures to rank_by_rate (totals and online hours) or rank (any values) and write the leader it names.\n\n")
+	b.WriteString("Never decide the verdict yourself: hand the figures to rank_by_rate (totals and online hours) or rank (any values) and write the leader it names, or take the leader a ranked sweep reply already names.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it. ")
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")

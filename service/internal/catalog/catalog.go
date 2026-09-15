@@ -82,7 +82,11 @@ func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tool
 		Description: describe(manifest),
 		Schema:      schema(manifest),
 		Call: func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
-			return caller.CallTool(ctx, iface, fn, withForce(ctx, args))
+			out, err := caller.CallTool(ctx, iface, fn, withForce(ctx, args))
+			if err != nil {
+				return out, err
+			}
+			return rankSweep(ctx, out), nil
 		},
 	}
 }

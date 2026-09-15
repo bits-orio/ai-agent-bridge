@@ -282,6 +282,117 @@ func TestParamGrammarLists(t *testing.T) {
 	}
 }
 
+// D2: enum<...> reaches the model as a real JSON Schema enum, not prose, and
+// composes with "!" exactly like every other type word.
+func TestParamGrammarEnum(t *testing.T) {
+	reply := rpc.ToolsReply{{
+		Iface: "some-provider",
+		Tools: map[string]rpc.ToolManifest{
+			"sweep": {
+				Desc: "d",
+				Params: map[string]string{
+					"axis":   "enum<force,surface,platform,player,force+surface>! how to group the rows",
+					"metric": "enum<entities,rockets,research,players> which figure to sweep, defaults to entities",
+				},
+			},
+		},
+	}}
+	c := Build(reply, &recorder{out: "{}"})
+	props := c.Tools()[0].Schema["properties"].(map[string]any)
+
+	axis := props["axis"].(map[string]any)
+	if axis["type"] != "string" {
+		t.Errorf("axis type = %v, want string", axis["type"])
+	}
+	if axis["description"] != "how to group the rows" {
+		t.Errorf("axis description = %v", axis["description"])
+	}
+	wantAxisEnum := []string{"force", "surface", "platform", "player", "force+surface"}
+	gotAxisEnum, ok := axis["enum"].([]string)
+	if !ok || !equalStrings(gotAxisEnum, wantAxisEnum) {
+		t.Errorf("axis enum = %v, want %v", axis["enum"], wantAxisEnum)
+	}
+
+	metric := props["metric"].(map[string]any)
+	wantMetricEnum := []string{"entities", "rockets", "research", "players"}
+	gotMetricEnum, ok := metric["enum"].([]string)
+	if !ok || !equalStrings(gotMetricEnum, wantMetricEnum) {
+		t.Errorf("metric enum = %v, want %v", metric["enum"], wantMetricEnum)
+	}
+
+	// "!" on axis but not on metric, exactly like every other type word.
+	required, _ := c.Tools()[0].Schema["required"].([]string)
+	found := map[string]bool{}
+	for _, name := range required {
+		found[name] = true
+	}
+	if !found["axis"] {
+		t.Errorf("required = %v, want axis required", required)
+	}
+	if found["metric"] {
+		t.Errorf("required = %v, want metric left optional", required)
+	}
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// A word that merely looks like an enum, and so is exactly the shape an
+// older service (one built before D2) sees for every enum<...> a newer
+// manifest declares, degrades the same way TestUnknownParamTypeDegradesTo
+// AStringButKeepsTheTool already proves for any unrecognised word: to a
+// plain string carrying the whole spec line, tool kept, parameter kept,
+// nothing required. This is the backward-safety the grammar comment
+// promises in both directions: an older build without enumValues at all
+// falls into this exact branch for "enum<...>", because paramTypes never
+// had an entry for it either.
+func TestParamGrammarEnumWithNoUsableValuesDegradesToAString(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec string
+	}{
+		{"empty angle brackets", "enum<>! pick one"},
+		{"only commas", "enum<,,>! pick one"},
+		{"missing the closing bracket", "enum<a,b required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reply := rpc.ToolsReply{{
+				Iface: "p",
+				Tools: map[string]rpc.ToolManifest{
+					"fn": {Desc: "d", Params: map[string]string{"axis": tc.spec}},
+				},
+			}}
+			c := Build(reply, &recorder{out: "{}"})
+			props := c.Tools()[0].Schema["properties"].(map[string]any)
+			axis := props["axis"].(map[string]any)
+			if axis["type"] != "string" {
+				t.Errorf("axis type = %v, want string", axis["type"])
+			}
+			if _, hasEnum := axis["enum"]; hasEnum {
+				t.Errorf("axis = %v, want no enum key at all", axis)
+			}
+			if axis["description"] != tc.spec {
+				t.Errorf("axis description = %v, want the whole original spec line %q", axis["description"], tc.spec)
+			}
+			required, _ := c.Tools()[0].Schema["required"].([]string)
+			for _, name := range required {
+				if name == "axis" {
+					t.Errorf("required = %v, want axis left optional: a degraded type is never required", required)
+				}
+			}
+		})
+	}
+}
+
 // A type word this build does not know degrades to a plain string carrying
 // the whole spec line, exactly like a provider's typo does today. This is the
 // property that lets the grammar ship ahead of the tools that use a future
@@ -377,6 +488,37 @@ func TestCallAlwaysSendsAnObject(t *testing.T) {
 	}
 	if got := rec.argsMap(t); len(got) != 0 {
 		t.Errorf("args = %v, want an empty object", got)
+	}
+}
+
+// A sweep-shaped reply gets ranked on its way back through the tool's own
+// Call closure, not just through the unwired rankSweep function: this is
+// the D1 wiring itself, not merely the gate logic sweep_test.go covers.
+func TestCallRanksASweepReplyOnTheWayBack(t *testing.T) {
+	rec := &recorder{out: `{"sweep_v":1,"axis":"force","metric":"entities","cols":["name","value"],"rows":[["team-2",2305],["team-1",41]],"total":2,"shown":2,"skipped":0,"why":null}`}
+	c := Build(sampleReply(), rec)
+
+	out, err := c.Tools()[1].Call(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !strings.Contains(string(out), `"leader":"team-2"`) {
+		t.Errorf("a sweep reply returned through Call was not ranked: %s", out)
+	}
+}
+
+// An ordinary, non-sweep reply is untouched by the same wiring: Call must
+// not rewrite the common case just because rankSweep now sits in its path.
+func TestCallLeavesAnOrdinaryReplyByteIdentical(t *testing.T) {
+	rec := &recorder{out: `{"forces":["team-1","team-2"]}`}
+	c := Build(sampleReply(), rec)
+
+	out, err := c.Tools()[1].Call(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if string(out) != rec.out {
+		t.Errorf("an ordinary reply came back as %s, want it byte identical to %s", out, rec.out)
 	}
 }
 

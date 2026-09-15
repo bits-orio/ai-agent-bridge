@@ -36,6 +36,38 @@ function M.cut(rows, n)
   return out
 end
 
+--- ROW_BUDGET is what the rows of one reply may encode to, left clear of
+--- rpc.lua's CAPS.call = 8000 so the fields wrapped around them still fit.
+M.ROW_BUDGET = 6000
+
+--- The first rows that fit a byte budget, for a reply whose rows are wide
+--- enough that a row count is the wrong unit to bound them in.
+---
+--- M.cut alone bounds rows by COUNT, which was right while a row was
+--- {force, count} and became wrong the moment a row could carry a platform,
+--- its owner, its location and its state: 100 such rows encode past the
+--- 8000-byte call cap, and an over-cap reply is refused whole, so the tool
+--- spends every pass and then answers nothing the model can act on. Measured:
+--- entity_count per_surface died at 32 surfaces and list_surfaces reached 7794
+--- bytes at its own default row count.
+---
+--- Binary search rather than dropping a row at a time, so a wide reply costs
+--- about seven encodes instead of one per row discarded.
+function M.fit(rows, budget)
+  budget = budget or M.ROW_BUDGET
+  if #rows == 0 then return rows end
+  local function fits(n)
+    return #helpers.table_to_json(M.cut(rows, n)) <= budget
+  end
+  if fits(#rows) then return rows end
+  local low, high = 0, #rows
+  while low < high do
+    local mid = math.floor((low + high + 1) / 2)
+    if fits(mid) then low = mid else high = mid - 1 end
+  end
+  return M.cut(rows, low)
+end
+
 --- Sorts rows by their `name` field, in place, and returns them.
 function M.by_name(rows)
   table.sort(rows, function(x, y) return x.name < y.name end)

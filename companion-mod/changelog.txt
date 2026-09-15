@@ -8,12 +8,26 @@ Date: 2026-09-15
       counter the engine already keeps, which costs nothing whether a server runs 4 teams or 40.
       Name a surface when the answer has to be about that one place, and that path counts one pass
       per force and refuses rather than half-answering if even that would be too many.
+    - entity_count's all=true also takes per_surface=true, breaking each force's count down by
+      surface instead of totalling it: one row per team-and-place that actually has some, empty
+      combinations left out, platform rows carrying the same owner, location and state columns
+      list_surfaces does. This is what makes "which space ship has most thrusters, where is it"
+      one call instead of a many-round search.
   Bugfixes:
     - list_surfaces returned 20 rows by default, sorted by name, and a space platform is named
       platform-N, so every platform sorted after every planet and fell off the end. On a server
       with 25 surfaces the reply held no platform at all, which is why "which space ship has most
       thrusters" guessed a platform name before it had seen one and then spent a round listing
       again with a limit. The default is the cap now.
+    - list_surfaces said nothing about who owned a platform or where it was stopped, so seeing a
+      name in the list still left a 5-platform, 14-force cross product to search by hand. A
+      platform row now carries platform, owner, location and state. scheduled_for_deletion is a
+      tick count, not a boolean, so a platform mid-deletion reads as an ordinary row rather than a
+      half-built one.
+    - find_entities carried no cost tier, so the trace that started this release answered a
+      counting question with fifteen position walks and zero entity_count calls. find_entities is
+      tier 2 now; entity_count, which asks the engine for a number instead of walking positions,
+      stays tier 1.
     - rockets with all=true sorted its rows by force name before cutting them to the row cap, so a
       server with more forces than the cap discarded the biggest launcher first, on the one tool
       whose purpose is naming the biggest. Largest first now, force name only as a tiebreak.

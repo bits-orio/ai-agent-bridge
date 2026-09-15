@@ -57,7 +57,8 @@ local M = {}
 
 M.manifest = {
   find_entities = {
-    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). A recipe or product search covers every crafting machine on the surface by itself; a type beside it is not needed. Ghosts match too, by what they will become, and rows say ghost=true; ghost=true or false narrows to ghosts or built. Give at least one filter. truncated=true means the scan stopped before the end of the surface, so the rows are what it saw and nothing in the reply says a thing is absent. An unknown name comes back found=false with suggestions of close names.",
+    desc = "Where one force's entities are on one surface: positions with a ready [gps=...] tag. Filter by entity name, type (assembling-machine, furnace, mining-drill, lab, roboport, rocket-silo), the recipe a crafting machine is set to, or the item or fluid its recipe makes (where are grenades made: product=grenade). A recipe or product search covers every crafting machine on the surface by itself; a type beside it is not needed. Ghosts match too, by what they will become, and rows say ghost=true; ghost=true or false narrows to ghosts or built. Give at least one filter. truncated=true means the scan stopped before the end of the surface, so the rows are what it saw and nothing in the reply says a thing is absent. An unknown name comes back found=false with suggestions of close names. For a count, entity_count is cheaper: it asks the engine for a number instead of walking positions.",
+    tier = "2",
     params = {
       surface = "string! surface name or index, e.g. nauvis",
       name    = "string entity prototype name, e.g. lab, assembling-machine-2",

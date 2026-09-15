@@ -198,11 +198,23 @@ type ForceRow struct {
 }
 
 // SurfaceRow is one row of sf: a surface the asker's force has players on,
-// and how many. list_surfaces reports every surface in the game; this keeps
-// only the ones with a nonzero count for this force.
+// and how many, plus who owns it and where it is when the surface is a
+// space platform. list_surfaces reports every surface in the game; this
+// keeps the ones with a nonzero count for this force, and, as of the
+// platform columns list_surfaces gained in 1.0.5 (contract
+// docs/design/phase5-sweep.md, Stage 1), every platform row regardless of
+// who is standing on it (surfaceRows's own doc comment has the reason).
+// Platform, Owner and Location are pointers, not plain strings, because they
+// are genuinely absent on an ordinary planet row and on every row from a
+// companion that predates them: reading a missing key as "" would present an
+// absent fact as a real one, the same mistake this file has been fixed twice
+// for elsewhere (fraction, playersReply.Force).
 type SurfaceRow struct {
-	N  string `json:"n"`
-	On int    `json:"on"`
+	N        string  `json:"n"`
+	On       int     `json:"on"`
+	Platform *string `json:"platform,omitempty"`
+	Owner    *string `json:"owner,omitempty"`
+	Location *string `json:"location,omitempty"`
 }
 
 // MarkerRow is one row of mk, Group B.
@@ -377,6 +389,15 @@ func Assemble(ctx context.Context, byName map[string]tools.Tool, q Question, mar
 		}
 	}
 
+	// Omitted rather than trimmed, the rule pl already follows above: a
+	// truncated list of places reads as the list of places, and the prompt
+	// tells the model a missing key means "not available this time", which is
+	// the only honest thing to say about a list we cannot show whole.
+	if surfaces != nil && surfaces.Shown < surfaces.Total {
+		log.Printf("briefing: question %d list_surfaces returned %d of %d, sf omitted", q.ID, surfaces.Shown, surfaces.Total)
+		surfaces = nil
+	}
+
 	ch := chatRows(bctx, chat)
 	payload, ok := buildPayload(q, mark, ch, forces, research, surfaces, gameTime, players)
 	if !ok {
@@ -543,10 +564,31 @@ type researchReply struct {
 	}] `json:"forces"`
 }
 
+// surfacesReply's row carries Platform, Owner and Location as pointers for
+// the same reason SurfaceRow does: they are absent entirely on an ordinary
+// planet row, and on every row from a companion older than the 1.0.5
+// platform columns (contract docs/design/phase5-sweep.md, Stage 1, A1), so a
+// plain string would turn "we were never told" into a silent "". Location
+// alone can stay nil even when Platform and Owner are both present: A1 sends
+// no location while a platform is in flight (LuaSpacePlatform.space_location
+// is nil then), which is a fact about the platform's position, not about its
+// name or its owning force.
 type surfacesReply struct {
+	// Total and Shown carry list_surfaces's own bound, the same pair
+	// playersReply decodes and for the same reason. sf was a thin list of the
+	// asker's own surfaces when this decoder was written and could not
+	// realistically be cut; it now carries every platform, with an owner and a
+	// location each, on a server that can run dozens. A cut list reads to the
+	// model as the whole inventory, which is exactly how question 77 came to
+	// answer "team-1 through team-15" off partial rows.
+	Total    int `json:"total"`
+	Shown    int `json:"shown"`
 	Surfaces *looseArray[struct {
-		Name         string `json:"name"`
-		ForcePlayers int    `json:"force_players"`
+		Name         string  `json:"name"`
+		ForcePlayers int     `json:"force_players"`
+		Platform     *string `json:"platform"`
+		Owner        *string `json:"owner"`
+		Location     *string `json:"location"`
 	}] `json:"surfaces"`
 }
 
@@ -761,19 +803,37 @@ func forceRows(forces *forcesReply, research *researchReply) []ForceRow {
 }
 
 // surfaceRows is sf: the surfaces the asker's force has players on, from
-// list_surfaces's own per-force force_players count. A surface the force has
-// nobody on is left out rather than sent with on=0, since sf documents
-// itself as "surfaces the asker's force has players on", not every surface
-// that exists.
+// list_surfaces's own per-force force_players count, plus every platform row
+// regardless of that count. An ordinary surface the force has nobody on is
+// still left out rather than sent with on=0, since sf documents itself as
+// "surfaces the asker's force has players on", not every surface that
+// exists; that half of the rule is unchanged.
+//
+// The force_players > 0 filter alone used to be the whole rule, and it is
+// the reason the asker in question 80 (2026-09-15, docs/design/
+// phase5-sweep.md) was never shown a single platform: a platform's own
+// surface has nobody standing on it while the platform is in flight, so the
+// same filter that correctly drops an empty planet surface was also
+// silently dropping the one surface the question actually needed. A row is
+// now kept when it has players on it OR Platform is present, so a platform
+// row survives at on=0 and an ordinary empty planet row is dropped exactly
+// as before.
 func surfaceRows(surfaces *surfacesReply) []SurfaceRow {
 	if surfaces == nil {
 		return nil
 	}
 	rows := make([]SurfaceRow, 0, len(*surfaces.Surfaces))
 	for _, s := range *surfaces.Surfaces {
-		if s.ForcePlayers > 0 {
-			rows = append(rows, SurfaceRow{N: s.Name, On: s.ForcePlayers})
+		if s.ForcePlayers == 0 && s.Platform == nil {
+			continue
 		}
+		rows = append(rows, SurfaceRow{
+			N:        s.Name,
+			On:       s.ForcePlayers,
+			Platform: s.Platform,
+			Owner:    s.Owner,
+			Location: s.Location,
+		})
 	}
 	return rows
 }

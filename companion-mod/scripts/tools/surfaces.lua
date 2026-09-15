@@ -10,8 +10,9 @@
 -- LuaSurface::name, LuaSurface::index, LuaSurface::planet (LuaPlanet?),
 -- LuaPlanet::name, LuaControl::surface.
 
-local force_lookup = require("scripts.tools.force_lookup")
-local bounded      = require("scripts.tools.bounded")
+local force_lookup    = require("scripts.tools.force_lookup")
+local bounded         = require("scripts.tools.bounded")
+local platform_lookup = require("scripts.tools.platform_lookup")
 
 -- Rows sort by name and a space platform is named platform-N, so every platform
 -- sorts after every planet. At a default of 20 the measured server returned 20
@@ -27,7 +28,7 @@ local M = {}
 
 M.manifest = {
   list_surfaces = {
-    desc = "Surfaces in the game: name, index, planet, this force's players on it, by name. Pass a name or index as another tool's surface. total beside shown says if there are more.",
+    desc = "Surfaces in the game: name, index, planet, this force's players on it, by name. A space platform also carries platform (its name), owner (the force that owns it), location (where it's stopped, left out while in flight) and state. Pass a name or index as another tool's surface. total beside shown says if there are more.",
     params = {
       limit = "integer rows, default " .. DEFAULT_SURFACES .. ", max " .. MAX_SURFACES,
     },
@@ -55,15 +56,17 @@ local function list_surfaces(a)
   -- hold a hundred of them. Sorted, then cut.
   local rows = {}
   for _, surface in pairs(game.surfaces) do
-    rows[#rows + 1] = {
+    local row = {
       name = surface.name,
       index = surface.index,
       planet = planet_name(surface),
       force_players = players_on[surface.index] or 0,
     }
+    platform_lookup.merge_into(row, surface)
+    rows[#rows + 1] = row
   end
   bounded.by_name(rows)
-  local shown = bounded.cut(rows, bounded.limit(a.limit, DEFAULT_SURFACES, MAX_SURFACES))
+  local shown = bounded.fit(bounded.cut(rows, bounded.limit(a.limit, DEFAULT_SURFACES, MAX_SURFACES)))
   return { force = force.name, total = #rows, shown = #shown, surfaces = shown }
 end
 

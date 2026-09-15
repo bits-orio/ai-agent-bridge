@@ -2,12 +2,29 @@
 //
 // A manifest entry describes each parameter as "<type>[!] <description>",
 // with type one of string, integer, number, boolean, list<string>,
-// list<number> or list<point> (a point is {x, y, surface?}), and a trailing
-// "!" meaning required (PLAN.md, Probe; phase4-spec.md §5). Anything else is
-// taken as a string whose description is the whole line, so a provider with a
-// typo, or a type word from a grammar this build predates, still exposes a
-// usable tool: the parameter reaches the model, just typed as a string
-// instead of whatever it was meant to be.
+// list<number>, list<point> (a point is {x, y, surface?}) or
+// enum<v1,v2,...> (D2: a closed vocabulary, e.g. "enum<force,surface,
+// platform,player>"), and a trailing "!" meaning required (PLAN.md, Probe;
+// phase4-spec.md §5). Anything else is taken as a string whose description
+// is the whole line, so a provider with a typo, or a type word from a
+// grammar this build predates, still exposes a usable tool: the parameter
+// reaches the model, just typed as a string instead of whatever it was
+// meant to be.
+//
+// enum<...> reuses the bracketed shape list<...> already established rather
+// than inventing a second syntax family, so one look at parseParam finds
+// both. It reaches the model as a real JSON Schema "enum", enforced by the
+// tool-calling layer, not as prose the model can misread the way a metric
+// name typed into a bare string param could be (docs/design/
+// phase5-sweep.md, "a hallucinated metric name is not a schema violation").
+// It is backward-safe in both directions. An older service reading
+// "enum<...>" does not know the word: paramTypes has no entry for it, so it
+// falls straight into the existing unknown-type branch below and degrades to
+// a plain string carrying the whole spec line, exactly the promise this
+// grammar already made for a word from a newer build (phase4-spec.md §5). A
+// newer service reading a param with no enum<...> at all takes every
+// existing path exactly as before; enumValues only ever fires on that one
+// prefix.
 
 package catalog
 
@@ -64,6 +81,9 @@ func parseParam(spec string) (map[string]any, bool) {
 	if items, ok := listItemSchema(word); ok {
 		return map[string]any{"type": "array", "items": items, "description": strings.TrimSpace(rest)}, required
 	}
+	if values, ok := enumValues(word); ok {
+		return map[string]any{"type": "string", "enum": values, "description": strings.TrimSpace(rest)}, required
+	}
 	kind, known := paramTypes[word]
 	if !known {
 		// Not a type word: the provider wrote a bare description. This is also
@@ -101,6 +121,32 @@ func listItemSchema(word string) (map[string]any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// enumValues reports the closed vocabulary word "enum<v1,v2,...>" declares,
+// and whether word is one at all. Values are split on commas and trimmed; an
+// empty value, from a stray "enum<>" or a trailing comma, is dropped rather
+// than reaching the model as a blank choice. A word with no values left
+// after that is not treated as an enum at all: parseParam's fallback then
+// keeps the whole original spec line as a string, the same way it would for
+// "enum<>" today, so a malformed declaration loses only its type, never the
+// parameter.
+func enumValues(word string) ([]string, bool) {
+	const prefix, suffix = "enum<", ">"
+	if !strings.HasPrefix(word, prefix) || !strings.HasSuffix(word, suffix) {
+		return nil, false
+	}
+	inner := word[len(prefix) : len(word)-len(suffix)]
+	var values []string
+	for _, v := range strings.Split(inner, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			values = append(values, v)
+		}
+	}
+	if len(values) == 0 {
+		return nil, false
+	}
+	return values, true
 }
 
 // describe is what the model reads to choose a tool: a short cost prefix
