@@ -267,6 +267,50 @@ check("rockets all=true returns one row per force with players or a launch",
 check("rockets all=true carries no items list, single-force answer only",
       rockets_all.ok and rockets_all.r.forces[1].items == nil, F.encode(rockets_all))
 
+-- ── entity_count all=true ─────────────────────────────────────────────
+-- Question 64 on 2026-09-15 asked how many solar panels each team had and
+-- spent fourteen entity_count calls in one round, one per force. The sweep
+-- carries the same engine work in one trip. As with the other two sweeps, the
+-- absence of a top-level force field is what tells it from the single-force
+-- shape, and both carry rows, so a mutation adding one back turns this red.
+local count_all = call("entity_count", { all = true, name = "lab" })
+check("entity_count all=true carries no top-level force field",
+      count_all.ok and count_all.r.force == nil, F.encode(count_all))
+check("entity_count all=true answers for every force with players, largest first",
+      count_all.ok and count_all.r.found == true and count_all.r.total == 1
+      and count_all.r.shown == 1 and count_all.r.forces[1].force == "player"
+      and count_all.r.forces[1].count == 12, F.encode(count_all))
+
+-- The sum across surfaces, with a real number on each so the assertion cannot
+-- pass on a single term plus zeroes: 12 on nauvis and 5 on orbit is 17.
+S.entity_counts_by_surface = { nauvis = { lab = 12 }, ["platform-1"] = { lab = 5 } }
+local count_sum = call("entity_count", { all = true, name = "lab" })
+check("entity_count all=true with no surface sums the force across every surface",
+      count_sum.ok and count_sum.r.forces[1].count == 17
+      and count_sum.r.surfaces_counted == 2, F.encode(count_sum))
+S.entity_counts_by_surface = {}
+check("entity_count all=true with no surface counts every surface and says so",
+      count_all.ok and count_all.r.surface == "all"
+      and count_all.r.surfaces_counted ~= nil, F.encode(count_all))
+
+local count_one = call("entity_count", { all = true, name = "lab", surface = "nauvis" })
+check("entity_count all=true on one named surface reports that surface",
+      count_one.ok and count_one.r.found == true and count_one.r.surface == "nauvis"
+      and count_one.r.surfaces_counted == 1, F.encode(count_one))
+
+local count_bad = call("entity_count", { all = true, name = "not-a-real-prototype" })
+check("entity_count all=true on an unknown prototype says found=false, not zero",
+      count_bad.ok and count_bad.r.found == false and count_bad.r.forces == nil,
+      F.encode(count_bad))
+
+-- The single-force shape is unchanged, byte for byte, and still carries the
+-- force field the sweep must not.
+local count_single = call("entity_count", { force = "player", surface = "nauvis", name = "lab" })
+check("entity_count without all keeps its single-force shape",
+      count_single.ok and count_single.r.force == "player"
+      and count_single.r.surface == "nauvis" and count_single.r.count == 12,
+      F.encode(count_single))
+
 -- ── game_time ─────────────────────────────────────────────────────────
 S.ticks_played = 216000 * 3 + 108000 -- three and a half hours
 local clock = call("game_time", { force = "player" })

@@ -228,6 +228,11 @@ function F.install(opts)
   -- The filter is checked rather than ignored, because passing a LuaForce where
   -- a name belongs is exactly the mistake a stub that accepts anything hides.
   S.entity_counts = { lab = 12, ["assembling-machine-2"] = 340 }
+  -- Per-surface overrides, so a sweep that sums a force's count across every
+  -- surface can actually be observed doing it. Without these every surface but
+  -- nauvis answers zero, and a sum of one real term plus zeroes passes whether
+  -- the code sums or simply takes the last value it saw.
+  S.entity_counts_by_surface = {}
   S.pollution = { nauvis = 1234.5, ["platform-1"] = 0 }
   for _, surface in pairs(S.surfaces) do
     local this = surface
@@ -236,6 +241,8 @@ function F.install(opts)
       assert(type(filter.name) == "string", "count_entities_filtered wants a name string")
       assert(type(filter.force) == "string", "count_entities_filtered wants a force name")
       S.last_entity_filter = filter
+      local per = S.entity_counts_by_surface[this.name]
+      if per then return per[filter.name] or 0 end
       if this.name ~= "nauvis" then return 0 end
       return S.entity_counts[filter.name] or 0
     end

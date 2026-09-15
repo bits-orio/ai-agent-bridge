@@ -1,4 +1,13 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.5
+Date: 2026-09-15
+  Changes:
+    - entity_count takes all=true and answers for every force that has players in one call, one row
+      each, largest count first, so "how many solar panels does each team have" is one lookup and
+      not one per team. Leave surface out to count every surface a force has, or name one to compare
+      the same surface across teams. A sweep that would cost more passes over the map than one call
+      may spend refuses and says to name a surface, rather than quietly spending them.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.4
 Date: 2026-09-14
   Changes:
