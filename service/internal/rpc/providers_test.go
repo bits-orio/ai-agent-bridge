@@ -2,11 +2,11 @@
 package rpc
 
 import (
-	"time"
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProvidersParsesTheList(t *testing.T) {

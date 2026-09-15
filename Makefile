@@ -47,7 +47,7 @@ lua-check:
 ## and its own failures went unseen. Run both, then fail if either did.
 lua-test:
 	@rc=0; \
-	for f in tests/lua/aab_test.lua tests/lua/aab_breadth_test.lua; do \
+	for f in tests/lua/aab_*test.lua; do \
 		echo "== $$f"; \
 		python3 tests/lua/luarun.py "$$f" || rc=1; \
 	done; \

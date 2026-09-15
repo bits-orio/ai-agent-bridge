@@ -5,11 +5,11 @@
 package rpc
 
 import (
-	"time"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // MaxPollLimit is the largest page of questions the companion serves in one

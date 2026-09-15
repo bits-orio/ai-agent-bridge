@@ -43,17 +43,17 @@ const (
 	// defaultPersonality is off: a server that never sets it answers in the
 	// plain voice, which is what an operator running this for other people
 	// gets unless they choose otherwise.
-	defaultPersonality = "off"
-	defaultSessionMaxExchanges     = 10
-	defaultSessionMaxBytes         = 8000
-	defaultQuestionsPerHour        = 20
-	defaultServerQuestionsHour     = 120
-	defaultMaxCostPerDay           = 5.0
-	defaultMaxToolCalls            = 30
-	defaultPollInterval            = time.Second
-	defaultHistoryPath             = "history.sqlite"
-	defaultControlAddr             = "127.0.0.1:8090"
-	defaultControlTokenEnv         = "AAB_CONTROL_TOKEN"
+	defaultPersonality         = "off"
+	defaultSessionMaxExchanges = 10
+	defaultSessionMaxBytes     = 8000
+	defaultQuestionsPerHour    = 20
+	defaultServerQuestionsHour = 120
+	defaultMaxCostPerDay       = 5.0
+	defaultMaxToolCalls        = 30
+	defaultPollInterval        = time.Second
+	defaultHistoryPath         = "history.sqlite"
+	defaultControlAddr         = "127.0.0.1:8090"
+	defaultControlTokenEnv     = "AAB_CONTROL_TOKEN"
 )
 
 // Duration is a time.Duration that unmarshals from a YAML string like "2s".
