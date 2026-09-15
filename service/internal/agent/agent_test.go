@@ -617,3 +617,45 @@ func TestMsRCONSumsBriefingAndRoundToolTimeExactlyOnce(t *testing.T) {
 		t.Errorf("ms_rcon = %d, want at most %d: briefing_ms or the round's own tool time looks double-counted", rec.MsRCON, ceiling)
 	}
 }
+
+// The catalog names an engine tool <iface>__<fn> and leaves the five history
+// tools and two ranking tools bare, so a model that has read nineteen prefixed
+// names invents a prefix for the seven that have none. Question 78 on
+// 2026-09-15 called "mts-v1__catch_up", got "there is no tool named", then
+// called "catch_up" and got its answer: a whole round spent on a naming
+// artifact, and the only reason that question got slower rather than faster.
+func TestDidYouMeanNamesTheToolTheModelProbablyWanted(t *testing.T) {
+	byName := map[string]tools.Tool{
+		"catch_up":                       {Name: "catch_up"},
+		"recent_chat":                    {Name: "recent_chat"},
+		"ai-agent-bridge-tools__rockets": {Name: "ai-agent-bridge-tools__rockets"},
+		"mts-v1__team_clocks":            {Name: "mts-v1__team_clocks"},
+	}
+
+	for _, tc := range []struct{ asked, want, why string }{
+		{"mts-v1__catch_up", "catch_up", "a prefix invented on a bare tool, the live case"},
+		{"ai-agent-bridge-tools__recent_chat", "recent_chat", "the same, with the other provider"},
+		{"rockets", "ai-agent-bridge-tools__rockets", "a prefix dropped from a real one, the mirror error"},
+		{"catch_up", "", "a name that resolves needs no suggestion"},
+		{"nonsense", "", "nothing close enough to name"},
+		{"mts-v1__nonsense", "", "a real prefix but no such tool anywhere"},
+		{"__", "", "degenerate input must not panic or match"},
+	} {
+		if got := didYouMean(tc.asked, byName); got != tc.want {
+			t.Errorf("didYouMean(%q) = %q, want %q (%s)", tc.asked, got, tc.want, tc.why)
+		}
+	}
+}
+
+// A suffix two providers both offer is genuinely ambiguous, and guessing there
+// would point the model at the wrong provider's tool. Saying nothing is the
+// only honest answer.
+func TestDidYouMeanSaysNothingWhenTwoProvidersCouldBeMeant(t *testing.T) {
+	byName := map[string]tools.Tool{
+		"mts-v1__standings":    {Name: "mts-v1__standings"},
+		"other-mod__standings": {Name: "other-mod__standings"},
+	}
+	if got := didYouMean("standings", byName); got != "" {
+		t.Errorf("didYouMean(\"standings\") = %q, want no suggestion at all when two providers offer it", got)
+	}
+}

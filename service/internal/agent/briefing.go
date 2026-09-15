@@ -149,6 +149,7 @@ type BriefingPayload struct {
 	Day *DayInfo     `json:"day,omitempty"`
 	Me  MeInfo       `json:"me"`
 	FS  []ForceRow   `json:"fs,omitempty"`
+	FSE int          `json:"fse,omitempty"`
 	SF  []SurfaceRow `json:"sf,omitempty"`
 	MK  []MarkerRow  `json:"mk,omitempty"`
 	CH  []ChatRow    `json:"ch,omitempty"`
@@ -518,6 +519,14 @@ func (a *looseArray[T]) UnmarshalJSON(b []byte) error {
 }
 
 type forcesReply struct {
+	// Empty is what list_forces left out: forces nobody has ever joined. The
+	// briefing carried fs without it until question 77 answered "15 teams
+	// (team-1 through team-15)" on a server with 14 populated teams, 20 team
+	// slots and a spectator force sitting in fs looking exactly like a team.
+	// The same question answered with a real list_forces call, at question 58,
+	// had both figures right. A key that makes an answer worse than no key is
+	// the thing this file exists to prevent.
+	Empty  int `json:"empty"`
 	Forces *looseArray[struct {
 		Name                 string `json:"name"`
 		PlayerCount          int    `json:"player_count"`
@@ -670,11 +679,24 @@ func buildPayload(q Question, mark SessionMark, ch []ChatRow, forces *forcesRepl
 		H:   float64(*gameTime.Hours),
 		Me:  meInfo(q),
 		FS:  forceRows(forces, research),
+		FSE: emptyForces(forces),
 		SF:  surfaceRows(surfaces),
 		CH:  ch,
 		PL:  playerRows(players),
 		Ses: newSessionInfo(mark),
 	}, true
+}
+
+// emptyForces reports how many forces list_forces left out, and zero when the
+// trip did not land at all. Zero is also the honest answer when every force has
+// players, and the two cases are indistinguishable on the wire by design: fse
+// is omitempty, so an absent fse means the same thing every absent briefing key
+// means, that the briefing is not saying, never that the number is zero.
+func emptyForces(forces *forcesReply) int {
+	if forces == nil {
+		return 0
+	}
+	return forces.Empty
 }
 
 // meInfo costs no tool trip: every field but P (Group B) is already on the

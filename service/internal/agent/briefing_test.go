@@ -889,3 +889,43 @@ func TestAssembleBuildsForceRowsWhenTheResearchSweepIsGenuinelyEmpty(t *testing.
 		}
 	}
 }
+
+// fse is what stops fs being read as the team list. Question 77 on
+// 2026-09-15 answered "15 teams (team-1 through team-15)" from a briefing
+// whose fs held 14 populated teams plus a spectator force, on a server with
+// 20 team slots. The same question answered with a real list_forces call, at
+// question 58, had every figure right, so the free tier made an answer worse
+// than the lookup it replaced. list_forces counts what it leaves out; the
+// briefing simply threw the number away.
+func TestAssembleCarriesTheForcesLeftOut(t *testing.T) {
+	ts := withTool(happyGroupATools(), "list_forces", engineTool("list_forces",
+		`{"total":2,"empty":6,"shown":2,"forces":[
+			{"name":"north","player_count":6,"connected_player_count":3},
+			{"name":"south","player_count":4,"connected_player_count":1}
+		]}`, nil))
+
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	m := fencedBody(t, res.Text)
+	raw, present := m["fse"]
+	if !present {
+		t.Fatalf("fse is missing: the briefing dropped the count of forces list_forces left out:\n%s", res.Text)
+	}
+	if string(raw) != "6" {
+		t.Errorf("fse = %s, want 6, the number list_forces reported leaving out", raw)
+	}
+}
+
+// Zero forces left out is the ordinary case on a server with no spare slots,
+// and omitempty means it renders as nothing at all. That is the same absence
+// every other briefing key uses and it must not read as a figure.
+func TestAssembleOmitsFseWhenNothingWasLeftOut(t *testing.T) {
+	res := Assemble(context.Background(), index(happyGroupATools()), askerQuestion(), freshMark(), nil, BriefingBudget)
+
+	if _, present := fencedBody(t, res.Text)["fse"]; present {
+		t.Errorf("fse should be absent when list_forces left nothing out:\n%s", res.Text)
+	}
+}

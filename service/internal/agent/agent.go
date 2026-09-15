@@ -652,11 +652,47 @@ func enforceRoundBudget(results []model.Block, reads []int, cap int) {
 // so every lookup the model asked for shows up in the ledger exactly once;
 // ledgerOn false makes that second return the zero value instead, skipping
 // the args clip and the Floor call that building a real one costs.
+// didYouMean names the tool the model probably wanted, or "" when nothing is
+// close enough to say. The catalog names an engine tool <iface>__<fn> while the
+// five history tools and the two ranking tools carry bare names, and a model
+// that has read nineteen prefixed names will put a prefix on one of the seven
+// that has none: question 78 on 2026-09-15 called "mts-v1__catch_up", which
+// does not exist, then "catch_up", which does, and spent a whole round on the
+// guess. It is the only reason that question got slower rather than faster.
+//
+// Both directions are handled, because both are available to the model: a
+// prefix invented on a bare name, and a prefix dropped from a real one. The
+// second only answers when exactly one tool could be meant. Nothing here calls
+// the tool it names: a wrong guess acted on silently would be worse than the
+// round it saves, so this only ever improves the error the model reads.
+func didYouMean(name string, byName map[string]tools.Tool) string {
+	if i := strings.LastIndex(name, "__"); i >= 0 {
+		if bare := name[i+2:]; bare != "" {
+			if _, ok := byName[bare]; ok {
+				return bare
+			}
+		}
+	}
+	var only string
+	for full := range byName {
+		if i := strings.LastIndex(full, "__"); i >= 0 && full[i+2:] == name {
+			if only != "" {
+				return "" // more than one provider offers it, so say nothing
+			}
+			only = full
+		}
+	}
+	return only
+}
+
 func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) (model.Block, ledger.ToolCall) {
 	started := time.Now()
 	t, known := byName[call.Name]
 	if !known {
 		err := fmt.Errorf("there is no tool named %q", call.Name)
+		if did := didYouMean(call.Name, byName); did != "" {
+			err = fmt.Errorf("there is no tool named %q, did you mean %q", call.Name, did)
+		}
 		return failed(call.ID, err), maybeToolCallRecord(ledgerOn, call.Name, call.Input, limit, time.Since(started), floor, 0, err)
 	}
 	args := call.Input

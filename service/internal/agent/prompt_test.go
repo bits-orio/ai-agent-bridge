@@ -176,3 +176,30 @@ func TestVoiceTextOnlyRecognisesTheOneFlavour(t *testing.T) {
 		}
 	}
 }
+
+// The free tier made one answer worse than the lookup it replaced. Question
+// 77 on 2026-09-15 answered "15 teams (team-1 through team-15)" from fs alone,
+// on a server with 14 populated teams, 20 team slots and a spectator force
+// sitting in fs looking like any other row. Question 58, the same question
+// with a real list_forces call, had both figures right. So fs must be
+// described as what it is, and the team count must not be advertised as free.
+func TestSystemPromptDoesNotOfferTheTeamCountForFree(t *testing.T) {
+	pa := systemPrompt("")
+
+	for _, want := range []string{
+		"fs is one row per force that has ever had a player",
+		"fse is how many forces were left out",
+		"fs is not the team list",
+		"list_forces questions, not briefing questions",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the fs rule, wanted %q:\n%s", want, pa)
+		}
+	}
+	// The free-tier example list and the fs rule contradicted each other in
+	// the first draft of this fix, and the concrete example wins over the
+	// abstract rule every time, which is how the who-is-online defect worked.
+	if strings.Contains(pa, "how many teams exist are all briefing answers") {
+		t.Error("the team count is still advertised as a briefing answer, contradicting the fs rule")
+	}
+}

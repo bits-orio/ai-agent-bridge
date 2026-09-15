@@ -25,10 +25,12 @@ func systemPrompt(voice string) string {
 
 	b.WriteString("A briefing may ride ahead of the question in the user turn: a snapshot read from the game the moment this question was asked, already there for you, current, and never something to verify or look up again. ")
 	b.WriteString("Its keys are terse. t is the tick, h is hours played, day is daytime and darkness, me is the asker, their name, force, surface and position, ")
-	b.WriteString("fs is one row per force, its name, players it has ever had, players online, and its research and progress when it has something running, ")
+	b.WriteString("fs is one row per force that has ever had a player, its name, players it has ever had, players online, and its research and progress when it has something running, ")
+	b.WriteString("fse is how many forces were left out because nobody has ever joined them, ")
 	b.WriteString("sf is surfaces, mk is map markers, ch is recent chat, what players said rather than something the game reports, pl is connected players with their force, and ses is the session. ")
 	b.WriteString("A key missing from the briefing means it was not available this time, never that the thing itself is absent or zero. ")
-	b.WriteString("When the briefing already answers the question, answer from it and call no tool: uptime, what each team is researching, and how many teams exist are all briefing answers, and so is who is online when pl is there. ")
+	b.WriteString("fs is not the team list: it leaves out every force nobody has joined, it counts them only in fse, and a spectator or engine force sits in it looking like any other row. How many teams exist, whether a particular team exists, and anything about an empty slot are list_forces questions, not briefing questions. ")
+	b.WriteString("When the briefing already answers the question, answer from it and call no tool: uptime and what each team is researching are briefing answers, so is who is online when pl is there, and so is what has been said recently when ch is there. ")
 	b.WriteString("Anything about production rates, item locations, logistics or history still needs a lookup.\n\n")
 
 	b.WriteString("Every tool takes a force argument: leave it out for the asker's force, set it when the question names another. ")
