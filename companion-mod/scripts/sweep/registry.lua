@@ -5,22 +5,45 @@
 -- Merges every sweep metric module the way scripts/tools/engine.lua merges
 -- tool modules: one place a metric gets added, so the tool's own vocabulary
 -- (metric_line, used in its manifest desc) and the found=false card set
--- (cards) can never drift from what is actually registered. Ship only the
--- four metrics the phase5 contract names; more are Stage 5.
+-- (cards) can never drift from what is actually registered. The four the
+-- phase5 contract named shipped first; item_made, item_rate, pollution,
+-- evolution, robots and networks are Stage 5 Unit B, each delegating to a
+-- tool docs/design/phase5-sweep.md already lists as sweep-worthy. kills,
+-- built, fluid_rate and trains are Stage 5 Unit A, each delegating to a tool
+-- this same stage adds (scripts/tools/{kills,built,fluid_rate,trains}.lua).
 
 local probe = require("scripts.probe")
 local axes  = require("scripts.sweep.axes")
 
-local entities_metric = require("scripts.sweep.metrics.entities")
-local rockets_metric  = require("scripts.sweep.metrics.rockets")
-local research_metric = require("scripts.sweep.metrics.research")
-local players_metric  = require("scripts.sweep.metrics.players")
+local entities_metric  = require("scripts.sweep.metrics.entities")
+local rockets_metric   = require("scripts.sweep.metrics.rockets")
+local research_metric  = require("scripts.sweep.metrics.research")
+local players_metric   = require("scripts.sweep.metrics.players")
+local item_made_metric = require("scripts.sweep.metrics.item_made")
+local item_rate_metric = require("scripts.sweep.metrics.item_rate")
+local pollution_metric = require("scripts.sweep.metrics.pollution")
+local evolution_metric  = require("scripts.sweep.metrics.evolution")
+local logistics_metric  = require("scripts.sweep.metrics.logistics")
+local kills_metric      = require("scripts.sweep.metrics.kills")
+local built_metric      = require("scripts.sweep.metrics.built")
+local fluid_rate_metric = require("scripts.sweep.metrics.fluid_rate")
+local trains_metric     = require("scripts.sweep.metrics.trains")
 
 local METRICS = {
-  entities = entities_metric,
-  rockets  = rockets_metric,
-  research = research_metric,
-  players  = players_metric,
+  entities   = entities_metric,
+  rockets    = rockets_metric,
+  research   = research_metric,
+  players    = players_metric,
+  item_made  = item_made_metric,
+  item_rate  = item_rate_metric,
+  pollution  = pollution_metric,
+  evolution  = evolution_metric,
+  robots     = logistics_metric.robots,
+  networks   = logistics_metric.networks,
+  kills      = kills_metric,
+  built      = built_metric,
+  fluid_rate = fluid_rate_metric,
+  trains     = trains_metric,
 }
 
 -- A metric with no read is a sweep entry that can never answer: fail at

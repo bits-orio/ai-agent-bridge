@@ -21,6 +21,7 @@ the moment its dependency lands, with no change needed here.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
@@ -422,6 +423,85 @@ def scenario_sweep_provider_metric(ctx: Ctx) -> Tuple[Status, str]:
         return "FAIL", "qid=%d sweep reply was not ranked to %r by the service: %r" % (qid, leader, entry)
     return "PASS", "qid=%d swept %s.standings across %d forces and the service ranked %s first" % (
         qid, ctx.provider_iface, len(rows), leader)
+
+
+def _sweep_answer_problem(entry: dict, metric: str) -> Optional[str]:
+    """None when `entry`'s lines look like a real, ranked sweep of `metric`;
+    otherwise the reason they don't. Shared by scenario_sweep_kills and
+    scenario_sweep_item_made below: both need the same two checks
+    scenario_sweep_provider_metric makes for standings (the metric name the
+    reply carries, and a leader the service's ranker added), minus that
+    scenario's direct provider call, which only makes sense for a metric a
+    provider declares. kills and item_made are the companion's own (stage 5
+    contract, Unit C: "prove two of them end to end"), so there is no
+    second process to probe for the expected value independently; the
+    proof here is that the keyword rule reached sweep at all and that the
+    service ranked what came back, not a specific leader computed here."""
+    lines = " | ".join(entry.get("lines") or [])
+    if ('"metric":"%s"' % metric) not in lines:
+        return "answer is not a sweep of %s" % metric
+    # A leader with a name, not merely the key: the ranker adds
+    # "leader":"<force>" and an empty or missing name means it ranked
+    # nothing, which is what an unranked or refused reply looks like.
+    if not re.search(r'"leader":"[^"]+"', lines):
+        return "sweep reply carried no named leader (service did not rank it)"
+    return None
+
+
+def scenario_sweep_kills(ctx: Ctx) -> Tuple[Status, str]:
+    """Stage 5 Unit A's kills metric, asked and ranked end to end (stage5.md
+    Unit C). "kills" in the question routes the fake model to
+    sweep{metric:"kills"} (service/internal/model/fake/keywords.go).
+
+    Needs a client: kills.lua's all=true only rows a force that
+    `#force.players > 0` (walk.lua's live_forces, the same rule every
+    force-axis sweep follows), and a headless rig with nobody connected
+    never creates a LuaPlayer at all, on any force. Measured: without
+    --client this comes back `"rows":{},"total":0,"shown":0"` and
+    catalog/sweep.go's rankSweep refuses to add a leader over zero rows
+    (its own hard gate, "rows is non-empty"), so this scenario cannot pass
+    without one, the same reason scenario_chat_prefix and
+    scenario_last_death are needs_client."""
+    qid = ask_via_remote(ctx.server_rcon, "which force has the most kills", force="player")
+    try:
+        entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    problem = _sweep_answer_problem(entry, "kills")
+    if problem:
+        return "FAIL", "qid=%d %s: %r" % (qid, problem, entry)
+    return "PASS", "qid=%d swept kills and the service ranked it: %r" % (qid, entry.get("lines"))
+
+
+def scenario_sweep_item_made(ctx: Ctx) -> Tuple[Status, str]:
+    """Stage 5 Unit B's item_made metric, asked and ranked end to end
+    (stage5.md Unit C). "made" in the question routes the fake model to
+    sweep{metric:"item_made", subject: itemOf(text)}
+    (service/internal/model/fake/keywords.go); itemOf finds no "of"/"for"
+    in this question text, so subject falls back to its default,
+    iron-plate, the exact example the contract names.
+
+    Needs a client, same reason as scenario_sweep_kills: item_made.lua's
+    read() iterates walk.lua's ctx.forces, which is live_forces() filtered
+    to `#force.players > 0`, so a headless rig with nobody connected walks
+    zero forces and never calls production_since at all. Measured: without
+    --client this comes back `"rows":{},"total":0,"shown":0"`, the same
+    empty-rows shape scenario_sweep_kills hits, for the same reason."""
+    qid = ask_via_remote(ctx.server_rcon, "how much iron plate has each team made", force="player")
+    try:
+        entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    problem = _sweep_answer_problem(entry, "item_made")
+    if problem:
+        return "FAIL", "qid=%d %s: %r" % (qid, problem, entry)
+    return "PASS", "qid=%d swept item_made and the service ranked it: %r" % (qid, entry.get("lines"))
 
 
 def scenario_ask_table_of_players(ctx: Ctx) -> Tuple[Status, str]:
@@ -884,6 +964,8 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask via remote interface: what forces are there", scenario_ask_forces),
     Scenario("ask hello: provider greeting", scenario_ask_hello),
     Scenario("sweep a metric the provider declared", scenario_sweep_provider_metric),
+    Scenario("sweep: kills, ranked end to end", scenario_sweep_kills, needs_client=True),
+    Scenario("sweep: item_made, ranked end to end", scenario_sweep_item_made, needs_client=True),
     Scenario("ask: table of players", scenario_ask_table_of_players),
     Scenario("ask: what is in the research queue", scenario_research_queue),
     Scenario("ask: tech status of automation", scenario_tech_status),

@@ -427,18 +427,29 @@ for param, spec in pairs((sweep_entry or {}).params or {}) do
   check("sweep does not declare force", param ~= "force", param)
 end
 
--- The registry itself: exactly the four metrics the contract names, entities
--- the only one needing a subject.
+-- The registry itself: the four metrics the phase 5 contract named are
+-- always there, and every card names a metric the registry can serve. The
+-- count is not pinned: Stage 5 grew it from four to fourteen, and a literal
+-- here would have to move every time a metric lands.
 local cards = sweep_registry.cards()
-check("the registry carries all four contracted metrics and no more", #cards == 4, #cards)
+check("the registry carries at least the four contracted metrics", #cards >= 4, #cards)
+for _, card in ipairs(cards) do
+  check("card " .. card.metric .. " names a metric the registry serves",
+        sweep_registry.get(card.metric) ~= nil, card.metric)
+end
 local by_name = {}
 for _, card in ipairs(cards) do by_name[card.metric] = card end
 for _, name in ipairs({ "entities", "rockets", "research", "players" }) do
   check("the registry carries " .. name, by_name[name] ~= nil)
 end
-check("only entities declares a subject",
-      by_name.entities.subject ~= nil and by_name.rockets.subject == nil
-      and by_name.research.subject == nil and by_name.players.subject == nil)
+-- Which metrics take a subject is part of what the generated description
+-- tells the model, so it is pinned by name on both sides of the line.
+for _, name in ipairs({ "entities", "item_made", "item_rate", "fluid_rate" }) do
+  check(name .. " declares a subject", by_name[name] ~= nil and by_name[name].subject ~= nil, name)
+end
+for _, name in ipairs({ "rockets", "research", "players", "kills", "built", "trains" }) do
+  check(name .. " declares no subject", by_name[name] ~= nil and by_name[name].subject == nil, name)
+end
 
 -- ── unrecognised metric or axis: found=false with every card, before any
 -- pass runs, so a wrong guess recovers in one round (the phase5 contract's
@@ -448,7 +459,7 @@ check("sweep with no metric is a refusal, not a Lua error", no_metric.ok, F.enco
 check("sweep with no metric answers found=false and carries sweep_v",
       no_metric.r.sweep_v == 1 and no_metric.r.found == false, F.encode(no_metric))
 check("the found=false reply carries every metric's own card",
-      no_metric.r.metrics ~= nil and #no_metric.r.metrics == 4, F.encode(no_metric))
+      no_metric.r.metrics ~= nil and #no_metric.r.metrics == #cards, F.encode(no_metric))
 
 local bad_metric = call("sweep", { metric = "standings" })
 check("an unknown metric name answers found=false the same way",

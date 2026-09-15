@@ -141,7 +141,7 @@ change, so it cannot break a 1.0.4 companion by construction.
 | 2 | briefing carries platform owner and location; stops filtering platform rows out on `ForcePlayers > 0` | service, feature-detecting |
 | 3 | the `sweep` tool and its delegating registry | companion, built; version is the owner's call |
 | 4 | service-side ranker in the return path, so a sweep reply is ranked through the same `arith.order` that `rank` uses | service |
-| 5 | remaining metrics (open); `enum` in the grammar (built); provider-declared metrics (built, generic) | partly built |
+| 5 | the remaining metrics (built, fourteen in all); `enum` in the grammar (built); provider-declared metrics (built, generic) | built |
 
 Stage 1 alone makes question 80 a single call, because `per_surface` on the
 existing `entity_count` sweep returns one row per force-and-surface and the
@@ -188,6 +188,38 @@ confidently not know things. They also answer "what is", not "which has most".
    wider. phase4-spec.md section 5 records it.
 5. **Release: the owner tests before anything ships.** Nothing here bumps
    `info.json`.
+
+## The metrics, and what each delegates to
+
+Every metric is a declaration over a tool that already measures the thing.
+None calls an engine method itself, so there is one implementation of each
+measurement and one place its cost is bounded.
+
+| metric | delegates to | axes | subject | cost |
+|---|---|---|---|---|
+| `entities` | `entity_count{all}` and `{all, per_surface}` | force, surface, platform, force+surface | entity prototype | force axis is the engine's O(1) counter; the rest one pass per force per surface |
+| `rockets` | `rockets{all}` | force | | free counter |
+| `research` | `current_research{all}` | force | | free |
+| `players` | `list_players{all}` | force, player | | free |
+| `item_made` | `production_since{since_tick=0}` per force | force | item prototype | exact lifetime counters, free |
+| `item_rate` | `item_rate` per force per surface | force+surface, force | item prototype, optional window | counter reads, one per quality |
+| `pollution` | `pollution` per surface | surface | | the engine walks polluted chunks |
+| `evolution` | `evolution` per force per surface | force+surface, surface | | free |
+| `robots` | `logistics_summary{contents=false}` per force per surface | force, force+surface | | free; reads the pre-cut total |
+| `networks` | `logistics_summary{contents=false}` per force per surface | force, force+surface | | free |
+| `kills` | `kills{all}` | force | | free counter |
+| `built` | `built{all}` | force | | free counter |
+| `fluid_rate` | `fluid_rate{all}` | force, force+surface | fluid prototype, optional window | counter reads |
+| `trains` | `trains{all}` | force | | one `get_trains` per force per surface, one wrapper per train |
+
+Four of these needed a tool that did not exist: `kills`, `built`, `fluid_rate`
+and `trains` are new companion tools backed by the three per-surface
+`LuaFlowStatistics` families on `LuaForce` and by `game.train_manager`, each
+with its own `all=true`, so the model can call them directly as well.
+
+Not a companion metric, deliberately: **playtime**. A team's clock belongs to
+the team mod, and a team mod makes it sweepable by declaring a `sweep` block on
+its clock tool. The companion never names a mod.
 
 ## Provider-declared metrics
 

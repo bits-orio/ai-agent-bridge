@@ -9,6 +9,20 @@ Date: 2026-09-15
       surface, space platform, player or force-and-surface instead of by force. Every metric
       delegates to a tool that already exists, so nothing is measured twice, and a sweep the
       companion would have to cut is refused whole rather than ranked over whoever survived.
+    - sweep gained six more metrics, each delegating to a tool this mod already ships rather than
+      measuring anything a second time: item_made and item_rate (how much of one item a force has
+      made, ever or right now), pollution and evolution (per surface, and per force for
+      evolution), and robots and networks (logistic robots and logistic networks a force has,
+      summed over its surfaces by default). logistics_summary takes an additive contents=false so
+      robots and networks never pay for a network's item contents, the one expensive read that
+      tool does.
+    - Four new lookups, and a sweep metric for each: kills and built (how many enemies a force has
+      killed and lost, how many entities it has built and mined back, summed over every surface
+      unless one is named, with a largest-first breakdown of the kinds), fluid_rate (production and
+      consumption of one fluid, per minute, the fluid version of item_rate), and trains (how many
+      trains a force has, and how many are moving or under manual control right now). Each takes
+      all=true the same way rockets and entity_count already do, so "which team has killed the
+      most" or "how many trains does each team have" is one call.
     - list_surfaces says which space platform a surface is, who owns it, where it is stopped and
       what it is doing, so "which space ship" questions no longer guess an owner force by force.
     - entity_count takes all=true and answers for every force that has players in one call, one row

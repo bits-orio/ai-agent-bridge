@@ -42,6 +42,12 @@ func firstCall(text string, defs []model.ToolDef) *call {
 	// without the companion, or this model, ever naming that mod.
 	case has(text, "standings"):
 		return resolve(defs, "sweep", map[string]any{"metric": "standings"})
+	// Stage 5's own sweep metrics (docs/design/phase5-sweep.md staging
+	// table, stage 5): kills delegates to a tool that stage adds
+	// (companion-mod/scripts/tools/kills.lua), item_made to the existing
+	// production_since. Proven end to end in tests/e2e/scenarios.py.
+	case has(text, "kills"):
+		return resolve(defs, "sweep", map[string]any{"metric": "kills"})
 	case has(text, "forces"), has(text, "teams"):
 		return resolve(defs, "list_forces", nil)
 	case has(text, "players"):
@@ -73,6 +79,18 @@ func firstCall(text string, defs []model.ToolDef) *call {
 		return resolve(defs, "game_time", nil)
 	case has(text, "pollution"):
 		return resolve(defs, "pollution", map[string]any{"surface": "nauvis"})
+	// "which item have we made the most of" ranks ITEMS within one force,
+	// which is top_items, and it would otherwise fall into the each-team rule
+	// below on the word "which".
+	case has(text, "which item"), has(text, "what item"):
+		return resolve(defs, "top_items", map[string]any{"surface": "nauvis", "window": "one_minute"})
+	// "made" alone is a common past participle that entity_count ("how many
+	// turrets have we made") answers, and that rule sits above this one so it
+	// wins. "iron plate made since the start" reaches production_since below
+	// because it has no "each" or "which", not because of position: this
+	// rule wants the shape of an each-team question as well as the word.
+	case has(text, "made") && (has(text, "each") || has(text, "which")):
+		return resolve(defs, "sweep", map[string]any{"metric": "item_made", "subject": itemOf(text)})
 	case has(text, "since"):
 		return resolve(defs, "production_since", map[string]any{
 			"surface":    "nauvis",

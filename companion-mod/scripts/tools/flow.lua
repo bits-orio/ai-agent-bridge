@@ -65,6 +65,13 @@ M.SAMPLES_PER_WINDOW = SAMPLES_PER_WINDOW
 -- never drift out of step with what require_window actually accepts.
 M.window_names = table.concat(ORDER, ", ")
 
+--- Whether `name` is a window this game offers, without erroring. A sweep
+--- metric checks its window argument with this so a wrong one comes back as
+--- a found=false card the model can read, not as a provider_error.
+function M.has_window(name)
+  return type(name) == "string" and WINDOWS[name] ~= nil
+end
+
 --- Resolves a window name to {precision, ticks}, or error()s with the full
 --- list of names, which scripts/probe.lua turns into a provider_error reply.
 function M.require_window(name)
@@ -119,6 +126,84 @@ function M.window_covering(elapsed_ticks)
   end
   local longest = ORDER[#ORDER]
   return longest, WINDOWS[longest]
+end
+
+-- ── shared helpers for the count-style statistics (kills, build) ────────
+--
+-- scripts/tools/kills.lua and scripts/tools/built.lua both read a force's own
+-- LuaFlowStatistics through a per-surface method (get_kill_count_statistics,
+-- get_entity_build_count_statistics), and unlike get_evolution_factor neither
+-- one takes an optional surface: verified against the 2.0.77 dump,
+-- /home/shobhitg/factorio/doc-html/runtime-api.json, `surface` is a required
+-- SurfaceIdentification on both. So "leave surface out to count every
+-- surface" means the same walk-and-sum production_since.lua already does for
+-- item counters, not a single call with surface omitted, and that walk
+-- belongs here once rather than being written twice by two files that would
+-- otherwise drift apart the way CONTEXT.md warns entity_count.lua's own walk
+-- already did once.
+
+local surface_lookup = require("scripts.tools.surface_lookup")
+
+--- Every valid surface, name order: the same "no surface named means every
+--- surface" rule production_since.lua's own surfaces_for() follows. Kept
+--- private; callers reach it only through M.surfaces_for below.
+local function every_surface()
+  local all = {}
+  for _, surface in pairs(game.surfaces) do
+    if surface.valid then all[#all + 1] = surface end
+  end
+  table.sort(all, function(x, y) return x.name < y.name end)
+  return all
+end
+
+--- Which surfaces a count-style tool counts over: the one named, or every
+--- surface when none was. Returns the surfaces to walk, or nil plus a
+--- ready-to-return miss reply on an unknown name; the caller still owns
+--- adding its own `force` field to that miss, the same division
+--- production.lua and entity_count.lua already keep with surface_lookup.
+function M.surfaces_for(a)
+  if a.surface == nil or a.surface == "" or a.surface == "all" then
+    return every_surface(), nil
+  end
+  local surface, miss = surface_lookup.find(a.surface)
+  if not surface then return nil, miss end
+  return { surface }, nil
+end
+
+--- Sums a force's own count-style LuaFlowStatistics over `surfaces`: the
+--- input and output totals, each side's counts merged by prototype name
+--- across every surface counted (so a kind killed on two surfaces is one
+--- kind, not two), and one {surface, input, output} row per surface that had
+--- anything, or every surface when there is only one to report on. Every
+--- number stays a raw Lua number here; rounding and bounding for the wire
+--- are each caller's own job, the same split production_since.lua keeps
+--- between summing and formatting.
+---
+--- `get_stats(surface)` is the caller's own force.get_kill_count_statistics
+--- or force.get_entity_build_count_statistics: this file names neither, only
+--- that both hand back a LuaFlowStatistics (input_counts, output_counts).
+function M.count_totals(surfaces, get_stats)
+  local input_total, output_total = 0, 0
+  local input_by_name, output_by_name = {}, {}
+  local rows = {}
+  for _, surface in ipairs(surfaces) do
+    local stats = get_stats(surface)
+    local here_in, here_out = 0, 0
+    for name, count in pairs(stats.input_counts or {}) do
+      here_in = here_in + count
+      input_by_name[name] = (input_by_name[name] or 0) + count
+    end
+    for name, count in pairs(stats.output_counts or {}) do
+      here_out = here_out + count
+      output_by_name[name] = (output_by_name[name] or 0) + count
+    end
+    input_total = input_total + here_in
+    output_total = output_total + here_out
+    if here_in > 0 or here_out > 0 or #surfaces == 1 then
+      rows[#rows + 1] = { surface = surface.name, input = here_in, output = here_out }
+    end
+  end
+  return input_total, output_total, input_by_name, output_by_name, rows
 end
 
 return M

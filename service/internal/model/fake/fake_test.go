@@ -55,6 +55,8 @@ var everyTool = defs(
 	"ai-agent-bridge-tools__production_since",
 	"history__last_event",
 	"aab-test-provider__hello",
+	"ai-agent-bridge-tools__sweep",
+	"ai-agent-bridge-tools__top_items",
 )
 
 func TestFirstStepPicksAToolByKeyword(t *testing.T) {
@@ -258,5 +260,44 @@ func TestUsageIsFixed(t *testing.T) {
 	}
 	if step.StopReason != model.StopToolUse {
 		t.Errorf("stop reason = %q, want tool_use", step.StopReason)
+	}
+}
+
+// The two sweep rules Stage 5 added, and the two questions the first version
+// of the made rule stole: "made" is a common past participle, and placed
+// ahead of the entity_count and production_since rules it sent "how many
+// turrets have we made" to a sweep of iron plate. The rule wants the shape
+// of an each-team question and sits below the two it shadowed.
+func TestSweepKeywordsDoNotShadowTheNarrowTools(t *testing.T) {
+	for _, tc := range []struct {
+		question, want string
+		args           map[string]any
+	}{
+		{"which team has the most kills", "ai-agent-bridge-tools__sweep", map[string]any{"metric": "kills"}},
+		{"how much iron plate has each team made", "ai-agent-bridge-tools__sweep", map[string]any{"metric": "item_made", "subject": "iron-plate"}},
+		{"which team made the most iron plate", "ai-agent-bridge-tools__sweep", map[string]any{"metric": "item_made", "subject": "iron-plate"}},
+		{"how many turrets have we made", "ai-agent-bridge-tools__entity_count", nil},
+		{"iron plate made since the start", "ai-agent-bridge-tools__production_since", nil},
+		// A which-ITEM question ranks items within one force, not forces.
+		{"which item have we made the most of", "ai-agent-bridge-tools__top_items", nil},
+	} {
+		step, err := New().Step(context.Background(), "", ask(tc.question), everyTool)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.question, err)
+		}
+		block := firstBlock(t, step)
+		if block.Name != tc.want {
+			t.Errorf("%q called %q, want %q", tc.question, block.Name, tc.want)
+			continue
+		}
+		if tc.args == nil {
+			continue
+		}
+		args := input(t, block)
+		for key, want := range tc.args {
+			if got := args[key]; got != want {
+				t.Errorf("%q: arg %s = %v, want %v", tc.question, key, got, want)
+			}
+		}
 	}
 }

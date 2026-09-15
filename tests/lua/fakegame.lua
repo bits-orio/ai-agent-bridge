@@ -561,7 +561,38 @@ function F.install(opts)
     items_launched = {},
     get_entity_count = function() return 0 end,
     platforms = {},
+    -- The per-force reads every LuaForce carries, with team-3's own numbers,
+    -- so a sweep that walks two forces can be seen ORDERING them. Without
+    -- these, five of the six delegating metrics crashed on a nil method the
+    -- moment team-3 had a player, so every ordering claim had only ever been
+    -- checked against a single row, which any order satisfies.
+    logistic_networks = {},
+    get_item_production_statistics = function(id)
+      local surface = (type(id) == "table") and id or S.surfaces[id]
+      assert(surface and surface.valid, "unknown surface " .. tostring(id))
+      S.last_stats_surface = surface.name
+      return S.team3_stats
+    end,
   }
+  -- team-3's item statistics: a fixed multiple of player's, on nauvis only,
+  -- through the same lifetime_count and get_flow_count shapes as player's so
+  -- the two fakes cannot drift apart.
+  S.team3_scale = 0
+  S.team3_stats = {
+    input_counts = setmetatable({}, { __index = function(_, k) return (stats.input_counts[k] or 0) * S.team3_scale end }),
+    output_counts = setmetatable({}, { __index = function(_, k) return (stats.output_counts[k] or 0) * S.team3_scale end }),
+  }
+  S.team3_stats.get_input_count = function(id) return stats.get_input_count(id) * S.team3_scale end
+  S.team3_stats.get_output_count = function(id) return stats.get_output_count(id) * S.team3_scale end
+  S.team3_stats.get_flow_count = function(a) return stats.get_flow_count(a) * S.team3_scale end
+  S.team3_evolution = 0
+  for _, method in ipairs({ "get_evolution_factor", "get_evolution_factor_by_time",
+                           "get_evolution_factor_by_pollution", "get_evolution_factor_by_killing_spawners" }) do
+    S.team3[method] = function(surface)
+      assert(type(surface) == "table" and surface.valid, method .. " wants a surface")
+      return S.team3_evolution
+    end
+  end
 
   _G.game = {
     forces = { player = force, ["team-3"] = S.team3 },
@@ -584,6 +615,149 @@ function F.install(opts)
     if k == "tick" then return S.tick end
     if k == "ticks_played" then return S.ticks_played end
   end })
+
+  -- ── kills, built and fluid production: Stage 5 Unit A ────────────────
+  -- LuaForce::get_kill_count_statistics(surface) and
+  -- ::get_entity_build_count_statistics(surface) both require a surface
+  -- (verified: /home/shobhitg/factorio/doc-html/runtime-api.json, 2.0.77;
+  -- unlike get_evolution_factor, `surface` is not optional on either), so a
+  -- fake that let it default to nil would hide a bug the real engine would
+  -- refuse outright. team-3 carries its own, larger counts, a real number
+  -- rather than the zero the item-stats fixture above leaves every other
+  -- force at, so an all=true sweep across kills, built, fluid_rate and
+  -- trains all have an actual leader to sort ahead of player, the same
+  -- reason S.team3.rockets_launched got set to 99 further up this file.
+  local function stat_counts(input_counts, output_counts)
+    return { input_counts = input_counts, output_counts = output_counts }
+  end
+  S.kill_counts = {
+    player = {
+      nauvis = stat_counts({ ["small-biter"] = 40, ["medium-biter"] = 10 }, { character = 3 }),
+      ["platform-1"] = stat_counts({ ["small-biter"] = 5 }, {}),
+    },
+    ["team-3"] = { nauvis = stat_counts({ ["small-biter"] = 99 }, {}) },
+  }
+  S.build_counts = {
+    player = {
+      nauvis = stat_counts({ ["assembling-machine-2"] = 6, lab = 2 }, { ["stone-furnace"] = 1 }),
+      ["platform-1"] = stat_counts({ ["solar-panel"] = 3 }, {}),
+    },
+    ["team-3"] = { nauvis = stat_counts({ lab = 200 }, {}) },
+  }
+  local function attach_count_stats(target, force_name)
+    target.get_kill_count_statistics = function(surface)
+      assert(type(surface) == "table" and surface.valid, "get_kill_count_statistics wants a surface")
+      local by_surface = S.kill_counts[force_name] or {}
+      return by_surface[surface.name] or stat_counts({}, {})
+    end
+    target.get_entity_build_count_statistics = function(surface)
+      assert(type(surface) == "table" and surface.valid, "get_entity_build_count_statistics wants a surface")
+      local by_surface = S.build_counts[force_name] or {}
+      return by_surface[surface.name] or stat_counts({}, {})
+    end
+  end
+  attach_count_stats(force, "player")
+  attach_count_stats(S.team3, "team-3")
+
+  -- LuaForce::get_fluid_production_statistics(surface) reads a
+  -- LuaFlowStatistics the same shape the item one does, but FluidID
+  -- (concepts.FlowStatisticsID: "Used with fluid production statistics")
+  -- carries no quality form at all, unlike ItemWithQualityID, so this fake's
+  -- own get_flow_count asserts a bare string name rather than accepting the
+  -- {name=,quality=} table the item-side fake above takes: a caller that
+  -- copied flow.item_flow's quality loop onto a fluid is exactly the bug
+  -- this assertion exists to catch.
+  -- Keyed by force, surface, FLUID and precision, and every read goes
+  -- through all four. The first version keyed on force and surface alone and
+  -- answered the same number for any fluid name and any window, which let
+  -- sweep{metric:fluid_rate, subject:"nonexistent-fluid-xyz"} come back as a
+  -- confident 100 per minute and let a hardcoded precision pass every test.
+  -- A read for a fluid or a window the fixture does not hold is 0, which is
+  -- what the engine answers for a fluid a force has never touched.
+  local P = defines.flow_precision_index
+  S.fluid_flow = {
+    player = {
+      nauvis = { ["crude-oil"] = { [P.one_minute] = { input = 90, output = 30 }, [P.one_hour] = { input = 60, output = 20 } } },
+      ["platform-1"] = { ["crude-oil"] = { [P.one_minute] = { input = 10, output = 5 } } },
+    },
+    ["team-3"] = {
+      nauvis = { ["crude-oil"] = { [P.one_minute] = { input = 500, output = 100 } } },
+    },
+  }
+  S.fluid_flow_calls = 0
+  local function attach_fluid_stats(target, force_name)
+    -- One LuaFlowStatistics object per surface asked for, bound to that
+    -- surface at fetch time, the way the engine's is: a handle fetched for
+    -- nauvis keeps reading nauvis however many other surfaces are fetched
+    -- afterwards.
+    target.get_fluid_production_statistics = function(id)
+      local surface = (type(id) == "table") and id or S.surfaces[id]
+      assert(surface and surface.valid, "unknown surface " .. tostring(id))
+      local surface_name = surface.name
+      return {
+        get_flow_count = function(a)
+          assert(type(a) == "table", "get_flow_count wants one table")
+          assert(a.name and a.category and a.precision_index, "get_flow_count is missing a field")
+          assert(a.category == "input" or a.category == "output" or a.category == "storage", a.category)
+          assert(type(a.name) == "string",
+            "get_flow_count for a fluid wants a bare prototype name: fluids have no quality")
+          assert(a.sample_index == nil, "fluid_rate never samples")
+          S.fluid_flow_calls = S.fluid_flow_calls + 1
+          local by_fluid = (S.fluid_flow[force_name] or {})[surface_name] or {}
+          local by_precision = by_fluid[a.name] or {}
+          local at = by_precision[a.precision_index] or { input = 0, output = 0 }
+          return a.category == "input" and at.input or at.output
+        end,
+      }
+    end
+  end
+  attach_fluid_stats(force, "player")
+  attach_fluid_stats(S.team3, "team-3")
+
+  -- LuaTrainManager::get_trains(TrainFilter) -> array[LuaTrain]; `filter` is
+  -- required (2.0.77 docs: `optional: false`), unlike most search filters in
+  -- this fake, so a caller that forgot to pass one at all is exactly the bug
+  -- this assertion exists to catch. Returned trains carry only the fields
+  -- LuaTrain actually has that scripts/tools/trains.lua reads: id, valid,
+  -- speed, manual_mode; force and surface live in this fixture's own
+  -- bookkeeping table, never on the object itself, since real LuaTrain
+  -- carries neither directly (checked against its full attribute list).
+  local function fake_train(id, surface_name, force_name, speed, manual)
+    return {
+      entry = { id = id, valid = true, speed = speed, manual_mode = manual },
+      surface_name = surface_name, force_name = force_name,
+    }
+  end
+  S.trains = {
+    fake_train(1, "nauvis", "player", 3.2, false),
+    fake_train(2, "nauvis", "player", 0, true),
+    fake_train(3, "nauvis", "player", 0, false),
+    fake_train(4, "platform-1", "player", 0, false),
+    fake_train(5, "nauvis", "team-3", 12.5, false),
+    fake_train(6, "nauvis", "team-3", 8, false),
+    fake_train(7, "nauvis", "team-3", 0, true),
+    fake_train(8, "platform-1", "team-3", 3, false),
+    fake_train(9, "platform-1", "team-3", 0, false),
+  }
+  _G.game.train_manager = {
+    get_trains = function(filter)
+      assert(type(filter) == "table", "get_trains wants one table")
+      local out = {}
+      for _, t in ipairs(S.trains) do
+        local ok = true
+        if filter.force ~= nil and t.force_name ~= filter.force then ok = false end
+        if filter.surface ~= nil then
+          local want = filter.surface
+          if type(want) == "table" then want = want.name end
+          if t.surface_name ~= want then ok = false end
+        end
+        if filter.is_moving ~= nil and (t.entry.speed ~= 0) ~= filter.is_moving then ok = false end
+        if filter.is_manual ~= nil and t.entry.manual_mode ~= filter.is_manual then ok = false end
+        if ok then out[#out + 1] = t.entry end
+      end
+      return out
+    end,
+  }
 
   return S
 end
