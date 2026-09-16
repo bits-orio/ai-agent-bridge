@@ -23,4 +23,38 @@ function M.map_outside_tags(text, fn)
   return table.concat(out)
 end
 
+--- `text` made renderable again after a cut. Factorio draws a whole chat
+--- line raw, tags and all, when any tag in it is malformed, and a byte cut
+--- can do that two ways: land inside a tag, leaving "[/col", or fall after a
+--- colour or font was opened and before it closed. The torn tag is dropped
+--- back to its bracket and the open spans are closed innermost first. Only
+--- color and font open a span; gps, img and the rest stand alone. The
+--- service repairs its own cuts the same way (clipRichText); this covers the
+--- renderer's, which come after team labels and sprites have been decorated
+--- in and so can land inside a tag the model never wrote.
+function M.repair(text)
+  if type(text) ~= "string" then return text end
+  local last_open = text:match("^.*()%[")
+  local last_close = text:match("^.*()%]")
+  if last_open and (not last_close or last_open > last_close) then
+    text = text:sub(1, last_open - 1):gsub("%s+$", "")
+  end
+  local open = {}
+  for tag in text:gmatch("%[([^%[%]]*)%]") do
+    if tag:sub(1, 6) == "color=" then
+      open[#open + 1] = "color"
+    elseif tag:sub(1, 5) == "font=" then
+      open[#open + 1] = "font"
+    elseif tag == "/color" or tag == "/font" then
+      local want = tag:sub(2)
+      for j = #open, 1, -1 do
+        if open[j] == want then table.remove(open, j) break end
+      end
+    end
+  end
+  local closers = {}
+  for j = #open, 1, -1 do closers[#closers + 1] = "[/" .. open[j] .. "]" end
+  return text .. table.concat(closers)
+end
+
 return M

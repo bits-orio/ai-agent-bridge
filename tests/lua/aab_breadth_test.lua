@@ -518,6 +518,17 @@ check("the platform axis answers cleanly even with zero live platforms",
       and entities_platform.r.axis == "platform" and type(entities_platform.r.rows) == "table"
       and entities_platform.r.total == #entities_platform.r.rows, F.encode(entities_platform))
 
+-- A platform row says who owns the ship and where it is, so "which ship has
+-- the most, where is it" is one row rather than a name and a guess. The
+-- fixture's platform-1 belongs to player and is stopped at fulgora.
+S.entity_counts_by_surface = { ["platform-1"] = { lab = 4 } }
+local ship_rows = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
+check("a platform row carries its owner and where it is stopped",
+      ship_rows.ok and ship_rows.r.rows and ship_rows.r.rows[1]
+      and ship_rows.r.rows[1][1] == "platform-1 (player, at fulgora)" and ship_rows.r.rows[1][2] == 4,
+      F.encode(ship_rows))
+S.entity_counts_by_surface = {}
+
 -- The surface axis has to re-sort by value: ctx.surfaces is walked in NAME
 -- order (nauvis, then platform-1), so if envelope.lua's own sort were
 -- dropped or applied to the wrong field, this would come back nauvis-first

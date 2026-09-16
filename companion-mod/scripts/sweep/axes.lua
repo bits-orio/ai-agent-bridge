@@ -17,7 +17,27 @@ M.NAMES = { "force", "surface", "platform", "player", "force+surface" }
 
 function M.force(cell) return cell.force end
 function M.surface(cell) return cell.surface end
-function M.platform(cell) return cell.platform end
+--- A platform row names the platform and, when the cell carries them, who
+--- owns it and where it is: "Battle Cruiser (team-2, at nauvis)". A platform
+--- has no map position, so "where is it" is the planet it is stopped at or
+--- that it is in flight, and the row is the only place a sweep can say so:
+--- question 90 on 2026-09-15 got a bare name back and answered the second
+--- half of "which ship has most thrusters, where is it" with a gps tag at
+--- 0,0 on a planet no tool had mentioned.
+function M.platform(cell)
+  if not cell.platform then return nil end
+  local where
+  if cell.location then
+    where = "at " .. cell.location
+  elseif cell.state then
+    where = cell.state == "on_the_path" and "in flight" or cell.state
+  end
+  local inside = {}
+  if cell.owner then inside[#inside + 1] = cell.owner end
+  if where then inside[#inside + 1] = where end
+  if #inside == 0 then return cell.platform end
+  return cell.platform .. " (" .. table.concat(inside, ", ") .. ")"
+end
 function M.player(cell) return cell.player end
 
 -- The one compound axis: the force and surface a cell belongs to, joined

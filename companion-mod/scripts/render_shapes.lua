@@ -21,6 +21,7 @@
 -- drives the protocol without the service meets the net instead.
 
 local sprites = require("scripts.sprites")
+local richtext = require("scripts.richtext")
 local labels  = require("scripts.labels")
 local MAX_BYTES = 640
 
@@ -58,7 +59,14 @@ local function line(v)
   if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
     return "(unrenderable value)"
   end
-  return clip_bytes(labels.decorate(sprites.decorate((tostring(v):gsub("%c+", " ")))), MAX_BYTES)
+  -- Decorated, then cut, then repaired: the labels and sprites decorated in
+  -- here can carry a line past MAX_BYTES that the service kept within it, and
+  -- a cut that lands inside one of their tags would make the whole chat line
+  -- render raw. richtext.repair drops a torn tag and closes an open span.
+  local decorated = labels.decorate(sprites.decorate((tostring(v):gsub("%c+", " "))))
+  local cut = clip_bytes(decorated, MAX_BYTES)
+  if cut ~= decorated then cut = richtext.repair(cut) end
+  return cut
 end
 
 local function clip(t, n)

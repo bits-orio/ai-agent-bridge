@@ -111,5 +111,5 @@ func cells(in []string, max int) []string {
 // companion clips again at 640 bytes on a UTF-8 boundary, which is the same
 // 160 cells' worth at four bytes a rune.
 func cell(s string) string {
-	return clipRunes(strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " "), MaxCellChars)
+	return clipRichText(strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " "), MaxCellChars)
 }

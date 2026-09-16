@@ -536,6 +536,42 @@ local n, text = answer_as_bob({ shape = "comparison", columns = { "north", "sout
                                 rows = { { label = "iron", a = "1", b = "2" } } })
 check("a comparison prints once, one line per row", n == 1 and text:find("- iron: 1 vs 2", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "comparison", columns = { "", "team-3" }, rows = { { label = "iron", a = "1", b = "2" } } })
+-- ── the renderer's own cut never tears a tag ─────────────────────────
+-- Team labels are decorated in AFTER the service's byte budget, so a line
+-- naming many teams can pass the service at 640 bytes and leave the renderer
+-- well over it. The renderer's cut used to land wherever the byte count
+-- said, including inside a label's own [/color], and Factorio draws a whole
+-- chat line raw when any tag in it is malformed.
+local richtext = require("scripts.richtext")
+local tag_cases = {
+  { "see [color=yellow]Team 19[/col", "see [color=yellow]Team 19[/color]" },
+  { "a [color=red][font=default-bold]warning that runs", "a [color=red][font=default-bold]warning that runs[/font][/color]" },
+  { "[gps=1,2,nauvis] and more", "[gps=1,2,nauvis] and more" },
+  { "plain text", "plain text" },
+}
+for _, case in ipairs(tag_cases) do
+  check("richtext.repair makes " .. case[1]:sub(1, 24) .. "... renderable",
+        richtext.repair(case[1]) == case[2], richtext.repair(case[1]))
+end
+local many = {}
+-- Question 91's exact shape: the model wrapped every team name in its own
+-- colour tags. Forty of them is 1200 bytes before the labeller even turns
+-- team-3 into Team Losers inside each tag, so the 640-byte cut lands inside
+-- a tag, deterministically, and the whole line would render raw.
+for i = 1, 40 do many[#many + 1] = "[color=yellow]team-3[/color]" end
+local long_line = "slots: " .. table.concat(many, ", ")
+local torn_qid = remote.call("ai-agent-bridge-v1", "ask", { text = "a question that gets a long answer", force = "player", player_index = 1 })
+rpc({ op = "answer", qid = torn_qid, artifact = { shape = "summary", lines = { long_line } } })
+local printed = S.printed[#S.printed].text
+check("a line of forty decorated labels reached the 640-byte cut", #printed >= 600 and #printed <= 720, #printed)
+local last_open = printed:match("^.*()%[")
+local last_close = printed:match("^.*()%]")
+check("the renderer's cut left no torn tag", not last_open or (last_close and last_close > last_open), printed:sub(-80))
+local opens, closes = 0, 0
+for _ in printed:gmatch("%[color=") do opens = opens + 1 end
+for _ in printed:gmatch("%[/color%]") do closes = closes + 1 end
+check("every colour span the renderer kept is closed", opens == closes, opens .. " opened, " .. closes .. " closed")
+
 check("a blank comparison column falls back to a letter", n == 1 and text:find("A  vs  Team Losers", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } })
 check("a list of four prints once", n == 1 and text:find("- d", 1, true) ~= nil, text)

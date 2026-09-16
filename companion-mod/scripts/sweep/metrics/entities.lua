@@ -97,7 +97,10 @@ local function read_cells(_ctx, axis, a)
   end
   local by_cell, order = {}, {}
   for _, row in ipairs(reply.forces or {}) do
-    local cell = axes[axis]({ force = row.force, surface = row.surface, platform = row.platform })
+    local cell = axes[axis]({
+      force = row.force, surface = row.surface,
+      platform = row.platform, owner = row.owner, location = row.location, state = row.state,
+    })
     if cell then
       if not by_cell[cell] then order[#order + 1] = cell end
       by_cell[cell] = (by_cell[cell] or 0) + row.count

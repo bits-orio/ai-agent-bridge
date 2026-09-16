@@ -84,8 +84,8 @@ func dropLast(a Artifact) Artifact {
 // shorten clips every cell in the artifact to limit runes, the title and the
 // column names included.
 func shorten(a Artifact, limit int) Artifact {
-	a.Title = clipRunes(a.Title, limit)
-	a.Text = clipRunes(a.Text, limit)
+	a.Title = clipRichText(a.Title, limit)
+	a.Text = clipRichText(a.Text, limit)
 	a.Lines = shortenAll(a.Lines, limit)
 	a.Items = shortenAll(a.Items, limit)
 	a.Columns = shortenAll(a.Columns, limit)
@@ -99,9 +99,9 @@ func shorten(a Artifact, limit int) Artifact {
 	pairs := make([]Pair, 0, len(a.Pairs))
 	for _, p := range a.Pairs {
 		pairs = append(pairs, Pair{
-			Label: clipRunes(p.Label, limit),
-			A:     clipRunes(p.A, limit),
-			B:     clipRunes(p.B, limit),
+			Label: clipRichText(p.Label, limit),
+			A:     clipRichText(p.A, limit),
+			B:     clipRichText(p.B, limit),
 		})
 	}
 	a.Pairs = pairs
@@ -114,7 +114,7 @@ func shortenAll(in []string, limit int) []string {
 	}
 	out := make([]string, 0, len(in))
 	for _, s := range in {
-		out = append(out, clipRunes(s, limit))
+		out = append(out, clipRichText(s, limit))
 	}
 	return out
 }

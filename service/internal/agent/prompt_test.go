@@ -239,3 +239,36 @@ func TestSystemPromptRefusesWhoBuiltWithATrueReason(t *testing.T) {
 		}
 	}
 }
+
+// Question 90 on the rig, 2026-09-15: "which space ship has most thrusters,
+// where is it" answered the second half with a gps tag at 0,0 on a planet
+// surface that no tool had returned. A platform has no map position; where
+// it is, is the planet it is stopped at, and the prompt has to say both.
+func TestSystemPromptForbidsAnInventedGpsAndAGpsOnAPlatform(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"only a position a tool returned: never invent one",
+		"A space platform has no map position at all",
+		"never put a gps tag on a platform",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the platform position rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
+// Question 91 on the rig: the model wrapped every team name in its own
+// [color=yellow] tags, blew the answer's byte budget, and the shrinker cut a
+// line inside a tag, which makes Factorio render the whole line raw. The
+// service labels and colours team names itself, after the answer is built.
+func TestSystemPromptKeepsColourToWarnings(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"colour nothing else: not names, not numbers, not headings",
+		"Team names are labelled and coloured for you after you answer",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the colour rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}
