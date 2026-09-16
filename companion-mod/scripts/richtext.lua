@@ -8,18 +8,27 @@
 
 local M = {}
 
---- `text` with `fn` applied to every stretch outside a [..] tag.
+--- `text` with `fn` applied to every stretch outside a [..] tag. fn also
+--- receives how many colour or font spans are open around that stretch, so
+--- a pass that would nest a coloured label inside an open colour can leave
+--- the colour off instead.
 function M.map_outside_tags(text, fn)
-  if type(text) ~= "string" or not text:find("[", 1, true) then return fn(text) end
-  local out, pos = {}, 1
+  if type(text) ~= "string" or not text:find("[", 1, true) then return fn(text, 0) end
+  local out, pos, depth = {}, 1, 0
   while true do
     local open_, close_ = text:find("%[[^%[%]]*%]", pos)
     if not open_ then break end
-    out[#out + 1] = fn(text:sub(pos, open_ - 1))
+    out[#out + 1] = fn(text:sub(pos, open_ - 1), depth)
+    local tag = text:sub(open_ + 1, close_ - 1)
+    if tag:sub(1, 6) == "color=" or tag:sub(1, 5) == "font=" then
+      depth = depth + 1
+    elseif (tag == "/color" or tag == "/font") and depth > 0 then
+      depth = depth - 1
+    end
     out[#out + 1] = text:sub(open_, close_)
     pos = close_ + 1
   end
-  out[#out + 1] = fn(text:sub(pos))
+  out[#out + 1] = fn(text:sub(pos), depth)
   return table.concat(out)
 end
 

@@ -190,7 +190,7 @@ check("table answer ok", a2.ok, F.encode(a2))
 check("a table prints to chat, once", #S.printed == before + 1, #S.printed .. " vs " .. before)
 check("a global answer goes to the whole server", S.printed[#S.printed].who == "*", S.printed[#S.printed].who)
 check("the table is one line per row with columns first",
-      S.printed[#S.printed].text:find("Players\nname | online\nBob | yes\nAnn | no", 1, true) ~= nil,
+      S.printed[#S.printed].text:find("Players\nname | online\n[color=1,0.5,0]Bob[/color] | yes\nAnn | no", 1, true) ~= nil,
       S.printed[#S.printed].text)
 -- The test provider is also a scope provider, so every answer here carries
 -- its global badge between the name and the colon.
@@ -256,7 +256,7 @@ check("a player's question polls with the surface they are looking at, and the p
       poll7.r[1].surface == "nauvis" and poll7.r[1].physical_surface == "platform-1", F.encode(poll7))
 rpc({ op = "answer", qid = qid7, artifact = { shape = "notice", text = "Bob" } })
 check("the global tag sits after the name (the first provider by name supplies it)",
-      S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Bob$") ~= nil,
+      S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: %[color=1,0.5,0%]Bob%[/color%]$") ~= nil,
       S.printed[#S.printed].text)
 check("and the answer went to the server", S.printed[#S.printed].who == "*")
 
@@ -269,7 +269,7 @@ team_mode = false  -- the team flips back before the answer lands
 rpc({ op = "answer", qid = qid8, artifact = { shape = "notice", text = "Bob" } })
 check("a private answer prints to the force it was asked in, whatever the channel is now",
       S.printed[#S.printed].who == "force:player", S.printed[#S.printed].who)
-check("with the team tag", S.printed[#S.printed].text == "[AI Agent Bridge] [TEAM]: Bob", S.printed[#S.printed].text)
+check("with the team tag", S.printed[#S.printed].text == "[AI Agent Bridge] [TEAM]: [color=1,0.5,0]Bob[/color]", S.printed[#S.printed].text)
 
 team_mode = true
 local qid9 = ask_cmd("!shout")
@@ -338,9 +338,21 @@ local qid_label = ask_cmd("who is quiet")
 rpc({ op = "answer", qid = qid_label, artifact = { shape = "summary",
   lines = { "team-3 is quiet; the player force is not; [color=red]team-3[/color] again; team-30 is nobody" } } })
 local labelled = S.printed[#S.printed].text
-check("a force name renders as its label", labelled:find("Team Losers is quiet", 1, true) ~= nil, labelled)
+check("a force name renders as its label, in the team's own colour",
+      labelled:find("[color=0.5,0.8,1]Team Losers[/color] is quiet", 1, true) ~= nil, labelled)
 check("a plain-word force name is never swapped", labelled:find("the player force is not", 1, true) ~= nil, labelled)
-check("a force name inside a colour tag is still swapped", labelled:find("[color=red]Team Losers[/color]", 1, true) ~= nil, labelled)
+check("a force name inside a colour tag is still swapped, plain, so spans never nest",
+      labelled:find("[color=red]Team Losers[/color]", 1, true) ~= nil, labelled)
+-- A label the model copied out of a tool result, "Team Losers" rather than
+-- team-3, prints in the colour too: on the rig, "tell me the team names"
+-- came out plain for exactly that reason.
+local copied_qid = ask_cmd("team names")
+rpc({ op = "answer", qid = copied_qid, artifact = { shape = "summary", lines = { "Team Losers has one member; Team Loserss is nobody" } } })
+local copied = S.printed[#S.printed].text
+check("a copied plain label prints in the team's colour",
+      copied:find("[color=0.5,0.8,1]Team Losers[/color] has one member", 1, true) ~= nil, copied)
+check("a longer word than the label is not a partial match",
+      copied:find("Team Loserss is nobody", 1, true) ~= nil, copied)
 check("a longer name is not a partial match", labelled:find("team-30 is nobody", 1, true) ~= nil, labelled)
 
 -- ── where things are ──────────────────────────────────────────────────
@@ -536,6 +548,25 @@ local n, text = answer_as_bob({ shape = "comparison", columns = { "north", "sout
                                 rows = { { label = "iron", a = "1", b = "2" } } })
 check("a comparison prints once, one line per row", n == 1 and text:find("- iron: 1 vs 2", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "comparison", columns = { "", "team-3" }, rows = { { label = "iron", a = "1", b = "2" } } })
+-- ── player names print in the player's own chat colour ───────────────
+-- LuaPlayer::chat_color is the engine's, so this needs no team mod: a name
+-- outside any tag is wrapped in that player's colour, whole and
+-- case-sensitive, and a name already inside a colour span is left alone.
+local pc_qid = ask_cmd("who is around")
+rpc({ op = "answer", qid = pc_qid, artifact = { shape = "summary",
+  lines = { "Bob is online; bob is not a player; ask Bob. Then [color=red]Bob shouted[/color]; Bobby is nobody" } } })
+local coloured = S.printed[#S.printed].text
+check("a player name renders in the player's chat colour",
+      coloured:find("[color=1,0.5,0]Bob[/color] is online", 1, true) ~= nil, coloured)
+check("a name is matched case-sensitively, the way the game spells it",
+      coloured:find("bob is not a player", 1, true) ~= nil, coloured)
+check("a trailing dot is not part of the name",
+      coloured:find("ask [color=1,0.5,0]Bob[/color].", 1, true) ~= nil, coloured)
+check("a name already inside a colour span is not wrapped again",
+      coloured:find("[color=red]Bob shouted[/color]", 1, true) ~= nil, coloured)
+check("a longer word is not a partial match",
+      coloured:find("Bobby is nobody", 1, true) ~= nil, coloured)
+
 -- ── the renderer's own cut never tears a tag ─────────────────────────
 -- Team labels are decorated in AFTER the service's byte budget, so a line
 -- naming many teams can pass the service at 640 bytes and leave the renderer
@@ -572,7 +603,7 @@ for _ in printed:gmatch("%[color=") do opens = opens + 1 end
 for _ in printed:gmatch("%[/color%]") do closes = closes + 1 end
 check("every colour span the renderer kept is closed", opens == closes, opens .. " opened, " .. closes .. " closed")
 
-check("a blank comparison column falls back to a letter", n == 1 and text:find("A  vs  Team Losers", 1, true) ~= nil, text)
+check("a blank comparison column falls back to a letter", n == 1 and text:find("A  vs  [color=0.5,0.8,1]Team Losers[/color]", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } })
 check("a list of four prints once", n == 1 and text:find("- d", 1, true) ~= nil, text)
 n = answer_as_bob({ shape = "summary", lines = { "one" } })
@@ -762,6 +793,26 @@ check("list_forces with include_empty lists the engine's own forces too",
       F.encode(all_forces))
 check("list_forces without it counts neither enemy nor neutral as an empty slot",
       forces.ok and forces.r.empty == 1 and forces.r.total == 1, F.encode(forces))
+-- With every force listed, empty still counts only the slots, and the
+-- engine's own rows say what they are, so a model counting zero-player rows
+-- for itself is told which three not to count.
+check("list_forces with include_empty still counts only the team slots as empty",
+      all_forces.ok and all_forces.r.empty == 1, F.encode(all_forces))
+check("the engine's own forces carry engine=true and team slots do not",
+      all_forces.ok and (function()
+        local by = {}
+        for _, row in ipairs(all_forces.r.forces) do by[row.name] = row end
+        return by.enemy.engine == true and by.neutral.engine == true and by.player.engine == true
+          and by["team-3"].engine == nil
+      end)(), F.encode(all_forces))
+-- player is the engine's default force: with nobody on it, it is neither a
+-- row nor a slot, exactly like enemy and neutral.
+local saved_player_players = game.forces.player.players
+game.forces.player.players = {}
+local no_player = call("ai-agent-bridge-tools", "list_forces", { force = "team-3" })
+check("an empty player force is not an empty slot either",
+      no_player.ok and no_player.r.empty == 0 and no_player.r.total == 1, F.encode(no_player))
+game.forces.player.players = saved_player_players
 
 -- ── the probe drops what it cannot use ────────────────────────────────
 S.logs = {}

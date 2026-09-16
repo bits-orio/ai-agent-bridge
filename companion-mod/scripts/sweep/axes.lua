@@ -35,8 +35,15 @@ function M.platform(cell)
   local inside = {}
   if cell.owner then inside[#inside + 1] = cell.owner end
   if where then inside[#inside + 1] = where end
-  if #inside == 0 then return cell.platform end
-  return cell.platform .. " (" .. table.concat(inside, ", ") .. ")"
+  local label = cell.platform
+  if #inside > 0 then label = label .. " (" .. table.concat(inside, ", ") .. ")" end
+  -- A platform is its own surface, and its hub sits at the origin of that
+  -- surface, so a gps tag on it is the one ping that opens remote view on
+  -- the ship. The row carries it ready-made: question 94 on the rig was told
+  -- no such ping existed, because the rule before this one confused "a
+  -- platform has no position on a planet" with "a platform cannot be pinged".
+  if cell.surface then label = label .. " [gps=0,0," .. cell.surface .. "]" end
+  return label
 end
 function M.player(cell) return cell.player end
 

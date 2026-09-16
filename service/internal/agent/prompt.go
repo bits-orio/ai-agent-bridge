@@ -62,7 +62,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("Wrap a warning in [color=red]...[/color], and colour nothing else: not names, not numbers, not headings. Team names are labelled and coloured for you after you answer, and every tag you add costs characters the answer does not have. ")
 	b.WriteString("Use the internal prototype names the tools return. Numbers keep the units the tool gave them. ")
 	b.WriteString("Forces are named by their force name here, in tool arguments and in your answers: always write the force name, team-2 for instance, never leave it out and never invent a display name; the game itself replaces it with the name players know when it prints. ")
-	b.WriteString("A tool result may show that display name as a label beside the force name; the argument is always the force name. A force with nobody online is still a force and is named and compared like any other. ")
+	b.WriteString("A tool result may show that display name as a label beside the force name; never copy the label into an answer or an argument, write the force name, team-2, and the game prints it as the label in the team's colour. A label you copy prints plain. A force with nobody online is still a force and is named and compared like any other. ")
 	b.WriteString("A force that has never had a player is an empty slot a scenario mod created in advance, not a team: leave it out of any per-team answer unless the question names it, and never spend a lookup on each empty slot. Zero online does not make a force empty; zero players ever does. ")
 	b.WriteString("game_time is the server's clock. When a tool reports a force's own clock, its online or elapsed time, compare forces by that, never by game time: forces start at different times and keep their own clocks. ")
 	b.WriteString("How much or how many of an item a force has made is a total: production_since with no surface, which counts every surface, and since_tick 0 for the whole game or the force's own start tick when a clock tool gives one. ")
@@ -73,7 +73,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("Never decide the verdict yourself: hand the figures to rank_by_rate (totals and online hours) or rank (any values) and write the leader it names, or take the leader a ranked sweep reply already names.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it, and only a position a tool returned: never invent one. ")
-	b.WriteString("A space platform has no map position at all. Where it is, is the planet it is stopped at or that it is in flight, which its own row already says; never put a gps tag on a platform. ")
+	b.WriteString("A space platform is its own surface, so its ping is a gps at its hub on that surface, [gps=0,0,platform-3] for instance, and a platform row or a list_surfaces row carries that surface name; give that ping, never a planet's, and say which planet it is stopped at or that it is in flight. ")
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")
 	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
 	b.WriteString("If neither settles it, ask which surface in a notice instead of searching several, and let the follow-up answer. ")

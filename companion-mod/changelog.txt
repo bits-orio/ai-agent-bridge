@@ -36,14 +36,24 @@ Date: 2026-09-15
       combinations left out, platform rows carrying the same owner, location and state columns
       list_surfaces does. This is what makes "which space ship has most thrusters, where is it"
       one call instead of a many-round search.
+    - Team names print in the colour the team mod gave them. A labels provider may colour a label,
+      the way a team mod colours its teams, and the companion used to strip every tag from it, so
+      a team name never once printed in its colour. The colour and font tags a label carries are
+      kept now, and a label the model copied out of a tool result prints in the colour too.
+    - Player names print in the player's own chat colour, the one the game prints their chat in.
+      No team mod is involved: every player has one, and the companion reads it when it renders.
+    - A space platform row from sweep carries who owns the ship, where it is stopped, and a gps at
+      its hub on its own surface, so "which ship has the most, where is it" is one row and one
+      click.
   Bugfixes:
     - list_forces hid the asking force whenever nobody had joined it. Forces nobody has ever joined
       are left out as empty slots since 1.0.3, and on a server with no one connected that is every
       force, the asker's included: "what forces are there" answered with none. The asker's own
       force is always listed now, whoever has joined it.
-    - list_forces counted the engine's own enemy and neutral forces as empty team slots, so "how
-      many teams" reported three slots more than the server had. They are neither rows nor slots
-      now unless every force is asked for with include_empty.
+    - list_forces counted the engine's own enemy, neutral and player forces as empty team slots,
+      so "how many teams" reported three slots more than the server had, and a listing with
+      include_empty=true let the model count them again for itself. empty counts only team slots
+      now, either way, and the engine's rows carry engine=true so they are never mistaken for one.
     - list_surfaces returned 20 rows by default, sorted by name, and a space platform is named
       platform-N, so every platform sorted after every planet and fell off the end. On a server
       with 25 surfaces the reply held no platform at all, which is why "which space ship has most

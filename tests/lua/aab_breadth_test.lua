@@ -523,9 +523,9 @@ check("the platform axis answers cleanly even with zero live platforms",
 -- fixture's platform-1 belongs to player and is stopped at fulgora.
 S.entity_counts_by_surface = { ["platform-1"] = { lab = 4 } }
 local ship_rows = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
-check("a platform row carries its owner and where it is stopped",
+check("a platform row carries its owner, where it is stopped, and a ping on its own surface",
       ship_rows.ok and ship_rows.r.rows and ship_rows.r.rows[1]
-      and ship_rows.r.rows[1][1] == "platform-1 (player, at fulgora)" and ship_rows.r.rows[1][2] == 4,
+      and ship_rows.r.rows[1][1] == "platform-1 (player, at fulgora) [gps=0,0,platform-1]" and ship_rows.r.rows[1][2] == 4,
       F.encode(ship_rows))
 S.entity_counts_by_surface = {}
 

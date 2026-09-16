@@ -40,6 +40,30 @@ local function plain(label)
   return text
 end
 
+--- A label as it renders: its own colour and font tags kept, every other
+--- tag stripped. A team mod colours a team's name the way the team chose,
+--- and stripping that meant the companion never once printed a team name in
+--- its colour; the colours players saw were tags the model had written
+--- itself, which is what blew an answer past its byte budget. Only color
+--- and font survive: a label is not a place for a gps, an img or a link a
+--- provider might slip in, and those never make it past here.
+local function rich(label)
+  if type(label) ~= "string" then return nil end
+  local text = label:gsub("%[([^%[%]]*)%]", function(tag)
+    if tag:sub(1, 6) == "color=" or tag:sub(1, 5) == "font=" or tag == "/color" or tag == "/font" then
+      return "[" .. tag .. "]"
+    end
+    return ""
+  end)
+  text = text:gsub("%c+", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+  if text == "" then return nil end
+  return text
+end
+
+-- The rendering form of each label, filled beside the plain map on every
+-- scan and read only by decorate.
+local rich_by_force = {}
+
 --- { [force_name] = label } merged over every provider; the first provider
 --- by interface name wins a force two of them label. Forces the game does
 --- not have are dropped.
@@ -52,6 +76,7 @@ function M.map()
         local text = plain(label)
         if type(force_name) == "string" and text and out[force_name] == nil and game.forces[force_name] then
           out[force_name] = text
+          rich_by_force[force_name] = rich(label) or text
         end
       end
     elseif not answered then
@@ -68,6 +93,7 @@ local cache, cache_tick = nil, nil
 
 function M.cached_map()
   if cache_tick ~= game.tick then
+    rich_by_force = {}
     cache, cache_tick = M.map(), game.tick
   end
   return cache
@@ -80,21 +106,56 @@ function M.substitutable(force_name)
   return type(force_name) == "string" and force_name:find("[%d%-_]") ~= nil
 end
 
-local function decorate_plain(text, map)
-  return (text:gsub("%f[%w%-_]([%w][%w%-_]*)%f[^%w%-_]", function(word)
+--- A force name outside any tag becomes its label in the team's colour;
+--- inside an open colour or font span it becomes the plain label, so one
+--- span never nests another. The plain label text itself, when a model
+--- copied it out of a tool result rather than writing the force name, is
+--- swapped for the coloured form the same way: the player reads the coloured
+--- name either way, and a model copying a label no longer turns a team's
+--- colour off, which is what "tell me the team names" did on the rig.
+local function decorate_plain(text, map, depth)
+  local out = text
+  -- Copied labels first, while the chunk is still bare text: a coloured
+  -- label inserted by the force-name pass below contains this same plain
+  -- text, and scanning for it afterwards wrapped the label a second time,
+  -- [color=..][color=..]Team Losers[/color][/color], which is what the first
+  -- version of this pass did.
+  if depth == 0 then
+    for force_name, label in pairs(map) do
+      local coloured = rich_by_force[force_name]
+      if coloured and coloured ~= label and M.substitutable(force_name) then
+        local at = 1
+        while true do
+          local s_, e_ = out:find(label, at, true)
+          if not s_ then break end
+          local before, after = out:sub(s_ - 1, s_ - 1), out:sub(e_ + 1, e_ + 1)
+          if not before:find("[%w%-_]") and not after:find("[%w%-_]") then
+            out = out:sub(1, s_ - 1) .. coloured .. out:sub(e_ + 1)
+            at = s_ + #coloured
+          else
+            at = e_ + 1
+          end
+        end
+      end
+    end
+  end
+  return (out:gsub("%f[%w%-_]([%w][%w%-_]*)%f[^%w%-_]", function(word)
     local label = map[word]
-    if label and M.substitutable(word) then return label end
+    if label and M.substitutable(word) then
+      if depth > 0 then return label end
+      return rich_by_force[word] or label
+    end
     return word
   end))
 end
 
 --- `text` with every bare force name outside a tag replaced by what
---- players call that force.
+--- players call that force, in the colour the team mod gave it.
 function M.decorate(text)
   if type(text) ~= "string" or text == "" then return text end
   local map = M.cached_map()
   if next(map) == nil then return text end
-  return richtext.map_outside_tags(text, function(chunk) return decorate_plain(chunk, map) end)
+  return richtext.map_outside_tags(text, function(chunk, depth) return decorate_plain(chunk, map, depth or 0) end)
 end
 
 --- The same as an array of { name, label } sorted by name: the `labels` op.

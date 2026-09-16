@@ -308,6 +308,9 @@ function F.install(opts)
   local force
   local bob = {
     index = 1, name = "Bob", valid = true, connected = true, admin = true,
+    -- LuaPlayer::chat_color, the colour the game prints this player's chat
+    -- in; the renderer colours the name the same way.
+    chat_color = { r = 1, g = 0.5, b = 0 },
     surface = nauvis, opened = nil, position = { x = 10.4, y = -3.6 },
     -- Remote view: the controller is on nauvis, the character on the platform.
     physical_surface = orbit, physical_position = { x = 2.2, y = 2.8 },

@@ -18,7 +18,7 @@ local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "Forces on the server: name, players, connected players, by name. Forces that have never had a player are left out as empty slots unless include_empty=true; empty beside shown says how many were left out. total beside shown says if there are more.",
+    desc = "Forces on the server: name, players, connected players, by name. Forces that have never had a player are left out as empty team slots unless include_empty=true; empty is the count of those slots either way, and it never counts the engine's own enemy, neutral and player forces, which carry engine=true when listed and are not teams. total beside shown says if there are more.",
     params = {
       include_empty = "boolean default false: also list forces that never had a player, the team slots a scenario mod made in advance and the engine's own",
       limit         = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
@@ -66,15 +66,23 @@ local function list_forces(a)
     -- for. Counting them made "how many teams" answer "8 more empty team
     -- slots" on a server with five: the other three were the biters, the
     -- trees, and player.
-    local engine_only = force.name == "enemy" or force.name == "neutral"
-    if engine_only and a.include_empty ~= true then
+    -- The engine's own three: enemy, neutral and player. Never a team slot,
+    -- whatever include_empty says, and marked as such on their rows so a
+    -- model counting zero-player rows for itself does not count them. The
+    -- rig answered "8 empty slots" from an include_empty listing and "6"
+    -- from memory a minute later, on a server with five; the difference was
+    -- these three, counted by one answer and not the other.
+    local engine = force.name == "enemy" or force.name == "neutral" or force.name == "player"
+    if engine and ever == 0 and force.name ~= mine and a.include_empty ~= true then
       -- fall through: not a row, not a slot
     elseif ever > 0 or a.include_empty == true or force.name == mine then
       rows[#rows + 1] = {
         name = force.name,
         player_count = ever,
         connected_player_count = #force.connected_players,
+        engine = engine or nil,
       }
+      if ever == 0 and not engine and force.name ~= mine then empty = empty + 1 end
     else
       empty = empty + 1
     end

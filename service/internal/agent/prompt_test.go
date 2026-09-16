@@ -240,16 +240,16 @@ func TestSystemPromptRefusesWhoBuiltWithATrueReason(t *testing.T) {
 	}
 }
 
-// Question 90 on the rig, 2026-09-15: "which space ship has most thrusters,
-// where is it" answered the second half with a gps tag at 0,0 on a planet
-// surface that no tool had returned. A platform has no map position; where
-// it is, is the planet it is stopped at, and the prompt has to say both.
+// Question 90 on the rig, 2026-09-15, pinged a PLANET at 0,0 for a
+// platform; the first fix then told question 94 no ping existed at all. A
+// platform is its own surface and its hub is that surface's origin, so the
+// ping is a gps there, and the prompt has to say exactly that.
 func TestSystemPromptForbidsAnInventedGpsAndAGpsOnAPlatform(t *testing.T) {
 	pa := systemPrompt("")
 	for _, want := range []string{
 		"only a position a tool returned: never invent one",
-		"A space platform has no map position at all",
-		"never put a gps tag on a platform",
+		"A space platform is its own surface, so its ping is a gps at its hub",
+		"give that ping, never a planet's",
 	} {
 		if !strings.Contains(pa, want) {
 			t.Errorf("system prompt is missing the platform position rule, wanted %q:\n%s", want, pa)
@@ -269,6 +269,22 @@ func TestSystemPromptKeepsColourToWarnings(t *testing.T) {
 	} {
 		if !strings.Contains(pa, want) {
 			t.Errorf("system prompt is missing the colour rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
+// Question 95 on the rig copied the labels out of a list_forces result,
+// "Team 02", into the answer. The companion colours force names, not labels,
+// so every team name printed plain. The model writes team-2 and the game
+// prints the coloured label for it.
+func TestSystemPromptForbidsCopyingALabelIntoAnAnswer(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"never copy the label into an answer or an argument",
+		"A label you copy prints plain",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing the label rule, wanted %q:\n%s", want, pa)
 		}
 	}
 }

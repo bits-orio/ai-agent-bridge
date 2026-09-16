@@ -104,6 +104,8 @@ remote.add_interface(INTERFACE, {
   set_private = set_private,
   -- A labels provider too: what players call the player force.
   force_labels_v1 = function()
-    return { player = "[color=red]The[/color] Engineers", ["team-3"] = "Team Losers" }
+    -- team-3 carries a colour the way a team mod colours its teams; the
+    -- companion keeps it when it prints the name.
+    return { player = "[color=red]The[/color] Engineers", ["team-3"] = "[color=0.5,0.8,1]Team Losers[/color]" }
   end,
 })
