@@ -185,6 +185,8 @@ type ModelConfig struct {
 	Reasoning      string   `yaml:"reasoning"`       // low (default) | off | model | medium | high
 	CacheTTL       string   `yaml:"cache_ttl"`       // 1h (default) | 5m for the rules-and-tools cache entry
 	DataCollection string   `yaml:"data_collection"` // OpenRouter: deny (default) | allow
+	Providers      []string `yaml:"providers"`       // OpenRouter: upstream hosts to prefer, in order; empty lets OpenRouter choose
+	AllowFallbacks bool     `yaml:"allow_fallbacks"` // OpenRouter, with providers set: true falls back to any host, false (default) pins
 }
 
 // OpenRouterConfig and AnthropicConfig hold each provider's key reference.

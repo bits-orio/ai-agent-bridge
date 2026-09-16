@@ -42,6 +42,13 @@ model:
   #   deepseek/deepseek-v4-pro-0813    1.05 / 3.15   the everyday model (default)
   #   deepseek/deepseek-v4.1-flash     0.30 / 1.20   the small one
   #   anthropic/claude-opus-5          5.00 / 25.00
+  # OpenRouter picks which host serves the model unless told which to prefer, and
+  # hosts differ a lot: measured on one server, the same model answered a round in
+  # 4 seconds at the median on one host and 13 on another, with a 35-second tail,
+  # and the prompt cache is per host, so every switch is a cold round. The log's
+  # "via=" and `aab stats` name the hosts seen; list the good ones here, in order.
+  # providers: [StreamLake]
+  # allow_fallbacks: false   # true lets OpenRouter use any other host when these fail
   # Check the live list at https://openrouter.ai/api/v1/models and keep to ids whose
   # supported_parameters include "tools". For provider anthropic use the Anthropic id,
   # claude-sonnet-5 for instance.

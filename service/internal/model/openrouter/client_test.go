@@ -233,3 +233,47 @@ func TestOddReplies(t *testing.T) {
 		t.Errorf("no-choice reply: step=%+v err=%v", step, err)
 	}
 }
+
+// The upstream host is the operator's to choose: the request carries the
+// preferred hosts in order and, unless fallbacks are allowed, pins to them.
+// Measured on the live server, the same model answered a round in 4.2 s at
+// the median on one host and 13.3 s on another, and the prompt cache is per
+// host, so a switch is a cold ten-thousand-token round.
+func TestProvidersPinTheUpstreamHost(t *testing.T) {
+	body := func(f *fakeRouter) string {
+		raw, _ := json.Marshal(f.requests[0])
+		return string(raw)
+	}
+
+	f := newRouter(t, reply{200, toolCallReply})
+	c := client(f, Options{DataCollection: "deny", Providers: []string{"StreamLake", "DeepSeek"}})
+	if _, err := c.Step(context.Background(), "rules", question, oneTool); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"order":["StreamLake","DeepSeek"]`, `"allow_fallbacks":false`, `"data_collection":"deny"`} {
+		if !strings.Contains(body(f), want) {
+			t.Errorf("request lacks %s:\n%s", want, body(f))
+		}
+	}
+
+	f = newRouter(t, reply{200, toolCallReply})
+	c = client(f, Options{Providers: []string{"StreamLake"}, AllowFallbacks: true})
+	if _, err := c.Step(context.Background(), "rules", question, oneTool); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body(f), `"allow_fallbacks"`) {
+		t.Errorf("allow_fallbacks true should send nothing, OpenRouter's own default:\n%s", body(f))
+	}
+	if !strings.Contains(body(f), `"order":["StreamLake"]`) {
+		t.Errorf("request lacks the host order:\n%s", body(f))
+	}
+
+	f = newRouter(t, reply{200, toolCallReply})
+	c = client(f, Options{})
+	if _, err := c.Step(context.Background(), "rules", question, oneTool); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body(f), `"provider"`) {
+		t.Errorf("no preference set, yet a provider object was sent:\n%s", body(f))
+	}
+}

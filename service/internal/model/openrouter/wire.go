@@ -70,7 +70,9 @@ type reasoning struct {
 }
 
 type routing struct {
-	DataCollection string `json:"data_collection,omitempty"`
+	DataCollection string   `json:"data_collection,omitempty"`
+	Order          []string `json:"order,omitempty"`           // upstreams to try, in this order
+	AllowFallbacks *bool    `json:"allow_fallbacks,omitempty"` // false pins the request to Order alone
 }
 
 type response struct {
@@ -142,8 +144,18 @@ func (c *Client) request(system string, msgs []model.Message, defs []model.ToolD
 	case "low", "medium", "high":
 		req.Reasoning = &reasoning{Effort: c.opts.Reasoning}
 	}
-	if c.opts.DataCollection != "" {
-		req.Provider = &routing{DataCollection: c.opts.DataCollection}
+	// OpenRouter picks the upstream host for a model unless told otherwise,
+	// and for the same model the hosts differ threefold: on the live server
+	// StreamLake answered a round in 4.2 s at the median and Ionstream in
+	// 13.3 s, with a 35 s tail, and the prompt cache is per host, so every
+	// switch between them is a cold 10,000-token round. Providers names the
+	// hosts to prefer, in order; AllowFallbacks false refuses every other.
+	if c.opts.DataCollection != "" || len(c.opts.Providers) > 0 {
+		req.Provider = &routing{DataCollection: c.opts.DataCollection, Order: c.opts.Providers}
+		if len(c.opts.Providers) > 0 && !c.opts.AllowFallbacks {
+			no := false
+			req.Provider.AllowFallbacks = &no
+		}
 	}
 	return req
 }

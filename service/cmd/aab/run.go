@@ -174,6 +174,7 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 		return openrouter.New(cfg.OpenRouter.APIKey, openrouter.Options{
 			Model: m.ID, Fallbacks: m.Fallbacks, MaxOutput: cfg.Agent.MaxOutputTokens,
 			Reasoning: m.Reasoning, CacheTTL: m.CacheTTL, DataCollection: m.DataCollection,
+			Providers: m.Providers, AllowFallbacks: m.AllowFallbacks,
 		}), nil
 	}
 }

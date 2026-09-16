@@ -78,6 +78,8 @@ type Options struct {
 	Reasoning      string   // "off" sends enabled false, "model" sends nothing, low/medium/high send that effort
 	CacheTTL       string   // "1h" or "5m" for the rules-and-tools breakpoint on routes that take one
 	DataCollection string   // "deny" or "allow", OpenRouter's provider.data_collection; "" sends nothing
+	Providers      []string // upstream hosts to prefer, in order, OpenRouter's provider.order; nil lets OpenRouter choose
+	AllowFallbacks bool     // with Providers set: true lets OpenRouter fall back to any other host, false pins the request
 	Endpoint       string   // "" means Endpoint
 }
 
