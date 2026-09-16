@@ -659,3 +659,71 @@ func TestDidYouMeanSaysNothingWhenTwoProvidersCouldBeMeant(t *testing.T) {
 		t.Errorf("didYouMean(\"standings\") = %q, want no suggestion at all when two providers offer it", got)
 	}
 }
+
+// An invented prefix on a bare tool is corrected in place, not merely pointed
+// out. Question 78 on 2026-09-15 called "mts-v1__catch_up" and, after the
+// suggestion shipped, question 86 called "ai-agent-bridge-tools__catch_up":
+// a different guess at the same tool, and still a whole round. didYouMean
+// answers only when exactly one tool can be meant, so the call runs, and the
+// ledger keeps the name asked for beside the one that ran.
+func TestReadCorrectsAnInventedPrefixInPlace(t *testing.T) {
+	called := false
+	byName := map[string]tools.Tool{
+		"catch_up": {
+			Name:        "catch_up",
+			Description: "the bare history tool",
+			Schema:      tools.ObjectSchema(map[string]any{"player": map[string]any{"type": "string"}}),
+			Call: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+				called = true
+				return json.RawMessage(`{"events":[]}`), nil
+			},
+		},
+	}
+	call := model.Block{Type: model.BlockToolUse, ID: "t1", Name: "mts-v1__catch_up", Input: json.RawMessage(`{"player":"bits-orio"}`)}
+
+	block, rec := read(context.Background(), call, byName, "team-1", 4096, func() time.Duration { return 0 }, true)
+
+	if !called {
+		t.Fatal("the tool the model meant was never called")
+	}
+	if block.IsError {
+		t.Errorf("the corrected call came back as an error: %s", block.Content)
+	}
+	if rec.Name != "catch_up" || rec.CorrectedFrom != "mts-v1__catch_up" {
+		t.Errorf("ledger record = name %q corrected_from %q, want catch_up corrected from mts-v1__catch_up", rec.Name, rec.CorrectedFrom)
+	}
+	if !rec.OK {
+		t.Errorf("ledger record ok = false for a call that succeeded")
+	}
+}
+
+// Two providers offering the same suffix is genuinely ambiguous, and a guess
+// there would run the wrong provider's tool. That case stays an error with
+// no correction and no call.
+func TestReadDoesNotGuessBetweenTwoProviders(t *testing.T) {
+	calls := 0
+	tool := func(name string) tools.Tool {
+		return tools.Tool{Name: name, Description: "x", Schema: tools.ObjectSchema(map[string]any{}),
+			Call: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+				calls++
+				return json.RawMessage(`{}`), nil
+			}}
+	}
+	byName := map[string]tools.Tool{
+		"mts-v1__standings":    tool("mts-v1__standings"),
+		"other-mod__standings": tool("other-mod__standings"),
+	}
+	call := model.Block{Type: model.BlockToolUse, ID: "t2", Name: "standings", Input: json.RawMessage(`{}`)}
+
+	block, rec := read(context.Background(), call, byName, "team-1", 4096, func() time.Duration { return 0 }, true)
+
+	if calls != 0 {
+		t.Errorf("a tool was called %d time(s) on an ambiguous name", calls)
+	}
+	if !block.IsError || !strings.Contains(block.Content, "there is no tool named") {
+		t.Errorf("ambiguous name should stay an error, got %+v", block)
+	}
+	if rec.CorrectedFrom != "" || rec.OK {
+		t.Errorf("ledger record = %+v, want an uncorrected failed call", rec)
+	}
+}

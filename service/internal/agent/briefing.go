@@ -330,6 +330,15 @@ type BriefingResult struct {
 // getting trimmed to fit, and the whole briefing failing outright because
 // game_time never gave it anything usable. More than one of the three can
 // fire for the same question.
+// surfacesLimit is what the briefing asks list_surfaces for. The tool's own
+// default was 20 rows on every companion before 1.0.5, and the live server
+// reached 30 surfaces, so the briefing's trip came back 20 of 30 and the
+// truncation guard did what it must with a cut list: omitted sf entirely,
+// on every question, until the mod shipped. 50 is list_surfaces's row cap on
+// every companion that has the tool, so asking for it is asking for
+// everything the tool will ever give.
+const surfacesLimit = 50
+
 func Assemble(ctx context.Context, byName map[string]tools.Tool, q Question, mark SessionMark, chat ChatSource, budget time.Duration) BriefingResult {
 	started := time.Now()
 	bctx, cancel := context.WithTimeout(ctx, budget)
@@ -352,7 +361,7 @@ func Assemble(ctx context.Context, byName map[string]tools.Tool, q Question, mar
 	}
 	if bctx.Err() == nil {
 		ran++
-		surfacesRaw, surfacesOK = rawTrip(bctx, byName, "list_surfaces", force, map[string]any{})
+		surfacesRaw, surfacesOK = rawTrip(bctx, byName, "list_surfaces", force, map[string]any{"limit": surfacesLimit})
 	}
 	if bctx.Err() == nil {
 		ran++

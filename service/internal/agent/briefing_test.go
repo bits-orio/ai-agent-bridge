@@ -1100,3 +1100,36 @@ func TestAssembleSurfaceRowsCarryNoPlatformKeysFromAnOlderCompanion(t *testing.T
 		}
 	}
 }
+
+// The briefing asks list_surfaces for its row cap rather than taking the
+// tool's default. The default was 20 on every companion before 1.0.5, the
+// live server reached 30 surfaces, and the truncation guard then did what it
+// must with a cut list and omitted sf on every question. Proven by a stub
+// that records its own arguments, since a whole reply and a default-sized
+// reply look identical from the payload on a small fixture.
+func TestAssembleAsksListSurfacesForItsRowCap(t *testing.T) {
+	var gotArgs json.RawMessage
+	ts := withTool(happyGroupATools(), "list_surfaces", tools.Tool{
+		Name:        catalog.ToolName(engineIface, "list_surfaces"),
+		Description: "records its own arguments",
+		Schema:      tools.ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer"}}, "force"),
+		Call: func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+			gotArgs = args
+			return json.RawMessage(`{"force":"north","total":1,"shown":1,"surfaces":[{"name":"nauvis","index":1,"force_players":3}]}`), nil
+		},
+	})
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q, want %q", res.Status, ledger.BriefingOn)
+	}
+	if gotArgs == nil {
+		t.Fatal("list_surfaces was never called")
+	}
+	var args map[string]any
+	if err := json.Unmarshal(gotArgs, &args); err != nil {
+		t.Fatalf("args do not parse: %v", err)
+	}
+	if limit, _ := args["limit"].(float64); limit != surfacesLimit {
+		t.Errorf("args = %s, want limit=%d, the tool's row cap on every companion", gotArgs, surfacesLimit)
+	}
+}

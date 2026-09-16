@@ -61,7 +61,15 @@ local function list_forces(a)
   local rows, empty = {}, 0
   for _, force in pairs(game.forces) do
     local ever = #force.players
-    if ever > 0 or a.include_empty == true or force.name == mine then
+    -- enemy and neutral are the engine's own and can never be a team, so
+    -- they are neither rows nor empty slots unless every force is asked
+    -- for. Counting them made "how many teams" answer "8 more empty team
+    -- slots" on a server with five: the other three were the biters, the
+    -- trees, and player.
+    local engine_only = force.name == "enemy" or force.name == "neutral"
+    if engine_only and a.include_empty ~= true then
+      -- fall through: not a row, not a slot
+    elseif ever > 0 or a.include_empty == true or force.name == mine then
       rows[#rows + 1] = {
         name = force.name,
         player_count = ever,

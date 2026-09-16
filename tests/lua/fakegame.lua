@@ -594,8 +594,21 @@ function F.install(opts)
     end
   end
 
+  local function engine_force(name)
+    return {
+      name = name, valid = true, players = {}, connected_players = {},
+      rockets_launched = 0, items_launched = {}, platforms = {},
+      get_entity_count = function() return 0 end,
+      logistic_networks = {},
+    }
+  end
+  S.enemy, S.neutral = engine_force("enemy"), engine_force("neutral")
+
   _G.game = {
-    forces = { player = force, ["team-3"] = S.team3 },
+    -- Every game carries the engine's own enemy and neutral forces. They
+    -- have no players and never will, and a sweep or a force list that
+    -- forgets that counts them as empty team slots.
+    forces = { player = force, ["team-3"] = S.team3, enemy = S.enemy, neutral = S.neutral },
     surfaces = S.surfaces,
     connected_players = { bob },
     players = { bob, gone },

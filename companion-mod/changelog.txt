@@ -41,6 +41,9 @@ Date: 2026-09-15
       are left out as empty slots since 1.0.3, and on a server with no one connected that is every
       force, the asker's included: "what forces are there" answered with none. The asker's own
       force is always listed now, whoever has joined it.
+    - list_forces counted the engine's own enemy and neutral forces as empty team slots, so "how
+      many teams" reported three slots more than the server had. They are neither rows nor slots
+      now unless every force is asked for with include_empty.
     - list_surfaces returned 20 rows by default, sorted by name, and a space platform is named
       platform-N, so every platform sorted after every planet and fell off the end. On a server
       with 25 surfaces the reply held no platform at all, which is why "which space ship has most

@@ -121,6 +121,12 @@ type ToolCall struct {
 	// Error holds the call's error string when OK is false, and is left nil
 	// (encoded as JSON null, never omitted) otherwise.
 	Error *string `json:"error"`
+	// CorrectedFrom is the name the model asked for when it was not a tool
+	// and exactly one tool could have been meant, so the service called that
+	// one instead: Name is what ran, this is what was asked. Omitted on every
+	// call the model named correctly, which is the vast majority, so the
+	// stats can count how often a prefix is still being invented.
+	CorrectedFrom string `json:"corrected_from,omitempty"`
 	// Path is set only for a find_item call, to the rung that answered it
 	// ("logistic", "walk" or "refused"); every other tool leaves it empty,
 	// which omits the key entirely rather than writing an empty string.

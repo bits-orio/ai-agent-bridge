@@ -687,13 +687,26 @@ func didYouMean(name string, byName map[string]tools.Tool) string {
 
 func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) (model.Block, ledger.ToolCall) {
 	started := time.Now()
-	t, known := byName[call.Name]
+	name := call.Name
+	t, known := byName[name]
+	correctedFrom := ""
 	if !known {
-		err := fmt.Errorf("there is no tool named %q", call.Name)
-		if did := didYouMean(call.Name, byName); did != "" {
-			err = fmt.Errorf("there is no tool named %q, did you mean %q", call.Name, did)
+		// An invented prefix is corrected, not merely pointed out. The catalog
+		// names an engine tool <iface>__<fn> and the history and ranking tools
+		// bare, and a model that has read nineteen prefixed names keeps
+		// putting one on the seven that have none: question 78 called
+		// mts-v1__catch_up, and after the suggestion shipped question 86
+		// called ai-agent-bridge-tools__catch_up, a different guess at the
+		// same tool, and still paid the round. didYouMean answers only when
+		// exactly one tool can be meant, so acting on it is not a guess; the
+		// ledger keeps the name the model asked for beside the one that ran.
+		did := didYouMean(name, byName)
+		if did == "" {
+			err := fmt.Errorf("there is no tool named %q", name)
+			return failed(call.ID, err), maybeToolCallRecord(ledgerOn, name, call.Input, limit, time.Since(started), floor, 0, err)
 		}
-		return failed(call.ID, err), maybeToolCallRecord(ledgerOn, call.Name, call.Input, limit, time.Since(started), floor, 0, err)
+		correctedFrom, name = name, did
+		t = byName[name]
 	}
 	args := call.Input
 	if tools.Declares(t.Schema, catalog.ForceParam) {
@@ -702,10 +715,21 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 	out, err := t.Call(ctx, args)
 	ms := time.Since(started)
 	if err != nil {
-		return failed(call.ID, err), maybeToolCallRecord(ledgerOn, call.Name, args, limit, ms, floor, 0, err)
+		return failed(call.ID, err), corrected(maybeToolCallRecord(ledgerOn, name, args, limit, ms, floor, 0, err), correctedFrom)
 	}
 	return model.Block{Type: model.BlockToolResult, ID: call.ID, Content: content(out, limit)},
-		maybeToolCallRecord(ledgerOn, call.Name, args, limit, ms, floor, len(out), nil)
+		corrected(maybeToolCallRecord(ledgerOn, name, args, limit, ms, floor, len(out), nil), correctedFrom)
+}
+
+// corrected stamps the name the model actually asked for onto a record for a
+// call the service redirected, and leaves a record alone otherwise. A zero
+// record, the ledger-off case, stays zero: stamping it would make a record
+// out of nothing.
+func corrected(rec ledger.ToolCall, from string) ledger.ToolCall {
+	if from != "" && rec.Name != "" {
+		rec.CorrectedFrom = from
+	}
+	return rec
 }
 
 // finish clips the artifact, remembers the exchange, prices the question,

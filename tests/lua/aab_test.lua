@@ -716,6 +716,16 @@ for _, row in ipairs(own.ok and own.r.forces or {}) do own_names[row.name] = tru
 check("list_forces never hides the asking force, even one nobody has joined",
       own.ok and own_names["team-3"] == true and own.r.total == 2 and own.r.empty == 0,
       F.encode(own))
+-- enemy and neutral are the engine's, never a team: not a row, not an
+-- empty slot, unless every force is asked for.
+local all_forces = call("ai-agent-bridge-tools", "list_forces", { force = "player", include_empty = true })
+local all_names = {}
+for _, row in ipairs(all_forces.ok and all_forces.r.forces or {}) do all_names[row.name] = true end
+check("list_forces with include_empty lists the engine's own forces too",
+      all_forces.ok and all_names.enemy == true and all_names.neutral == true and all_names["team-3"] == true,
+      F.encode(all_forces))
+check("list_forces without it counts neither enemy nor neutral as an empty slot",
+      forces.ok and forces.r.empty == 1 and forces.r.total == 1, F.encode(forces))
 
 -- ── the probe drops what it cannot use ────────────────────────────────
 S.logs = {}
