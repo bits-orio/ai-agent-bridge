@@ -42,9 +42,13 @@ Date: 2026-09-15
       kept now, and a label the model copied out of a tool result prints in the colour too.
     - Player names print in the player's own chat colour, the one the game prints their chat in.
       No team mod is involved: every player has one, and the companion reads it when it renders.
-    - A space platform row from sweep carries who owns the ship, where it is stopped, and a gps at
-      its hub on its own surface, so "which ship has the most, where is it" is one row and one
-      click.
+    - A space platform row, from sweep or from entity_count's per_surface, carries who owns the
+      ship, where it is stopped, and a gps at its hub on its own surface, so "which ship has the
+      most, where is it" is one row and one click.
+    - entity_count's per_surface walk skips a force that owns none of the entity anywhere, one
+      O(1) read instead of a pass per surface, and counts a platform for its owner only. On a
+      30-surface, 16-team save the thrusters question cost 480 passes and 1.26 seconds on the
+      game thread; it is a few dozen passes now.
   Bugfixes:
     - list_forces hid the asking force whenever nobody had joined it. Forces nobody has ever joined
       are left out as empty slots since 1.0.3, and on a server with no one connected that is every

@@ -32,7 +32,7 @@ local M = {}
 
 M.manifest = {
   built = {
-    desc = "How many entities one force has built, and how many it has mined back, over every surface unless one is named. top names the kinds built most, largest first; distinct_kinds says if there are more. all=true answers every force that has players in one call, built and mined only, no top list: use it for any each-team or every-force question instead of one call per force. Unknown surface: found=false.",
+    desc = "How many entities one force has built and how many it has mined back, counted as events over the whole game so far, not what stands on the map now: how many of something a force HAS is entity_count, which built the most of something is entity_count with all=true. Over every surface unless one is named. top names the kinds built most, largest first; distinct_kinds says if there are more. all=true answers every force that has players in one call, built and mined only, no top list: use it for any each-team or every-force question instead of one call per force. Unknown surface: found=false.",
     tier = "1",
     params = {
       surface = "string surface name or index, e.g. nauvis; omit for every surface",

@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/agent"
@@ -123,6 +125,12 @@ func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 		if raw, err := json.Marshal(state.result.Artifact); err == nil {
 			log.Printf("answer %d artifact %s", q.ID, raw)
 		}
+		// And the lines as the player saw them. The artifact says team-2; the
+		// companion prints a label in a colour, or plain, or with a torn tag,
+		// and none of that is visible from the JSON: six rounds of fixes to
+		// colours and pings were reported as done from the artifact line and
+		// turned out wrong on screen. Best effort, one extra read.
+		r.logRendered(ctx, q.ID, state.result.Artifact)
 	case rpc.HasCode(err, rpc.CodeBadArtifact):
 		r.refused(ctx, q, state, err)
 	case state.attempts >= maxDeliveries:
@@ -194,4 +202,67 @@ func (r *runner) labelsFor(ctx context.Context) []agent.ForceLabel {
 		}
 	}
 	return out
+}
+
+// logRendered reads back what the companion actually printed for one
+// answered question and logs it, joined with " | ". A failure here is logged
+// and changes nothing: the answer is already delivered.
+func (r *runner) logRendered(ctx context.Context, qid int64, sent agent.Artifact) {
+	raw, err := r.rpc.Call(ctx, "answers", map[string]any{"after": qid - 1, "limit": 1})
+	if err != nil {
+		log.Printf("answer %d rendered: could not read it back: %v", qid, err)
+		return
+	}
+	var entries []struct {
+		ID    int64    `json:"id"`
+		Shape string   `json:"shape"`
+		Lines []string `json:"lines"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.ID != qid {
+			continue
+		}
+		log.Printf("answer %d rendered: %s", qid, strings.Join(e.Lines, " | "))
+		// The companion says yes to an answer for a question already answered
+		// and prints nothing, so a retry after a lost reply is free. The same
+		// yes hides a second service answering the same server: on the rig,
+		// 2026-09-16, two instances each answered question 103 and the
+		// companion kept the first, so this one logged an artifact the player
+		// never saw. What was printed and what was sent cannot be compared
+		// word for word, labels and sprites are decorated in, but the shape
+		// and the number of lines survive decoration.
+		if mismatch := printedSomethingElse(sent, e.Shape, len(e.Lines)); mismatch != "" {
+			log.Printf("answer %d: the companion printed a different answer than this service sent (%s): "+
+				"another service is answering this server, and the control API bind error above is the same tell", qid, mismatch)
+		}
+		return
+	}
+}
+
+// printedSomethingElse compares the shape and, for the shapes the renderer
+// prints one line per entry, the line count of what the companion printed
+// against what this service sent. "" when they agree.
+func printedSomethingElse(sent agent.Artifact, shape string, lines int) string {
+	if shape != "" && shape != string(sent.Shape) {
+		return fmt.Sprintf("shape %s printed, %s sent", shape, sent.Shape)
+	}
+	var want int
+	switch sent.Shape {
+	case agent.ShapeSummary:
+		want = len(sent.Lines)
+	case agent.ShapeList:
+		want = len(sent.Items)
+	default:
+		return ""
+	}
+	if sent.Title != "" {
+		want++
+	}
+	if want > 0 && lines > 0 && lines != want {
+		return fmt.Sprintf("%d lines printed, %d sent", lines, want)
+	}
+	return ""
 }

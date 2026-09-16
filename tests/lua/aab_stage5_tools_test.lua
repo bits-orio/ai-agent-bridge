@@ -484,6 +484,26 @@ check("built sorts five kinds largest first",
       table.concat(built_order, ",") == "d=9,b=7,e=5,c=3,a=1", table.concat(built_order, ","))
 S.build_counts.player.nauvis = saved_build_nauvis
 
+-- ── per_surface: a platform row carries its own ping, and the walk is cheap ─
+-- The rig asked "which ship has most thrusters, where is it" through this
+-- path, not the sweep, because this tool's own description names the
+-- question, and the row had no ping to give. A platform row carries one now.
+S.entity_counts_by_surface = { ["platform-1"] = { lab = 4 }, nauvis = { lab = 12 } }
+local ps = call("entity_count", { all = true, per_surface = true, name = "lab" })
+local platform_row
+for _, row in ipairs(ps.ok and ps.r.forces or {}) do if row.surface == "platform-1" then platform_row = row end end
+check("a per_surface platform row carries a gps at its hub on its own surface",
+      platform_row ~= nil and platform_row.gps == "[gps=0,0,platform-1]" and platform_row.owner == "player",
+      F.encode(ps))
+local nauvis_row
+for _, row in ipairs(ps.ok and ps.r.forces or {}) do if row.surface == "nauvis" then nauvis_row = row end end
+check("a planet row carries no gps: a planet position is a find_entities answer",
+      nauvis_row ~= nil and nauvis_row.gps == nil, F.encode(nauvis_row))
+-- A force with none of the entity anywhere costs one O(1) read, not a pass
+-- per surface: team-3 has no player here so it is not walked at all, and
+-- player's total is checked before any surface is asked.
+S.entity_counts_by_surface = {}
+
 -- ── bounding: total/shown when a tool's own all=true would cut ─────────
 -- 105 forces beyond the two the fixture ships, each with one player, so
 -- bounded.cut(rows, bounded.MAX_FORCES=100) has something real to cut

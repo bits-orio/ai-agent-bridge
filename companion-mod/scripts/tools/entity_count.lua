@@ -44,7 +44,7 @@ local M = {}
 
 M.manifest = {
   entity_count = {
-    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false. all=true answers for every force that has players in one call, one row each, largest count first: use it for any each-team or every-force question instead of one call per force. Under all=true, leave surface out for each force's total everywhere, which the engine keeps and which costs nothing however many teams there are, the right call for any which-team-has-most question; name a surface only when the answer must be about that one place. all=true with per_surface=true breaks each force's count down by surface instead of totalling it, one row per team-and-place that has any, so \"which space ship has most thrusters, where is it\" is one call; platform surfaces carry the same owner, location and state columns list_surfaces does.",
+    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false. all=true answers for every force that has players in one call, one row each, largest count first: use it for any each-team or every-force question instead of one call per force. Under all=true, leave surface out for each force's total everywhere, which the engine keeps and which costs nothing however many teams there are, the right call for any which-team-has-most question; name a surface only when the answer must be about that one place. all=true with per_surface=true breaks each force's count down by surface instead of totalling it, one row per team-and-place that has any, so \"which space ship has most thrusters, where is it\" is one call; a platform row carries the owner, location and state columns list_surfaces does, and gps, the ping at the ship's own hub: put that gps in the answer, it is what where-is-it means for a ship.",
     params = {
       surface     = "string surface name or index, e.g. nauvis; required unless all=true, where omitting it counts every surface",
       name        = "string! entity prototype name, e.g. lab, assembling-machine-2",
@@ -142,14 +142,32 @@ local function entity_count_per_surface(a, forces)
     }
   end
 
+  -- Two things keep this walk off the game thread on a big save. A force
+  -- that owns none of the entity anywhere is skipped after one O(1) read of
+  -- the engine's own per-force counter, instead of one pass per surface
+  -- that all find nothing; and a platform surface is counted for the force
+  -- that owns it and no other, since a platform belongs to one force. On the
+  -- owner's save, 16 forces across 30 surfaces was 480 passes and 1.26
+  -- seconds on the game thread for a question about thrusters that three
+  -- forces owned; it is a few dozen passes now.
   local rows = {}
   for _, force in ipairs(forces) do
-    for _, surface in ipairs(surfaces) do
-      local count = surface.count_entities_filtered{ force = force.name, name = a.name }
-      if count > 0 then
-        local row = { force = force.name, surface = surface.name, count = count }
-        platform_lookup.merge_into(row, surface)
-        rows[#rows + 1] = row
+    if force.get_entity_count(a.name) > 0 then
+      for _, surface in ipairs(surfaces) do
+        local platform = platform_lookup.live(surface)
+        local owner = platform and platform.force and platform.force.name
+        if not owner or owner == force.name then
+          local count = surface.count_entities_filtered{ force = force.name, name = a.name }
+          if count > 0 then
+            local row = { force = force.name, surface = surface.name, count = count }
+            platform_lookup.merge_into(row, surface)
+            -- A platform is its own surface with its hub at the origin, so
+            -- the one ping that opens remote view on the ship is right here,
+            -- ready for the answer to carry.
+            if platform then row.gps = "[gps=0,0," .. surface.name .. "]" end
+            rows[#rows + 1] = row
+          end
+        end
       end
     end
   end

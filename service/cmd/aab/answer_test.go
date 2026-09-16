@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/agent"
 	"testing"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
@@ -185,5 +186,32 @@ func TestAskerLabel(t *testing.T) {
 				t.Errorf("asker label = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// Two services on one server each answer every question; the companion keeps
+// the first and says yes to the second. The rendered read-back is where that
+// becomes visible, by shape and line count, which survive the companion's
+// own label and sprite decoration.
+func TestPrintedSomethingElseSeesAnotherServicesAnswer(t *testing.T) {
+	sent := agent.Artifact{Shape: agent.ShapeSummary, Lines: []string{"16 teams have been claimed", "and 5 empty slots"}}
+	if got := printedSomethingElse(sent, "summary", 2); got != "" {
+		t.Errorf("same shape and count reported a mismatch: %q", got)
+	}
+	if got := printedSomethingElse(sent, "summary", 1); got == "" {
+		t.Error("a different line count went unreported")
+	}
+	if got := printedSomethingElse(sent, "list", 2); got == "" {
+		t.Error("a different shape went unreported")
+	}
+	// A title prints as its own line, and a table prints more lines than it
+	// has rows, so only the shapes printed one line per entry are counted.
+	titled := agent.Artifact{Shape: agent.ShapeList, Title: "Teams", Items: []string{"team-1", "team-2"}}
+	if got := printedSomethingElse(titled, "list", 3); got != "" {
+		t.Errorf("a titled list of two printed as three lines was reported: %q", got)
+	}
+	table := agent.Artifact{Shape: agent.ShapeTable, Columns: []string{"a"}, Rows: [][]string{{"1"}}}
+	if got := printedSomethingElse(table, "table", 5); got != "" {
+		t.Errorf("a table's line count was compared: %q", got)
 	}
 }

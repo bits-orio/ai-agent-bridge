@@ -104,7 +104,12 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	if cfg.ControlAPI.Addr != "" {
 		go func() {
 			if err := controlapi.New(cfg.ControlAPI.Addr, cfg.ControlAPI.Token, r.stats).Run(ctx); err != nil {
-				log.Printf("control api: %v", err)
+				// The commonest cause is a second copy of this service on the
+				// same machine, and a second copy against the same server
+				// answers every question twice: the companion keeps the first
+				// answer and says yes to the second, so the race is invisible
+				// from either log. Say so here, where it is first visible.
+				log.Printf("control api: %v (is another aab already running against this server?)", err)
 			}
 		}()
 	}
