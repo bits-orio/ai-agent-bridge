@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -68,19 +69,24 @@ const (
 const (
 	DefaultMaxOutputTokens = 4096
 	retryAfter             = time.Second
+	// DefaultTimeout bounds one request, connect to last byte. On
+	// 2026-09-16 question 104 waited the full two minutes on one upstream
+	// host that never answered; a request that long is a hung one.
+	DefaultTimeout = 120 * time.Second
 )
 
 // Options is what the operator chose, beyond the key.
 type Options struct {
-	Model          string   // OpenRouter model id, e.g. deepseek/deepseek-v4-pro-0813
-	Fallbacks      []string // tried in order when Model fails, OpenRouter's `models`
-	MaxOutput      int      // output tokens per turn; zero or less means DefaultMaxOutputTokens
-	Reasoning      string   // "off" sends enabled false, "model" sends nothing, low/medium/high send that effort
-	CacheTTL       string   // "1h" or "5m" for the rules-and-tools breakpoint on routes that take one
-	DataCollection string   // "deny" or "allow", OpenRouter's provider.data_collection; "" sends nothing
-	Providers      []string // upstream hosts to prefer, in order, OpenRouter's provider.order; nil lets OpenRouter choose
-	AllowFallbacks bool     // with Providers set: true lets OpenRouter fall back to any other host, false pins the request
-	Endpoint       string   // "" means Endpoint
+	Model          string        // OpenRouter model id, e.g. deepseek/deepseek-v4-pro-0813
+	Fallbacks      []string      // tried in order when Model fails, OpenRouter's `models`
+	MaxOutput      int           // output tokens per turn; zero or less means DefaultMaxOutputTokens
+	Reasoning      string        // "off" sends enabled false, "model" sends nothing, low/medium/high send that effort
+	CacheTTL       string        // "1h" or "5m" for the rules-and-tools breakpoint on routes that take one
+	DataCollection string        // "deny" or "allow", OpenRouter's provider.data_collection; "" sends nothing
+	Providers      []string      // upstream hosts to prefer, in order, OpenRouter's provider.order; nil lets OpenRouter choose
+	AllowFallbacks bool          // with Providers set: true lets OpenRouter fall back to any other host, false pins the request
+	Timeout        time.Duration // one request, connect to last byte; zero means DefaultTimeout
+	Endpoint       string        // "" means Endpoint
 }
 
 // Client answers one agent round through OpenRouter.
@@ -97,14 +103,18 @@ func New(apiKey string, opts Options) *Client {
 	if opts.Endpoint == "" {
 		opts.Endpoint = Endpoint
 	}
-	return &Client{http: &http.Client{Timeout: 120 * time.Second}, key: apiKey, opts: opts}
+	if opts.Timeout <= 0 {
+		opts.Timeout = DefaultTimeout
+	}
+	return &Client{http: &http.Client{Timeout: opts.Timeout}, key: apiKey, opts: opts}
 }
 
 func (c *Client) Name() string { return c.opts.Model }
 
 // Step sends the whole conversation and returns the next assistant turn.
-// A 429 or a 5xx is tried once more after a second; anything else is the
-// error, with OpenRouter's own message in it.
+// A 429, a 5xx or a request that ran into the client's own timeout is
+// tried once more after a second; anything else is the error, with
+// OpenRouter's own message in it.
 func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef) (model.Step, error) {
 	body, err := json.Marshal(c.request(system, msgs, defs))
 	if err != nil {
@@ -128,9 +138,19 @@ func (c *Client) send(ctx context.Context, body []byte) (*response, error) {
 			}
 			return resp, nil
 		}
-		retryable := err == nil && (status == http.StatusTooManyRequests || status/100 == 5)
+		// A request that ran into the client's own timeout is tried once
+		// more too: question 104 on 2026-09-16 waited the full two minutes
+		// on one upstream host that never answered and then told the player
+		// the model was unreachable, when a second request would have been
+		// served in seconds. A deadline the caller set is theirs to keep, so
+		// a context already done is not retried.
+		timedOut := err != nil && ctx.Err() == nil && isTimeout(err)
+		retryable := timedOut || (err == nil && (status == http.StatusTooManyRequests || status/100 == 5))
 		if !retryable || attempt >= 2 {
 			if err != nil {
+				if timedOut {
+					return nil, fmt.Errorf("openrouter: %s: no reply within %s, twice: %w", c.opts.Model, c.opts.Timeout, err)
+				}
 				return nil, err
 			}
 			return nil, &HTTPError{Status: status, Model: c.opts.Model, Text: resp.errorText()}
@@ -141,6 +161,14 @@ func (c *Client) send(ctx context.Context, body []byte) (*response, error) {
 		case <-time.After(retryAfter):
 		}
 	}
+}
+
+// isTimeout is true for the client's own timeout, whether it struck while
+// waiting for the headers or while reading the body: both come back as a
+// net.Error that says so.
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 func (c *Client) post(ctx context.Context, body []byte) (*response, int, error) {

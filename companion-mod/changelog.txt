@@ -1,4 +1,22 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.6
+Date: 2026-09-16
+  Changes:
+    - Tables line up. Every row of a table answer is set in a monospace font the mod now declares
+      (aab-mono, the game's own mono face at the chat size), each column padded to its widest
+      cell, numbers right-aligned, a rule under the header, so the column boundaries hold from the
+      first row to the last.
+    - locate_player takes nearby=N: the closest built things within N tiles of the player's
+      character, nearest first, with the distance and a gps each, so "what is Bob standing next
+      to" is one read of one small circle, never a walk over the surface. all=true answers for
+      every connected player in one call.
+  Bugfixes:
+    - A sprite tag naming something the game has no sprite for printed raw, brackets and all: the
+      model wrote [img=entity.biter] for a kind of enemy that has no prototype of that name, and
+      planet.* is not a sprite path at all, so every planet icon asked for printed raw too. A tag
+      whose sprite the game cannot draw is dropped, a planet path is read as the space location it
+      is, and a clickable tag for an unknown prototype prints its plain name.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.5
 Date: 2026-09-16
   Changes:

@@ -121,7 +121,7 @@ jobs:
         run: |
           FOLDER="${{ steps.info.outputs.folder }}"
           mkdir -p "build/${FOLDER}"
-          cp companion-mod/info.json companion-mod/control.lua companion-mod/settings.lua companion-mod/changelog.txt companion-mod/thumbnail.png "build/${FOLDER}/"
+          cp companion-mod/info.json companion-mod/control.lua companion-mod/data.lua companion-mod/settings.lua companion-mod/changelog.txt companion-mod/thumbnail.png "build/${FOLDER}/"
           cp -r companion-mod/locale companion-mod/scripts "build/${FOLDER}/"
           # Nothing but Lua and locale files may ride along in those two trees.
           if find "build/${FOLDER}/scripts" "build/${FOLDER}/locale" -type f ! -name '*.lua' ! -name '*.cfg' | grep -q .; then

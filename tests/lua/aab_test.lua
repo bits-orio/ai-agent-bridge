@@ -208,8 +208,8 @@ local a2 = rpc({ op = "answer", qid = qid2, artifact = {
 check("table answer ok", a2.ok, F.encode(a2))
 check("a table prints to chat, once", #S.printed == before + 1, #S.printed .. " vs " .. before)
 check("a global answer goes to the whole server", S.printed[#S.printed].who == "*", S.printed[#S.printed].who)
-check("the table is one line per row with columns first",
-      S.printed[#S.printed].text:find("Players\nname | online\n[color=1,0.5,0]Bob[/color] | yes\nAnn | no", 1, true) ~= nil,
+check("the table is one line per row with columns first, each row in the mono font, a rule under the header",
+      S.printed[#S.printed].text:find("Players\n[font=aab-mono]name | online[/font]\n[font=aab-mono]-----+-------[/font]\n[font=aab-mono][color=1,0.5,0]Bob[/color]  | yes[/font]\n[font=aab-mono]Ann  | no[/font]", 1, true) ~= nil,
       S.printed[#S.printed].text)
 -- The test provider is also a scope provider, so every answer here carries
 -- its global badge between the name and the colon.
@@ -217,6 +217,30 @@ check("the line opens with the companion's name, the badge, then a colon",
       S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%]: Players\n") ~= nil,
       S.printed[#S.printed].text)
 check("no popup frame exists any more", S.bob.gui.screen["aab_answer_frame"] == nil)
+
+-- Columns line up: each column is padded to its widest cell, measured on the
+-- visible text so a team's colour tags cost nothing, and a column of
+-- numbers is right-aligned under a right-aligned heading. Mutation-tested:
+-- measuring width in bytes rather than visible characters pads Team Losers'
+-- row by its tag bytes and turns the first check red; dropping the numeric
+-- test left-aligns the 9 and does the same.
+local qid_grid = remote.call("ai-agent-bridge-v1", "ask", { text = "trains", force = "player", player_index = 1 })
+rpc({ op = "answer", qid = qid_grid, artifact = { shape = "table", columns = { "Team", "Trains" },
+  rows = { { "team-3", "9" }, { "player", "12" } } } })
+local grid_text = S.printed[#S.printed].text
+check("a table pads every column to its widest visible cell and right-aligns numbers",
+      grid_text:find("[font=aab-mono]Team        | Trains[/font]\n[font=aab-mono]------------+-------[/font]\n"
+                     .. "[font=aab-mono][color=0.5,0.8,1]Team Losers[/color] |      9[/font]\n[font=aab-mono]player      |     12[/font]", 1, true) ~= nil,
+      grid_text)
+-- Without the font the renderer falls back to the plain join rather than
+-- naming a font the game would print raw.
+local mono_font = prototypes.font["aab-mono"]
+prototypes.font["aab-mono"] = nil
+rpc({ op = "answer", qid = remote.call("ai-agent-bridge-v1", "ask", { text = "trains again", force = "player", player_index = 1 }),
+      artifact = { shape = "table", columns = { "Team", "Trains" }, rows = { { "player", "12" } } } })
+check("a table with no mono font prints the plain join",
+      S.printed[#S.printed].text:find("Team | Trains\nplayer | 12", 1, true) ~= nil, S.printed[#S.printed].text)
+prototypes.font["aab-mono"] = mono_font
 
 -- ── audience setting: asker only ──────────────────────────────────────
 S.settings["aab-answer-audience"].value = "asker"
@@ -319,6 +343,26 @@ team_mode = false
 S.interfaces["test-scope"] = nil
 S.interfaces["test-scope-broken"] = nil
 S.interfaces["test-scope-global"] = nil
+
+-- ── tags the game cannot draw never print raw ────────────────────────
+-- Factorio prints a chat line raw, brackets and all, when a sprite tag
+-- names a sprite it does not have. The model wrote [img=entity.biter] for
+-- "biters" (no such prototype, only small-biter and its kin) on the live
+-- server, and [img=planet.nauvis] as the prompt once asked, and planet/
+-- nauvis is not a sprite path: space-location/nauvis is, measured on the
+-- live engine. Mutation-tested: skipping prune in line() prints both raw.
+local qid_prune = ask_cmd("biters")
+rpc({ op = "answer", qid = qid_prune, artifact = { shape = "summary", lines = {
+  "[img=entity.biter] Most biters killed: team-3 leads",
+  "[img=planet.nauvis] is home; [item=no-such-thing] is not a thing; [img=item.iron-plate] is; [gps=1,2,nauvis] stays",
+} } })
+local pruned = S.printed[#S.printed].text
+check("a sprite the game has no prototype for is dropped and the line starts clean",
+      pruned:find(": Most biters killed:", 1, true) ~= nil and pruned:find("[img=entity.biter]", 1, true) == nil, pruned)
+check("a planet sprite is read as the space location it is",
+      pruned:find("[img=space-location.nauvis] is home", 1, true) ~= nil, pruned)
+check("a clickable tag for an unknown prototype prints its plain name; a known sprite and a gps stay",
+      pruned:find("no-such-thing is not a thing; [img=item.iron-plate] is; [gps=1,2,nauvis] stays", 1, true) ~= nil, pruned)
 
 -- ── the question echo, sprites for bare names, force labels ───────────
 before = #S.printed
@@ -440,6 +484,32 @@ check("locate_player finds Bob's character with a gps tag, and says what he is l
       and where_bob.r.surface == "platform-1" and where_bob.r.viewing == "nauvis" and where_bob.r.connected == true, F.encode(where_bob))
 local where_nobody = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Zed" } })
 check("locate_player on an unknown name is found=false", where_nobody.ok and where_nobody.r.found == false, F.encode(where_nobody))
+
+-- ── what a player stands beside: one small circle, never the surface ──
+-- The fixture keeps Bob's character on the platform, where nothing is
+-- built; for this read he stands on nauvis beside the two labs, 1.1 and 2.7
+-- tiles off, with the furnace 10.9 tiles away outside the circle.
+-- Mutation-tested: dropping radius from the engine filter brings the
+-- furnace and every assembler into nearest and turns the first check red.
+local bob_surface, bob_position = S.bob.physical_surface, S.bob.physical_position
+S.bob.physical_surface, S.bob.physical_position = game.surfaces.nauvis, { x = 10.4, y = -3.6 }
+local beside = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob", nearby = 5 } })
+check("nearby lists the built things inside the radius, nearest first, with distance and gps",
+      beside.ok and beside.r.nearby_radius == 5 and beside.r.nearby_total == 2 and #beside.r.nearest == 2
+      and beside.r.nearest[1].name == "lab" and beside.r.nearest[1].distance == "1.1"
+      and beside.r.nearest[1].gps == "[gps=10,-5,nauvis]" and beside.r.nearest[2].distance == "2.7", F.encode(beside))
+check("the read is bounded to the circle: position and radius reach the engine",
+      S.last_find_filter ~= nil and S.last_find_filter.radius == 5 and S.last_find_filter.position ~= nil
+      and S.last_find_filter.position.x == 10.4, F.encode(S.last_find_filter))
+local everyone = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", all = true, nearby = 5 } })
+check("all=true answers for every connected player in one call, with no top-level player",
+      everyone.ok and everyone.r.player == nil and everyone.r.total == 1 and everyone.r.players[1].player == "Bob"
+      and everyone.r.players[1].nearest[1].name == "lab", F.encode(everyone))
+local too_far = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob", nearby = 500 } })
+check("nearby is clamped to the cap", too_far.ok and too_far.r.nearby_radius == 32, F.encode(too_far))
+local bad_nearby = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "locate_player", a = { force = "player", player = "Bob", nearby = "x" } })
+check("a non-numeric nearby is a provider_error", not bad_nearby.ok and bad_nearby.e == "provider_error", F.encode(bad_nearby))
+S.bob.physical_surface, S.bob.physical_position = bob_surface, bob_position
 
 -- ── safety: the rpc command, ask rate limits, private refusals ─────────
 local replies_before = #S.rcon_replies
@@ -648,7 +718,7 @@ check("a notice prints once", n == 1)
 
 -- A short row is padded to the column count so the line still has every cell.
 n, text = answer_as_bob({ shape = "table", columns = { "a", "b", "c" }, rows = { { "1" } } })
-check("a short table row still prints", n == 1 and text:find("a | b | c\n1 |  | ", 1, true) ~= nil, text)
+check("a short table row still prints", n == 1 and text:find("[font=aab-mono]1 |   |[/font]", 1, true) ~= nil, text)
 
 -- ── artifact validation, the answer op's gate ─────────────────────────
 -- Contract item 5 and review findings 18/24: a bad artifact is bad_artifact,

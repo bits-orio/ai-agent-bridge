@@ -56,8 +56,9 @@ func systemPrompt(voice string) string {
 	b.WriteString("The game renders the artifact, so send values, not formatting.\n\n")
 
 	b.WriteString("Answers print in the game's chat. Every item, fluid, entity, technology or planet is written as its sprite tag and nothing else, no name beside it, ")
-	b.WriteString("in titles, column names and cells alike: [img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=planet.nauvis], [img=quality.rare]. ")
+	b.WriteString("in titles, column names and cells alike: [img=item.iron-plate], [img=fluid.crude-oil], [img=entity.assembling-machine-2], [img=technology.logistics-2], [img=space-location.nauvis], [img=quality.rare]. ")
 	b.WriteString("So a column is [img=item.iron-ore]/min, never Iron ore/min. ")
+	b.WriteString("A sprite names a prototype exactly as a tool result spelled it, never a word of your own: biter, ore and science pack are kinds, not prototypes, a tag naming one prints as raw text, and the plain word is the answer there. ")
 	b.WriteString("The one exception: when the player asks about the thing itself, what an item is, what a recipe needs, a technology to look at, write the clickable tag instead, [item=iron-plate], [recipe=repair-pack], [technology=logistics-2], [fluid=crude-oil], [entity=lab], which opens it in game. ")
 	b.WriteString("Wrap a warning in [color=red]...[/color], and colour nothing else: not names, not numbers, not headings. Team names are labelled and coloured for you after you answer, and every tag you add costs characters the answer does not have. ")
 	b.WriteString("Use the internal prototype names the tools return. Numbers keep the units the tool gave them. ")
@@ -73,6 +74,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("Never decide the verdict yourself: hand the figures to rank_by_rate (totals and online hours) or rank (any values) and write the leader it names, or take the leader a ranked sweep reply already names.\n\n")
 
 	b.WriteString("For a where question, find_entities and locate_player return positions; write each as [gps=x,y,surface] so the player can click it, and only a position a tool returned: never invent one. ")
+	b.WriteString("What a player is standing next to or near is locate_player with nearby, the tiles to look within: it reads one small circle and never the surface; for every online player at once, all=true, one call. ")
 	b.WriteString("A space platform is its own surface, so its ping is a gps at its hub on that surface, [gps=0,0,platform-3] for instance, and a platform row or a list_surfaces row carries that surface name; give that ping, never a planet's, and say which planet it is stopped at or that it is in flight. ")
 	b.WriteString("Those searches walk one surface each, so pick it before searching: the surface the asker is looking at unless the question names another place or another force; ")
 	b.WriteString("for another force, list_surfaces for that force shows where its players stand. ")
@@ -85,7 +87,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("Never answer that there are none of something from a truncated search.\n\n")
 
 	b.WriteString("A question about what happened rather than what is, what did I miss, when did something last happen, is answered from the recorded history, not by reading the game: ")
-	b.WriteString("catch_up for one player's absence, recent_events, last_event and count_events for the rest. ")
+	b.WriteString("catch_up for one player's absence, or with since_tick for what happened in the last hour or since any tick, one call; recent_events, last_event and count_events for the rest. ")
 	b.WriteString("The game does record who last built or changed each entity, but no tool here reads it: when asked who built the most, say a tool is missing, never that the game does not keep it. ")
 	b.WriteString("What has been said recently is already in ch when ch is there and needs no lookup; recent_chat is the route when ch is missing, and for chat further back than it carries. ")
 	b.WriteString("They cost no game time at all, so reach for them before any tool that reads the map.\n\n")

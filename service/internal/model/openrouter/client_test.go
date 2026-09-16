@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 )
@@ -217,6 +218,53 @@ func TestRetryAndErrors(t *testing.T) {
 }
 
 func c2(f *fakeRouter) *Client { return client(f, Options{}) }
+
+// A request that runs into the client's own timeout is tried once more; a
+// second timeout is the error, and it says how long was waited.
+func TestTimeoutIsRetriedOnce(t *testing.T) {
+	var calls int32
+	hung := func(hangFirst int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := int(atomic.AddInt32(&calls, 1))
+			if n <= hangFirst {
+				time.Sleep(400 * time.Millisecond)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, toolCallReply)
+		}))
+	}
+	srv := hung(1)
+	defer srv.Close()
+	c := New("test-key", Options{Model: "deepseek/deepseek-v4-pro-0813", Endpoint: srv.URL, Timeout: 100 * time.Millisecond})
+	if _, err := c.Step(context.Background(), "rules", question, oneTool); err != nil {
+		t.Fatalf("one hung request then a reply must succeed: %v", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2 (the hung request and its retry)", calls)
+	}
+
+	calls = 0
+	srv2 := hung(2)
+	defer srv2.Close()
+	c2 := New("test-key", Options{Model: "deepseek/deepseek-v4-pro-0813", Endpoint: srv2.URL, Timeout: 100 * time.Millisecond})
+	_, err := c2.Step(context.Background(), "rules", question, oneTool)
+	if err == nil || !strings.Contains(err.Error(), "no reply within 100ms, twice") {
+		t.Errorf("two hung requests = %v, want the timeout named twice", err)
+	}
+	if calls != 2 {
+		t.Errorf("calls = %d, want exactly 2, never a third", calls)
+	}
+
+	calls = 0
+	srv3 := hung(1)
+	defer srv3.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	c3 := New("test-key", Options{Model: "deepseek/deepseek-v4-pro-0813", Endpoint: srv3.URL, Timeout: 100 * time.Millisecond})
+	if _, err := c3.Step(ctx, "rules", question, oneTool); err == nil {
+		t.Errorf("a caller's own deadline is kept: no retry past it")
+	}
+}
 
 // Malformed tool arguments become an empty object rather than a crash, and
 // a reply with no choices is an empty end of turn.

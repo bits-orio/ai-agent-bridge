@@ -60,11 +60,14 @@ local function line(v)
   if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
     return "(unrenderable value)"
   end
-  -- Decorated, then cut, then repaired: the labels and sprites decorated in
-  -- here can carry a line past MAX_BYTES that the service kept within it, and
-  -- a cut that lands inside one of their tags would make the whole chat line
-  -- render raw. richtext.repair drops a torn tag and closes an open span.
-  local decorated = player_colors.decorate(labels.decorate(sprites.decorate((tostring(v):gsub("%c+", " ")))))
+  -- Pruned, decorated, then cut, then repaired. Pruned first: a sprite tag
+  -- the model wrote for a sprite the game does not have prints the whole
+  -- line raw, so it goes before anything else is added. The labels and
+  -- sprites decorated in here can carry a line past MAX_BYTES that the
+  -- service kept within it, and a cut that lands inside one of their tags
+  -- would make the whole chat line render raw. richtext.repair drops a torn
+  -- tag and closes an open span.
+  local decorated = player_colors.decorate(labels.decorate(sprites.decorate(sprites.prune((tostring(v):gsub("%c+", " "))))))
   local cut = clip_bytes(decorated, MAX_BYTES)
   if cut ~= decorated then cut = richtext.repair(cut) end
   return cut
@@ -125,12 +128,79 @@ function M.comparison(a)
   return out
 end
 
+-- Tables are set in the mod's own monospace font (data.lua declares
+-- aab-mono from the game's default-mono face at the chat size), because
+-- columns line up only when every character is the same width and the chat
+-- font is not: on the live server every table printed with its column
+-- boundaries wandering from row to row. Each column is padded to its widest
+-- cell, numbers sit right-aligned under a right-aligned heading, and a rule
+-- runs under the header. Widths are measured on what is visible: a colour
+-- or font tag is nothing, any other tag draws an icon about one cell wide.
+local MONO_FONT = "aab-mono"
+local MAX_COLUMN_WIDTH = 40
+
+local function mono_font_exists()
+  return prototypes ~= nil and prototypes.font ~= nil and prototypes.font[MONO_FONT] ~= nil
+end
+
+local function visible_width(s)
+  local icons = 0
+  local text = s:gsub("%[([^%[%]]*)%]", function(tag)
+    if tag:sub(1, 6) == "color=" or tag:sub(1, 5) == "font=" or tag == "/color" or tag == "/font" then return "" end
+    icons = icons + 1
+    return ""
+  end)
+  -- Characters, not bytes: every UTF-8 sequence has exactly one lead byte,
+  -- and the game's Lua has no utf8 library to count them with.
+  local _, chars = text:gsub("[^\128-\191]", "")
+  return chars + icons
+end
+
+local function is_numeric(s)
+  local text = s:gsub("%[[^%[%]]*%]", "")
+  return text:match("^[-+]?%d[%d,%.]*[%a%%/]*$") ~= nil
+end
+
+local function mono(cells)
+  return "[font=" .. MONO_FONT .. "]" .. (table.concat(cells, " | "):gsub("%s+$", "")) .. "[/font]"
+end
+
 -- { shape="table", columns={...}, rows={{...},...} }: up to five columns, eight rows.
 function M.table(a)
   local grid = M.grid(a)
-  local out = { table.concat(grid.columns, " | ") }
+  if not mono_font_exists() then
+    local out = { table.concat(grid.columns, " | ") }
+    for _, row in ipairs(grid.rows) do out[#out + 1] = table.concat(row, " | ") end
+    return out
+  end
+  local widths, numeric = {}, {}
+  for i, column in ipairs(grid.columns) do
+    widths[i] = visible_width(column)
+    numeric[i] = true
+  end
   for _, row in ipairs(grid.rows) do
-    out[#out + 1] = table.concat(row, " | ")
+    for i, cell in ipairs(row) do
+      widths[i] = math.max(widths[i], visible_width(cell))
+      if cell ~= "" and not is_numeric(cell) then numeric[i] = false end
+    end
+  end
+  for i in ipairs(widths) do widths[i] = math.min(widths[i], MAX_COLUMN_WIDTH) end
+  local function pad(cell, i)
+    local fill = widths[i] - visible_width(cell)
+    if fill <= 0 then return cell end
+    if numeric[i] then return string.rep(" ", fill) .. cell end
+    return cell .. string.rep(" ", fill)
+  end
+  local header, rule = {}, {}
+  for i, column in ipairs(grid.columns) do
+    header[i] = pad(column, i)
+    rule[i] = string.rep("-", widths[i])
+  end
+  local out = { mono(header), mono({ table.concat(rule, "-+-") }) }
+  for _, row in ipairs(grid.rows) do
+    local cells = {}
+    for i = 1, #grid.columns do cells[i] = pad(row[i], i) end
+    out[#out + 1] = mono(cells)
   end
   return out
 end

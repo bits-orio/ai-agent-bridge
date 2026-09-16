@@ -484,6 +484,31 @@ func TestCatchUp(t *testing.T) {
 	}
 }
 
+// TestCatchUpSinceTick: a tick draws the window itself, no player needed,
+// and recent_events takes the same floor.
+func TestCatchUpSinceTick(t *testing.T) {
+	s := mustOpen(t, filepath.Join(t.TempDir(), "history.sqlite"))
+	defer s.Close()
+	catchUp := findTool(t, s.Tools(), "catch_up")
+	ingest(t, s, `{"event":"player_died","tick":100,"data":{"player":"Alice","force":"player","cause":"biter"}}`)
+	ingest(t, s, `{"event":"research_finished","tick":500,"data":{"force":"player","tech":"automation","level":1}}`)
+	ingest(t, s, `{"event":"rocket_launched","tick":900,"data":{"force":"player","surface":"nauvis"}}`)
+
+	_, rows := splitColumnar(t, callTool(t, catchUp, map[string]any{"since_tick": 400}))
+	if len(rows) != 2 || splitRow(rows[0])[1] != "rocket_launched" || splitRow(rows[1])[1] != "research_finished" {
+		t.Fatalf("rows = %v, want the rocket and the research, newest first, and never the death before the tick", rows)
+	}
+	if _, err := catchUp.Call(context.Background(), json.RawMessage(`{}`)); err == nil || !strings.Contains(err.Error(), "since_tick") {
+		t.Errorf("neither player nor since_tick: err = %v, want one naming both", err)
+	}
+
+	recent := findTool(t, s.Tools(), "recent_events")
+	_, rows = splitColumnar(t, callTool(t, recent, map[string]any{"since_tick": 400}))
+	if len(rows) != 2 {
+		t.Errorf("recent_events since 400: rows = %v, want 2", rows)
+	}
+}
+
 // TestCatchUpRowBudget checks the 15-row cut: more than 15 candidate rows
 // in the window collapse to the newest 15.
 func TestCatchUpRowBudget(t *testing.T) {

@@ -46,22 +46,25 @@ const catchUpHeader = "tick\tevent\tplayer\tdetail"
 // local substitution.
 func (s *Store) catchUp(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
-		Player string `json:"player"`
+		Player    string `json:"player"`
+		SinceTick int64  `json:"since_tick"`
 	}
 	if err := unmarshalArgs(args, &in); err != nil {
 		return nil, fmt.Errorf("catch_up: %w", err)
 	}
-	if in.Player == "" {
-		return nil, errors.New(`catch_up: "player" is required`)
+	if in.Player == "" && in.SinceTick <= 0 {
+		return nil, errors.New(`catch_up: "player" or "since_tick" is required`)
 	}
 
-	seen, err := s.everSeen(ctx, in.Player)
-	if err != nil {
-		return nil, fmt.Errorf("catch_up: %w", err)
-	}
-	if !seen {
-		row := tsvRow("", "none", in.Player, "no record of this player")
-		return json.RawMessage(columnar(catchUpHeader, []string{row})), nil
+	if in.Player != "" {
+		seen, err := s.everSeen(ctx, in.Player)
+		if err != nil {
+			return nil, fmt.Errorf("catch_up: %w", err)
+		}
+		if !seen {
+			row := tsvRow("", "none", in.Player, "no record of this player")
+			return json.RawMessage(columnar(catchUpHeader, []string{row})), nil
+		}
 	}
 
 	nowTick, err := s.maxTick(ctx)
@@ -69,15 +72,26 @@ func (s *Store) catchUp(ctx context.Context, args json.RawMessage) (json.RawMess
 		return nil, fmt.Errorf("catch_up: %w", err)
 	}
 	windowStart := nowTick - catchUpWindowTicks
-	left, err := s.lastPlayerLeftTick(ctx, in.Player)
-	if err != nil {
-		return nil, fmt.Errorf("catch_up: %w", err)
-	}
-	// A player seen only joining, chatting or dying, never yet left
-	// (still connected, or the log never caught their departure), has no
-	// better local marker than the 24-hour floor alone.
-	if left > windowStart {
-		windowStart = left
+	if in.SinceTick > 0 {
+		// A tick the asker named draws the start itself, "what happened in
+		// the last hour" being the current tick less an hour of ticks; the
+		// 24-hour cap still floors it. Question 103 on 2026-09-16 spent four
+		// rounds and eight recent_events reads on that question for want of
+		// a window it could name.
+		if in.SinceTick > windowStart {
+			windowStart = in.SinceTick
+		}
+	} else {
+		left, err := s.lastPlayerLeftTick(ctx, in.Player)
+		if err != nil {
+			return nil, fmt.Errorf("catch_up: %w", err)
+		}
+		// A player seen only joining, chatting or dying, never yet left
+		// (still connected, or the log never caught their departure), has no
+		// better local marker than the 24-hour floor alone.
+		if left > windowStart {
+			windowStart = left
+		}
 	}
 
 	eventRows, err := s.queryEvents(ctx, eventQuery{Events: catchUpEvents, SinceTick: windowStart, Limit: catchUpRawFetchLimit})

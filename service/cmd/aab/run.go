@@ -171,10 +171,14 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 		if cfg.OpenRouter.APIKey == "" {
 			return nil, fmt.Errorf("no OpenRouter API key: set env var %q, or set model.provider to fake", cfg.OpenRouter.APIKeyEnv)
 		}
+		timeout, err := m.RequestTimeout()
+		if err != nil {
+			return nil, err
+		}
 		return openrouter.New(cfg.OpenRouter.APIKey, openrouter.Options{
 			Model: m.ID, Fallbacks: m.Fallbacks, MaxOutput: cfg.Agent.MaxOutputTokens,
 			Reasoning: m.Reasoning, CacheTTL: m.CacheTTL, DataCollection: m.DataCollection,
-			Providers: m.Providers, AllowFallbacks: m.AllowFallbacks,
+			Providers: m.Providers, AllowFallbacks: m.AllowFallbacks, Timeout: timeout,
 		}), nil
 	}
 }

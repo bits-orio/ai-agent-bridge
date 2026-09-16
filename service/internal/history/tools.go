@@ -26,11 +26,15 @@ func (s *Store) Tools() []tools.Tool {
 		{
 			Name: "recent_events",
 			Description: "Recorded history events, newest first: one header line (id, tick, event, player, force, data) then one tab-separated row per event; data is that event's own JSON payload. " +
-				"Filter by event, force or player. At most 20 rows; use count_events for a total.",
+				"Filter by event, force or player, and by since_tick for a window. At most 20 rows; use count_events for a total.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
 					"description": "Event key, e.g. player_died or research_finished. Omit for every key.",
+				},
+				"since_tick": map[string]any{
+					"type":        "integer",
+					"description": "Only events at or after this tick.",
 				},
 				"force": map[string]any{
 					"type":        "string",
@@ -105,15 +109,20 @@ func (s *Store) Tools() []tools.Tool {
 		},
 		{
 			Name: "catch_up",
-			Description: "What a player missed while away, server-wide, not just their own force: research finished, rockets launched, deaths, joins and leaves, plus the same filtered chat recent_chat reads. " +
-				"The window runs from that player's last recorded departure, capped at 24 hours. One header line (tick, event, player, detail) then up to 15 tab-separated rows, newest first, merged by tick. " +
+			Description: "What happened on the server, not just on one force: research finished, rockets launched, deaths, joins and leaves, plus the same filtered chat recent_chat reads. " +
+				"The window runs from since_tick when given (what happened in the last hour: the current tick less 216000), otherwise from that player's last recorded departure, what they missed while away; capped at 24 hours either way. " +
+				"One header line (tick, event, player, detail) then up to 15 tab-separated rows, newest first, merged by tick. " +
 				"A player with no record at all gets one row saying so instead of an error.",
 			Schema: tools.ObjectSchema(map[string]any{
 				"player": map[string]any{
 					"type":        "string",
-					"description": "Player name.",
+					"description": "Player name: the window starts at their last departure. Not needed with since_tick.",
 				},
-			}, "player"),
+				"since_tick": map[string]any{
+					"type":        "integer",
+					"description": "Start of the window as a tick; wins over the player's departure when both are given.",
+				},
+			}),
 			Call: s.catchUp,
 		},
 	}
@@ -121,17 +130,18 @@ func (s *Store) Tools() []tools.Tool {
 
 func (s *Store) recentEvents(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
-		Event  string `json:"event"`
-		Force  string `json:"force"`
-		Player string `json:"player"`
-		Limit  int    `json:"limit"`
+		Event     string `json:"event"`
+		Force     string `json:"force"`
+		Player    string `json:"player"`
+		SinceTick int64  `json:"since_tick"`
+		Limit     int    `json:"limit"`
 	}
 	if err := unmarshalArgs(args, &in); err != nil {
 		return nil, fmt.Errorf("recent_events: %w", err)
 	}
 
 	rows, err := s.queryEvents(ctx, eventQuery{
-		Event: in.Event, Force: in.Force, Player: in.Player, Limit: clampLimit(in.Limit),
+		Event: in.Event, Force: in.Force, Player: in.Player, SinceTick: in.SinceTick, Limit: clampLimit(in.Limit),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("recent_events: %w", err)

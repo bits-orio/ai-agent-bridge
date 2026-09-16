@@ -30,6 +30,7 @@ const (
 	defaultReasoning               = "low"
 	defaultCacheTTL                = "1h"
 	defaultDataCollection          = "deny"
+	defaultModelTimeout            = "120s"
 	defaultOpenRouterKeyEnv        = "OPENROUTER_API_KEY"
 	defaultAnthropicKeyEnv         = "ANTHROPIC_API_KEY"
 	defaultMaxRounds               = 6
@@ -187,6 +188,26 @@ type ModelConfig struct {
 	DataCollection string   `yaml:"data_collection"` // OpenRouter: deny (default) | allow
 	Providers      []string `yaml:"providers"`       // OpenRouter: upstream hosts to prefer, in order; empty lets OpenRouter choose
 	AllowFallbacks bool     `yaml:"allow_fallbacks"` // OpenRouter, with providers set: true falls back to any host, false (default) pins
+	Timeout        string   `yaml:"timeout"`         // one model request, a duration: 120s (default); 60s is safe on a pinned host
+}
+
+// RequestTimeout is model.timeout as a duration: how long one model request
+// may take before the client gives up on it and tries once more. On a
+// pinned upstream host (model.providers) a round takes seconds, and 60s
+// catches a hung request without cutting a slow but honest one short.
+func (m ModelConfig) RequestTimeout() (time.Duration, error) {
+	raw := m.Timeout
+	if raw == "" {
+		raw = defaultModelTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("model.timeout: %q is not a duration such as 60s or 2m", raw)
+	}
+	if d < 10*time.Second {
+		return 0, fmt.Errorf("model.timeout: %s is under the 10s floor", d)
+	}
+	return d, nil
 }
 
 // OpenRouterConfig and AnthropicConfig hold each provider's key reference.
@@ -226,6 +247,9 @@ func (m ModelConfig) check() error {
 	case "deny", "allow":
 	default:
 		return fmt.Errorf("model.data_collection: %q is not deny or allow", m.DataCollection)
+	}
+	if _, err := m.RequestTimeout(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -368,6 +392,7 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 			Reasoning:      getenvDefault("AAB_REASONING", defaultReasoning),
 			CacheTTL:       getenvDefault("AAB_CACHE_TTL", defaultCacheTTL),
 			DataCollection: getenvDefault("AAB_DATA_COLLECTION", defaultDataCollection),
+			Timeout:        getenvDefault("AAB_MODEL_TIMEOUT", defaultModelTimeout),
 		},
 		OpenRouter: OpenRouterConfig{
 			APIKeyEnv: defaultOpenRouterKeyEnv,
@@ -714,6 +739,9 @@ func (c *Config) applyModelDefaults() {
 	}
 	if c.Model.DataCollection == "" {
 		c.Model.DataCollection = defaultDataCollection
+	}
+	if c.Model.Timeout == "" {
+		c.Model.Timeout = defaultModelTimeout
 	}
 	if c.OpenRouter.APIKeyEnv == "" {
 		c.OpenRouter.APIKeyEnv = defaultOpenRouterKeyEnv

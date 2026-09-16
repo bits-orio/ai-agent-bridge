@@ -250,6 +250,7 @@ None of the sweeps above are capped to a readable size at the source. AleForge a
 |---|---|
 | what has everyone been saying | `recent_chat{limit}` |
 | catch me up | `catch_up{player}` |
+| what happened in the last hour | `catch_up{since_tick}` |
 | what's happened recently | `recent_events` |
 | how many times has X happened | `count_events` |
 | when did X last happen | `last_event` |
@@ -1217,6 +1218,13 @@ further than a day even for a player who has been gone a week. Because the
 tool touches no RCON, `last_online` here is not a fresh engine read; it is
 read off the store itself, the tick of that player's most recently recorded
 row (typically a `player_left`), which stands in for it locally.
+
+`catch_up{since_tick}` answers "what happened in the last hour" the same
+way, with the window's start named by the asker (the current tick less an
+hour of ticks) instead of read off a player's departure; the 24-hour cap
+still floors it, and `player` is not needed. Added 2026-09-16 after question
+103 spent four rounds and eight `recent_events` reads on that question,
+one event kind at a time, for want of a window it could name.
 
 Within that window it returns the event log's `research_finished`,
 `rocket_launched`, `player_died`, `player_joined` and `player_left` rows

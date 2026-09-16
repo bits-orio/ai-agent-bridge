@@ -393,7 +393,7 @@ The mod is a provider like any other, on the interface
 | `rockets` | `limit` | rockets launched by that force and the items it sent up, largest first |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
 | `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`; `ghost`, `limit` | where that force's entities are on one surface, each with a ready `[gps=x,y,surface]` tag: by prototype name, entity type, the recipe a crafting machine is set to, or the item or fluid that recipe makes; ghosts match by what they will become and say `ghost = true`; an unknown name comes back with up to five close names |
-| `locate_player` | `player` | where one player's character is, with a gps tag, whether they are connected, and `viewing` when they look at another surface |
+| `locate_player` | `player`, `all`, `nearby` | where one player's character is, with a gps tag, whether they are connected, and `viewing` when they look at another surface; `nearby=N` adds the closest built things within N tiles, nearest first, with distance and gps; `all=true` answers for every connected player in one call |
 
 Every list is bounded and sorted before it is cut, and reports `total`
 beside `shown`, so an agent can say "12 online of 214 known" instead of

@@ -16,7 +16,8 @@
 -- API names verified against the 2.0.77 docs:
 --   LuaSurface::find_entities_filtered(filter) -> array[LuaEntity];
 --     EntitySearchFilters: name, type, force, limit, all optional; with no
---     area, position or radius it covers the surface.
+--     area, position or radius it covers the surface; position with radius
+--     covers that circle and nothing else.
 --   LuaEntity::get_recipe() -> LuaRecipe? (crafting machines), ::position,
 --     ::name, ::type. LuaPlayer::position, ::surface, ::connected.
 
@@ -27,6 +28,12 @@ local bounded        = require("scripts.tools.bounded")
 local SCAN_CAP      = 2000
 local DEFAULT_SHOWN = 5
 local MAX_SHOWN     = 10
+
+-- nearby: the circle locate_player reads around a character. 32 tiles is a
+-- generous "next to", and a radius read of a circle that size is bounded by
+-- its area whatever the surface holds.
+local NEARBY_MAX   = 32
+local NEARBY_SHOWN = 5
 
 -- Entity types that have a recipe to filter on, as the list the engine filter
 -- takes and as the set recipe_of tests against. One source, two shapes.
@@ -70,9 +77,11 @@ M.manifest = {
     },
   },
   locate_player = {
-    desc = "Where one player's character is: surface and position with a ready [gps=...] tag, whether they are connected, and the surface they are looking at when it differs (remote view). Unknown player: found=false.",
+    desc = "Where one player's character is: surface and position with a ready [gps=...] tag, whether they are connected, and the surface they are looking at when it differs (remote view). nearby=N adds the closest built things within N tiles of the character, nearest first, each with its distance and gps (what is Bob standing next to): one read of one small circle, never a walk over the surface. all=true answers for every connected player in one call, one row each, so a per-player question is one lookup however many are online. Unknown player: found=false.",
     params = {
-      player = "string! player name",
+      player = "string player name; required unless all=true",
+      all    = "boolean every connected player in one call; player is ignored",
+      nearby = "integer tiles, 1 to " .. NEARBY_MAX .. ": list the built things within this radius of the character",
     },
   },
 }
@@ -110,6 +119,58 @@ end
 local function gps(position, surface_name)
   local x, y = math.floor(position.x + 0.5), math.floor(position.y + 0.5)
   return x, y, string.format("[gps=%d,%d,%s]", x, y, surface_name)
+end
+
+-- What a player stands beside is something a force placed. Scenery and
+-- wildlife belong to neutral or enemy, and a few forced things are not
+-- builds either: players themselves, their corpses, the marker a
+-- construction request leaves, an item lying on the ground.
+local NOT_A_BUILD = {
+  character = true, ["character-corpse"] = true, corpse = true,
+  ["item-request-proxy"] = true, ["highlight-box"] = true, ["item-entity"] = true,
+}
+
+local function is_build(entity, own_character)
+  if not entity.valid or entity == own_character or NOT_A_BUILD[entity.type] then return false end
+  local force = entity.force
+  return force ~= nil and force.name ~= "neutral" and force.name ~= "enemy"
+end
+
+--- The built things within `radius` tiles of `position` on `surface`,
+--- nearest first, cut to NEARBY_SHOWN, and how many there were before the
+--- cut. EntitySearchFilters.position with .radius asks the engine for the
+--- entities inside that circle and nothing else (2.0.77: "If given with
+--- position, will return all entities within the radius of the position"),
+--- so the cost is the circle's, never the surface's. On 2026-09-16 the
+--- question "what is each player standing next to" had no bounded read to
+--- reach for at all.
+local function nearest_builds(surface, position, radius, own_character)
+  local found = {}
+  for _, entity in ipairs(surface.find_entities_filtered({ position = position, radius = radius })) do
+    if is_build(entity, own_character) then
+      local dx, dy = entity.position.x - position.x, entity.position.y - position.y
+      found[#found + 1] = { entity = entity, distance = math.sqrt(dx * dx + dy * dy) }
+    end
+  end
+  table.sort(found, function(p, q)
+    if p.distance ~= q.distance then return p.distance < q.distance end
+    return real_name(p.entity) < real_name(q.entity)
+  end)
+  local rows = {}
+  for i, near in ipairs(bounded.cut(found, NEARBY_SHOWN)) do
+    local x, y, tag = gps(near.entity.position, surface.name)
+    local row = { name = real_name(near.entity), type = real_type(near.entity),
+                  distance = bounded.round(near.distance, 1), x = x, y = y, gps = tag }
+    if is_ghost(near.entity) then row.ghost = true end
+    rows[i] = row
+  end
+  return rows, #found
+end
+
+local function nearby_radius(v)
+  if v == nil then return nil end
+  if type(v) ~= "number" then error("nearby must be a number of tiles", 0) end
+  return math.max(1, math.min(NEARBY_MAX, math.floor(v)))
 end
 
 local function optional_string(v, what)
@@ -208,12 +269,9 @@ local function find_entities(a)
   }
 end
 
-local function locate_player(a)
-  if type(a.player) ~= "string" or a.player == "" then error("player is required", 0) end
-  local player = game.get_player(a.player)
-  if not (player and player.valid) then
-    return { found = false, player = a.player, reason = "no player by that name" }
-  end
+--- One player's row: where the character is, what it is looking at and,
+--- with a radius, what stands beside it.
+local function locate_one(player, nearby)
   -- The character's place is the answer to "where is Bob"; the controller's
   -- surface (remote view) is reported beside it when it differs, since that
   -- is what Bob is looking at right now.
@@ -227,7 +285,30 @@ local function locate_player(a)
   }
   local viewing = player.surface and player.surface.valid and player.surface.name or nil
   if viewing and viewing ~= surface_name then out.viewing = viewing end
+  if nearby and physical and physical.valid then
+    out.nearby_radius = nearby
+    out.nearest, out.nearby_total = nearest_builds(physical, position, nearby, player.character)
+  end
   return out
+end
+
+local function locate_player(a)
+  local nearby = nearby_radius(a.nearby)
+  if a.all == true then
+    local rows = {}
+    for _, player in pairs(game.connected_players) do
+      if player.valid then rows[#rows + 1] = locate_one(player, nearby) end
+    end
+    table.sort(rows, function(p, q) return p.player < q.player end)
+    local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
+    return { found = true, total = #rows, shown = #shown, players = shown }
+  end
+  if type(a.player) ~= "string" or a.player == "" then error("player is required unless all=true", 0) end
+  local player = game.get_player(a.player)
+  if not (player and player.valid) then
+    return { found = false, player = a.player, reason = "no player by that name" }
+  end
+  return locate_one(player, nearby)
 end
 
 M.functions = { find_entities = find_entities, locate_player = locate_player }

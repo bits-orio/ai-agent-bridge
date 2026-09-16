@@ -247,8 +247,10 @@ function F.install(opts)
       return S.entity_counts[filter.name] or 0
     end
     this.get_total_pollution = function() return S.pollution[this.name] or 0 end
-    -- LuaSurface::find_entities_filtered: name, type, force and limit are
-    -- honoured; everything lives on nauvis.
+    -- LuaSurface::find_entities_filtered: name, type, force, limit, and
+    -- position with radius are honoured; everything lives on nauvis.
+    -- EntitySearchFilters.position + .radius: "will return all entities
+    -- within the radius of the position" (2.0.77), and force is optional.
     --
     -- EntitySearchFilters.name, .type, .ghost_name and .ghost_type each take a
     -- single prototype id OR an array of them (2.0.77 docs, LuaSurface.html).
@@ -266,7 +268,8 @@ function F.install(opts)
     end
     this.find_entities_filtered = function(filter)
       assert(type(filter) == "table", "find_entities_filtered wants one table")
-      assert(type(filter.force) == "string", "find_entities_filtered wants a force name")
+      if filter.force ~= nil then assert(type(filter.force) == "string", "find_entities_filtered wants a force name") end
+      if filter.radius ~= nil then assert(type(filter.position) == "table", "a radius needs a position") end
       S.last_find_filter = filter
       local out = {}
       if this.name ~= "nauvis" then return out end
@@ -275,7 +278,13 @@ function F.install(opts)
         local built = matches(filter.name, e.name) or matches(filter.type, e.type)
         local ghost = matches(filter.ghost_name, e.ghost_name) or matches(filter.ghost_type, e.ghost_type)
         if by_real and (filter.ghost_name or filter.ghost_type) then by_real = false end
-        if by_real or built or ghost then
+        local inside = true
+        if filter.radius then
+          local dx, dy = e.position.x - filter.position.x, e.position.y - filter.position.y
+          inside = dx * dx + dy * dy <= filter.radius * filter.radius
+        end
+        local owned = filter.force == nil or (e.force ~= nil and e.force.name == filter.force)
+        if (by_real or built or ghost) and inside and owned then
           out[#out + 1] = e
           if filter.limit and #out >= filter.limit then break end
         end
@@ -283,13 +292,16 @@ function F.install(opts)
       return out
     end
   end
+  -- Every fixture entity belongs to the player force: LuaEntity::force is
+  -- never nil, and a build is told from scenery by it.
   local function entity(name, etype, x, y, recipe)
     return { name = name, type = etype, valid = true, position = { x = x, y = y },
+             force = { name = "player", valid = true },
              get_recipe = function() return recipe and { name = recipe } or nil end }
   end
   local function ghost(name, etype, x, y, recipe)
     return { name = "entity-ghost", type = "entity-ghost", ghost_name = name, ghost_type = etype, valid = true,
-             position = { x = x, y = y },
+             position = { x = x, y = y }, force = { name = "player", valid = true },
              get_recipe = function() return recipe and { name = recipe } or nil end }
   end
   S.entities = {
@@ -485,6 +497,20 @@ function F.install(opts)
   _G.helpers = {
     table_to_json = encode,
     json_to_table = F.decode,
+    -- LuaHelpers::is_valid_sprite_path(path): "Checks if the given SpritePath
+    -- is valid and contains a loaded sprite" (2.0.77). The class must be one
+    -- this fake knows and the name a prototype it has. planet/<x> is not a
+    -- sprite path, measured on the live engine; space-location/<x> is.
+    is_valid_sprite_path = function(path)
+      assert(type(path) == "string", "is_valid_sprite_path wants a string")
+      local class, name = path:match("^([%w%-]+)/(.+)$")
+      if not class then return false end
+      local P = _G.prototypes
+      local tables = { item = P.item, entity = P.entity, fluid = P.fluid, technology = P.technology,
+                       recipe = P.recipe, quality = P.quality, ["space-location"] = { nauvis = true } }
+      local t = tables[class]
+      return t ~= nil and t[name] ~= nil
+    end,
     write_file = function(path, data, append, for_player)
       assert(for_player == 0, "events must be written by the server only")
       if not append then S.files[path] = "" end
@@ -511,6 +537,9 @@ function F.install(opts)
       ["military-science-pack"] = { name = "military-science-pack", products = { { type = "item", name = "military-science-pack", amount = 2 } } },
     },
     quality = { normal = { name = "normal", level = 0 }, uncommon = { name = "uncommon", level = 1 } },
+    -- LuaPrototypes::font: the mod's own data.lua declares aab-mono, and the
+    -- table renderer checks it is there before setting rows in it.
+    font = { ["aab-mono"] = { name = "aab-mono" } },
   }
 
   _G.rcon = { print = function(s) S.rcon_replies[#S.rcon_replies + 1] = s end }

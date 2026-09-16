@@ -49,6 +49,9 @@ model:
   # "via=" and `aab stats` name the hosts seen; list the good ones here, in order.
   # providers: [StreamLake]
   # allow_fallbacks: false   # true lets OpenRouter use any other host when these fail
+  # How long one model request may take before it is tried once more, then reported.
+  # Default 120s. With providers pinned to one fast host, 60s catches a hung request.
+  # timeout: 60s
   # Check the live list at https://openrouter.ai/api/v1/models and keep to ids whose
   # supported_parameters include "tools". For provider anthropic use the Anthropic id,
   # claude-sonnet-5 for instance.
