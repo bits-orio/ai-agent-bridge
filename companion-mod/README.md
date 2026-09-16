@@ -361,12 +361,14 @@ clocks rather than the server's.
 ### 5. Force labels by probe, `force_labels_v1`
 
 A mod that names forces adds a zero-argument `force_labels_v1` to any
-interface it owns, returning `{ ["team-1"] = "Team Ace", ... }`. The mod
-strips rich text and swaps at the edges: the agent turns a label in a
-question into the force name before the model reads it, and this mod turns
-force names in an answer back into labels. Only force names with a digit,
+interface it owns, returning `{ ["team-1"] = "Team Ace", ... }`. A label
+may carry colour and font tags, the way a team mod colours its teams; this
+mod keeps those two when it prints a label and strips every other tag. The
+swap happens at the edges: the agent turns a label in a question into the
+force name before the model reads it, and this mod turns force names in an
+answer back into labels, in their colour. Only force names with a digit,
 hyphen or underscore take part, so `player` stays a word. The `labels` op
-lists the merged map.
+lists the merged map as plain text.
 
 ## Tools this mod provides
 

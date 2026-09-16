@@ -4,7 +4,7 @@
 --
 -- The generic driver every sweep metric rides: pick the axis, run the
 -- metric's own check, resolve which forces and surfaces are in scope, let
--- the metric prefilter that scope and predict its own cost against it,
+-- the metric predict its own cost against that scope,
 -- refuse before a single pass runs if the estimate is over budget, then hand
 -- the metric its scope to read through whichever existing tool it delegates
 -- to. Mirrors the discipline entity_count.lua's own named-surface path
@@ -40,9 +40,9 @@ local function live_forces()
 end
 
 --- Every valid surface, name order, the same walk list_surfaces already
---- builds. A metric's own prefilter narrows this further when its axis
---- needs to (the platform axis keeps only live platforms; see
---- scripts/sweep/metrics/entities.lua).
+--- builds. An axis that has nothing to say about some of them (the platform
+--- axis, on a planet) answers nil for that cell and the cell contributes no
+--- row; see scripts/sweep/axes.lua. No metric narrows this list itself.
 local function live_surfaces()
   local out = {}
   for _, surface in pairs(game.surfaces) do
@@ -95,7 +95,6 @@ function M.run(a)
   end
 
   local ctx = { forces = live_forces(), surfaces = live_surfaces() }
-  if metric.prefilter then ctx.surfaces = metric.prefilter(ctx, axis) end
 
   if metric.predict and metric.max_passes then
     local passes = metric.predict(ctx, axis, a)

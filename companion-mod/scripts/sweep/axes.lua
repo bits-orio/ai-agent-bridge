@@ -26,11 +26,13 @@ function M.surface(cell) return cell.surface end
 --- 0,0 on a planet no tool had mentioned.
 function M.platform(cell)
   if not cell.platform then return nil end
+  -- The state already reads as words ("in flight" for a ship between
+  -- planets, platform_lookup's own table), so nothing is translated here.
   local where
   if cell.location then
     where = "at " .. cell.location
   elseif cell.state then
-    where = cell.state == "on_the_path" and "in flight" or cell.state
+    where = cell.state
   end
   local inside = {}
   if cell.owner then inside[#inside + 1] = cell.owner end

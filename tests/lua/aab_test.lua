@@ -87,6 +87,25 @@ local top = call("ai-agent-bridge-tools", "top_items",
 check("top_items ok", top.ok and #top.r.items == 2, F.encode(top))
 check("top_items sums every quality too", top.ok and top.r.items[1].produced_per_min == 90
       and top.r.all_qualities == true, top.ok and F.encode(top.r.items))
+-- top_items sorted on the rounded rate, and bounded.round hands back a
+-- number for a whole rate and a string for a fraction, so one whole rate
+-- beside a fractional one compared a string with a number and threw.
+-- Mutation-tested: sorting on produced_per_min again turns this into a
+-- provider_error, "attempt to compare string with number".
+local real_flow = S.stats.get_flow_count
+S.stats.get_flow_count = function(a)
+  local item = type(a.name) == "table" and a.name.name or a.name
+  if a.category == "input" and not a.sample_index then
+    return item == "copper-plate" and 12.25 or 30
+  end
+  return real_flow(a)
+end
+local mixed = call("ai-agent-bridge-tools", "top_items",
+  { force = "player", surface = "nauvis", window = "ten_minutes", n = 5 })
+check("top_items ranks a whole rate beside a fractional one without throwing",
+      mixed.ok and mixed.r.items[1].item == "iron-plate" and mixed.r.items[1].produced_per_min == 60
+      and mixed.r.items[2].produced_per_min == "24.5", F.encode(mixed))
+S.stats.get_flow_count = real_flow
 local top_nowhere = call("ai-agent-bridge-tools", "top_items",
   { force = "player", surface = "atlantis", window = "ten_minutes" })
 check("top_items answers found=false for an unknown surface",
@@ -354,6 +373,22 @@ check("a copied plain label prints in the team's colour",
 check("a longer word than the label is not a partial match",
       copied:find("Team Loserss is nobody", 1, true) ~= nil, copied)
 check("a longer name is not a partial match", labelled:find("team-30 is nobody", 1, true) ~= nil, labelled)
+-- A label past LABEL_LIMIT is matched by its clipped plain form, so the
+-- coloured form has to show the same words: the plain clip, with no colour
+-- span for the clip to tear. The interface name sorts before the test
+-- provider's, so it wins team-3 for the one question.
+local long_words = string.rep("Loser", 16)
+remote.add_interface("aab-a-long-label", {
+  force_labels_v1 = function() return { ["team-3"] = "[color=1,0,0]" .. long_words .. "[/color]" } end,
+})
+S.tick = S.tick + 1  -- the label scan is cached per tick; a new provider needs a new one
+local long_qid = ask_cmd("who is long")
+rpc({ op = "answer", qid = long_qid, artifact = { shape = "summary", lines = { "team-3 is long" } } })
+local long_line = S.printed[#S.printed].text
+check("a label longer than the clip prints clipped and plain, never a torn colour span",
+      long_line:find(long_words:sub(1, 64) .. " is long", 1, true) ~= nil
+      and long_line:find("[color=1,0,0]", 1, true) == nil, long_line)
+S.interfaces["aab-a-long-label"] = nil
 
 -- ── where things are ──────────────────────────────────────────────────
 local labs = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", name = "lab" } })

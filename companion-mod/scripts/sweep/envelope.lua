@@ -39,14 +39,22 @@ function M.build(metric_name, axis, metric, rows, a)
 
   local total = #rows
   local limit = bounded.limit(a.limit, DEFAULT_ROWS, MAX_ROWS)
-  local shown_count = math.min(limit, total)
-  local skipped = total - shown_count
+  local wanted = math.min(limit, total)
 
   local shown_rows = {}
-  for i = 1, shown_count do
+  for i = 1, wanted do
     local row = rows[i]
     shown_rows[i] = { row.name, bounded.round(row.value, metric.places or 0) }
   end
+  -- Bounded by bytes after the limit, through the same bounded.fit every
+  -- other sweep-shaped reply in this catalog passes. A name on the platform
+  -- axis is a whole label, ship, owner, location and gps, and a hundred of
+  -- those with the names players give ships encode past the 8000-byte call
+  -- cap, where rpc.lua refuses the reply whole. The manifest says limit may
+  -- be 100; the bytes decide how many of those go out.
+  shown_rows = bounded.fit(shown_rows)
+  local shown_count = #shown_rows
+  local skipped = total - shown_count
 
   return {
     sweep_v = 1,
@@ -65,7 +73,9 @@ function M.build(metric_name, axis, metric, rows, a)
     -- rather than emit one, the same behaviour A1 of this same contract
     -- relies on ("the JSON writer will drop them anyway"). A Go decoder
     -- reading `why` into an optional field sees the same nil either way.
-    why = skipped > 0 and "limit" or nil,
+    -- "bytes" when the byte bound cut deeper than the limit did, so the
+    -- model knows a bigger limit would not have shown more.
+    why = skipped > 0 and (shown_count < wanted and "bytes" or "limit") or nil,
   }
 end
 

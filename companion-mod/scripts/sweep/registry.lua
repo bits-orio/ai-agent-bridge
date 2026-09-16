@@ -96,8 +96,8 @@ end
 --     },
 --   }
 --
--- Nothing here names a mod. Any multi-team mod, MTS or an OARC-like one,
--- becomes sweepable by declaring that block, and the companion needs no
+-- Nothing here names a mod. Any multi-team mod, whichever one a server
+-- runs, becomes sweepable by declaring that block, and the companion needs no
 -- release to learn about it. Discovery happens at call time, not at load:
 -- another mod's remote interface is not guaranteed to exist while this
 -- file is being required, and probe.lua already re-reads every provider on

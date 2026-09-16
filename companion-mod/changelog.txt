@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.5
-Date: 2026-09-15
+Date: 2026-09-16
   Changes:
     - sweep: one tool for every "which team has the most" question. Name a metric and, if it
       needs one, a subject; get one row per force, largest first, ranked by the service with the
@@ -49,7 +49,19 @@ Date: 2026-09-15
       O(1) read instead of a pass per surface, and counts a platform for its owner only. On a
       30-surface, 16-team save the thrusters question cost 480 passes and 1.26 seconds on the
       game thread; it is a few dozen passes now.
+    - Agent program: the OpenRouter upstream host can be pinned, providers and allow_fallbacks
+      under model in aab.yaml. The hosts behind one model differ by about three times in answer
+      time and the prompt cache is per host, so a pinned host keeps answers fast and the cache
+      warm.
+    - Agent program: every answer is read back the way the player sees it and logged, and the log
+      says so when a second agent program is answering the same server.
   Bugfixes:
+    - A line clipped in the middle of a colour tag printed raw, tags and all. The mod and the agent
+      program both close the span they cut now.
+    - top_items sorted its rows on the rounded rate, a number for a whole rate and a text for a
+      fraction, and Lua throws comparing the two, so "what do we make most" answered with an error
+      whenever one item's rate happened to be whole beside another's that was not. Sorted on the
+      raw rate now, rounded only on the way out.
     - list_forces hid the asking force whenever nobody had joined it. Forces nobody has ever joined
       are left out as empty slots since 1.0.3, and on a server with no one connected that is every
       force, the asker's included: "what forces are there" answered with none. The asker's own

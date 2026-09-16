@@ -176,7 +176,12 @@ local function entity_count_per_surface(a, forces)
     if x.force ~= y.force then return x.force < y.force end
     return x.surface < y.surface
   end)
-  local shown = bounded.cut(rows, bounded.MAX_FORCES)
+  -- Bounded by bytes as well as by count, like finish_rows above: these rows
+  -- carry a platform's owner, location, state and gps, and 44 of them encode
+  -- past the 8000-byte call cap, where the whole reply is refused after
+  -- every pass was spent. This is the path bounded.fit was written for, and
+  -- it was the one path that did not call it.
+  local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
   return {
     found = true, name = a.name, surface = "all", surfaces_counted = #surfaces,
     total = #rows, shown = #shown, forces = shown,

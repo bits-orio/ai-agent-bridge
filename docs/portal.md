@@ -10,12 +10,13 @@ Type `/ask` and a question, the way you would ask a friend on the server. A few 
 - `/ask how much iron did we make since I died`
 - `/ask what is Team Ace researching`
 - `/ask which team has launched more rockets`
+- `/ask which space ship has the most thrusters, and where is it`
 
 Ask a follow-up and it remembers what was just said. Anyone on the server can join in. Nothing is scanned or exported ahead of time: the AI looks up only what your question needs, when you ask it.
 
 ## Status
 
-First release. Tested on 2.0 dedicated servers, vanilla and with Multi-Team Support, with and without Space Age.
+In use on 2.0 dedicated servers, vanilla and with Multi-Team Support, with and without Space Age.
 
 ## Quick start
 
@@ -28,8 +29,9 @@ First release. Tested on 2.0 dedicated servers, vanilla and with Multi-Team Supp
 
 - Ask in plain words; answers come back in chat with item icons and map pings.
 - Follow-ups share a session; `/ask #iron` names one others can join, `/ask new` starts fresh.
-- Every player can ask about every team or force on the server.
-- On a Multi-Team Support server, team-only chat gets team-only answers, and teams are called by their names.
+- Every player can ask about every team or force, and "which team has the most" is one lookup however many teams there are.
+- On a Multi-Team Support server, team-only chat gets team-only answers, and teams are called by their names, in their colours.
+- Player names print in each player's own chat colour.
 - Knows what happened: deaths, research, rockets and chat since the save began.
 - Other mods can add their own lookups, so the AI learns about them without any change here.
 - Your own key, any model: Claude, GPT, DeepSeek, Gemini or anything else OpenRouter lists. Every answer shows what it cost, and there are caps per player, per server and per day.
@@ -44,7 +46,7 @@ Factorio 2.0, Space Age or not. Works on a plain vanilla server. Needs RCON on t
 
 ## Works with
 
-- [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support): private answers in team chat, teams by name, and each team's own clock so "how am I doing compared to them" compares fairly.
+- [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support): private answers in team chat, teams by name and colour, and each team's own clock so "how am I doing compared to them" compares fairly.
 - [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge): both use RCON on the same server, neither needs the other.
 
 Part of the MTS family: [Multi-Team Support](https://mods.factorio.com/mod/multi-team-support), [Open Discord Bridge](https://mods.factorio.com/mod/open-discord-bridge).

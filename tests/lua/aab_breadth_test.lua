@@ -398,7 +398,15 @@ end
 -- it, and forcing it into them would test the wrong contract.
 
 local sweep_registry = require("scripts.sweep.registry")
-local sweep_platform = require("scripts.sweep.platform")
+local platform_lookup = require("scripts.tools.platform_lookup")
+
+--- The platform's name when `surface` carries a live one, nil otherwise.
+--- platform_lookup.live is the single definition of "live platform" every
+--- platform row in the catalog goes through, and it takes a plain table.
+local function name_of(surface)
+  local platform = platform_lookup.live(surface)
+  return platform and platform.name or nil
+end
 
 local function row_eq(row, name, value)
   return type(row) == "table" and row[1] == name and row[2] == value
@@ -550,6 +558,22 @@ check("rockets sweep delegates to rockets{all=true}",
       and row_eq(rockets_sweep.r.rows[1], "player", 7) and rockets_sweep.r.total == 1,
       F.encode(rockets_sweep))
 
+-- rockets{all=true} cuts at bounded.MAX_FORCES, and a ranking over the
+-- survivors of a cut names whoever survived. The delegate is looked up at
+-- call time so a stub can hand back the one shape the fixture cannot.
+-- Mutation-tested: dropping the guard in scripts/sweep/metrics/rockets.lua
+-- ranks the stub's single row and turns this red.
+local rockets_tool = require("scripts.tools.rockets")
+local real_rockets = rockets_tool.functions.rockets
+rockets_tool.functions.rockets = function(_a)
+  return { total = 120, shown = 100, forces = { { force = "team-3", rockets_launched = 9 } } }
+end
+local rockets_cut = call("sweep", { metric = "rockets" })
+check("sweep rockets refuses whole when its delegate reports a cut",
+      rockets_cut.ok and rockets_cut.r.found == false and rockets_cut.r.rows == nil
+      and rockets_cut.r.shown == 100 and rockets_cut.r.total == 120, F.encode(rockets_cut))
+rockets_tool.functions.rockets = real_rockets
+
 local research_sweep = call("sweep", { metric = "research" })
 check("research sweep delegates to current_research{all=true}",
       research_sweep.ok and research_sweep.r.unit == "percent"
@@ -590,6 +614,20 @@ check("a limit cuts the tail, keeps the leaders, and says why",
       limited.ok and limited.r.total == 3 and limited.r.shown == 2 and limited.r.skipped == 1
       and limited.r.why == "limit" and row_eq(limited.r.rows[1], "sweep-synth-1", 100)
       and row_eq(limited.r.rows[2], "sweep-synth-2", 50), F.encode(limited))
+-- The same rows, bounded by bytes as well: a name on the platform axis is a
+-- whole label, and a hundred of them with the names players give ships
+-- encode past the call cap. bounded.fit reads ROW_BUDGET at call time, so
+-- the budget is shrunk here rather than the names grown. Mutation-tested:
+-- dropping bounded.fit from envelope.build leaves shown at 3 and why nil.
+local budgeted = require("scripts.tools.bounded")
+local saved_budget = budgeted.ROW_BUDGET
+budgeted.ROW_BUDGET = 40
+local by_bytes = call("sweep", { metric = "rockets", limit = 100 })
+check("a byte bound cuts the tail below the limit and says so",
+      by_bytes.ok and by_bytes.r.total == 3 and by_bytes.r.shown == 1 and by_bytes.r.skipped == 2
+      and by_bytes.r.why == "bytes" and row_eq(by_bytes.r.rows[1], "sweep-synth-1", 100),
+      F.encode(by_bytes))
+budgeted.ROW_BUDGET = saved_budget
 game.forces["sweep-synth-1"] = nil
 game.forces["sweep-synth-2"] = nil
 local cleaned_up = call("sweep", { metric = "rockets" })
@@ -612,20 +650,20 @@ check("a sweep reply is small (" .. sweep_bytes .. " bytes)", sweep_bytes < 4000
 -- LuaSpacePlatform::scheduled_for_deletion is a tick count, not a boolean
 -- (verified against ~/factorio/doc-html/runtime-api.json: "Returns how many
 -- ticks are left before the platform will be deleted. 0 if not scheduled for
--- deletion."). scripts/sweep/platform.lua is the one place this is read, and
--- it takes a plain table rather than a real LuaSurface, so the landmine is
+-- deletion."). scripts/tools/platform_lookup.lua's live() is the one place
+-- this is read, and it takes a plain table rather than a real LuaSurface, so the landmine is
 -- covered here directly rather than waiting on a fixture elsewhere to carry
 -- one. Mutation-tested: swapping the `(scheduled_for_deletion or 0) ~= 0`
 -- check for the naive `if platform.scheduled_for_deletion then` turns the
 -- first of these four red, since 0 is truthy in Lua.
 check("a live platform (scheduled_for_deletion = 0) contributes its name",
-      sweep_platform.name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 0 } }) == "orbit-1")
+      name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 0 } }) == "orbit-1")
 check("a platform mid-countdown to deletion (non-zero ticks left) is excluded",
-      sweep_platform.name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 1800 } }) == nil)
+      name_of({ platform = { name = "orbit-1", scheduled_for_deletion = 1800 } }) == nil)
 check("a platform whose field is simply absent still contributes",
-      sweep_platform.name_of({ platform = { name = "orbit-1" } }) == "orbit-1")
+      name_of({ platform = { name = "orbit-1" } }) == "orbit-1")
 check("a plain surface with no platform at all contributes nothing",
-      sweep_platform.name_of({}) == nil)
+      name_of({}) == nil)
 
 -- ── bounded.fit: rows bounded by bytes, not by count ──────────────────
 -- entity_count per_surface and list_surfaces both grew rows that carry a

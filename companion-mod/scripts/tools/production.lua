@@ -83,15 +83,24 @@ local function top_items(a)
     spec.item = name
     local rate = flow.item_flow(stats, spec, "input")
     if rate > 0 then
-      rows[#rows + 1] = { item = name, produced_per_min = bounded.round(rate, 2) }
+      rows[#rows + 1] = { item = name, rate = rate }
     end
   end
+  -- Sorted on the raw rate, rounded only on the rows that go out.
+  -- bounded.round hands back a number for a whole rate and a short decimal
+  -- STRING for a fraction, and Lua's `>` throws comparing the two, so a sort
+  -- on the rounded field failed whenever one item's rate happened to be
+  -- whole beside another's that was not: "what do we make most" answered
+  -- with an error on any busy server.
   table.sort(rows, function(x, y)
-    if x.produced_per_min ~= y.produced_per_min then return x.produced_per_min > y.produced_per_min end
+    if x.rate ~= y.rate then return x.rate > y.rate end
     return x.item < y.item
   end)
 
-  local top = bounded.cut(rows, n)
+  local top = {}
+  for i, row in ipairs(bounded.cut(rows, n)) do
+    top[i] = { item = row.item, produced_per_min = bounded.round(row.rate, 2) }
+  end
   return {
     found = true,
     force = force.name, surface = surface.name, window = a.window,

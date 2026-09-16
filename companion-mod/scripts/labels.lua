@@ -57,6 +57,12 @@ local function rich(label)
   end)
   text = text:gsub("%c+", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
   if text == "" then return nil end
+  -- The same LABEL_LIMIT plain() applies, measured on the words alone. A
+  -- label past it is matched by its clipped plain form, so the coloured form
+  -- has to show those same words: the plain, clipped text, with no colour
+  -- span for a clip to tear.
+  local words = text:gsub("%[[^%[%]]*%]", "")
+  if #words > LABEL_LIMIT then return plain(label) end
   return text
 end
 

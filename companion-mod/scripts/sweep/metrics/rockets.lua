@@ -12,7 +12,10 @@
 local rockets_tool = require("scripts.tools.rockets")
 local axes          = require("scripts.sweep.axes")
 
-local ROCKETS = rockets_tool.functions.rockets
+-- Looked up at call time rather than captured at load, the same reason
+-- entities.lua gives for its own delegate wrapper, so a test can stand a
+-- stub into this seam.
+local function ROCKETS(a) return rockets_tool.functions.rockets(a) end
 
 local M = {
   axes = { "force" },
@@ -25,6 +28,16 @@ local M = {
 
 function M.read(_ctx, _axis, _a)
   local reply = ROCKETS({ all = true })
+  -- rockets{all=true} cuts at bounded.MAX_FORCES, and a ranking over the
+  -- survivors of a cut names whoever survived: the rule every other metric
+  -- in this catalog follows, and the one this file, the oldest, had skipped.
+  if reply.total and reply.shown and reply.shown < reply.total then
+    return nil, {
+      shown = reply.shown, total = reply.total,
+      reason = "rockets showed " .. reply.shown .. " of " .. reply.total ..
+               " rows, so a ranking over them would name whoever survived the cut",
+    }
+  end
   local rows = {}
   for _, row in ipairs(reply.forces or {}) do
     rows[#rows + 1] = { name = axes.force({ force = row.force }), value = row.rockets_launched }

@@ -499,6 +499,49 @@ local nauvis_row
 for _, row in ipairs(ps.ok and ps.r.forces or {}) do if row.surface == "nauvis" then nauvis_row = row end end
 check("a planet row carries no gps: a planet position is a find_entities answer",
       nauvis_row ~= nil and nauvis_row.gps == nil, F.encode(nauvis_row))
+
+-- ── per_surface rows are bounded by bytes, not only by count ──────────
+-- A platform row carries owner, location, state and gps, and 44 of them
+-- encode past the 8000-byte call cap, where rpc.lua refuses the whole reply
+-- after every pass was spent. The budget is shrunk here rather than the
+-- fixture grown to 44 platforms: bounded.fit reads ROW_BUDGET at call time.
+-- Mutation-tested: dropping bounded.fit from the per_surface path leaves
+-- shown equal to total and turns the first check red.
+local bounded = require("scripts.tools.bounded")
+local saved_budget = bounded.ROW_BUDGET
+bounded.ROW_BUDGET = 80
+local tight = call("entity_count", { all = true, per_surface = true, name = "lab" })
+check("a per_surface reply drops rows to stay inside the byte budget",
+      tight.ok and tight.r.total == 2 and tight.r.shown == 1
+      and #F.encode(tight.r.forces) <= 80, F.encode(tight))
+check("the row it keeps is the largest",
+      tight.ok and tight.r.forces[1] and tight.r.forces[1].count == 12, F.encode(tight))
+bounded.ROW_BUDGET = saved_budget
+
+-- ── a ship between planets reads "in flight", on every path ──────────
+-- LuaSpacePlatform::space_location is nil while a platform travels and its
+-- state is on_the_path. The sweep's platform label said "on the path", the
+-- engine's word, because it tested the state against the define's name
+-- after platform_lookup had already turned it into words; that branch
+-- never ran. One spelling now, at the source.
+local orbit = game.surfaces["platform-1"]
+local saved_location, saved_state = orbit.platform.space_location, orbit.platform.state
+orbit.platform.space_location = nil
+orbit.platform.state = defines.space_platform_state.on_the_path
+local flying = call("sweep", { metric = "entities", subject = "lab", axis = "platform" })
+check("the sweep's platform label says in flight for a ship between planets",
+      flying.ok and flying.r.rows[1] ~= nil
+      and flying.r.rows[1][1] == "platform-1 (player, in flight) [gps=0,0,platform-1]",
+      F.encode(flying))
+local flying_surfaces = call("list_surfaces", { force = "player", limit = 50 })
+local flying_row
+for _, row in ipairs(flying_surfaces.ok and flying_surfaces.r.surfaces or {}) do
+  if row.name == "platform-1" then flying_row = row end
+end
+check("list_surfaces says the same, with no location while it travels",
+      flying_row ~= nil and flying_row.state == "in flight" and flying_row.location == nil,
+      F.encode(flying_surfaces))
+orbit.platform.space_location, orbit.platform.state = saved_location, saved_state
 -- A force with none of the entity anywhere costs one O(1) read, not a pass
 -- per surface: team-3 has no player here so it is not walked at all, and
 -- player's total is checked before any surface is asked.

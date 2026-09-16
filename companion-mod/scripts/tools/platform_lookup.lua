@@ -22,10 +22,15 @@
 -- because 0 is truthy in Lua, so that naive test would skip every one of
 -- them. The correct test, used below, is `(x or 0) == 0`.
 
+-- The engine's states as words an answer can use as they are. on_the_path
+-- is "in flight": the words the assistant is told to say for a ship between
+-- planets, so nothing downstream has to recognise the engine's own term
+-- (the sweep's platform label once tested for "on_the_path" against this
+-- table's words, and its "in flight" never printed).
 local STATE_NAMES = {
   [defines.space_platform_state.no_path]                  = "no path",
   [defines.space_platform_state.no_schedule]               = "no schedule",
-  [defines.space_platform_state.on_the_path]               = "on the path",
+  [defines.space_platform_state.on_the_path]               = "in flight",
   [defines.space_platform_state.paused]                    = "paused",
   [defines.space_platform_state.starter_pack_on_the_way]   = "starter pack on the way",
   [defines.space_platform_state.starter_pack_requested]    = "starter pack requested",
