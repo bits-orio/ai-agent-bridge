@@ -49,7 +49,7 @@ local function scope_of(spec, player, player_index, text)
   return { key = scope.GLOBAL_KEY, private = false }
 end
 
---- Creates a question. spec = { text, player_index?, force?, viewing_force?, scope? }. Returns the
+--- Creates a question. spec = { text, player_index?, force?, viewing_force?, watching_force?, scope? }. Returns the
 --- new question id, or nil if spec.text is missing. This is also reachable
 --- from the ai-agent-bridge-v1 remote interface by any other mod, so bad
 --- input returns nil rather than error()s: a mistake in a caller's spec
@@ -68,6 +68,9 @@ function M.ask(spec)
   -- question is about: a member watching from a spectator force, say.
   local viewing = type(spec.viewing_force) == "string" and spec.viewing_force ~= force
     and spec.viewing_force or nil
+  -- The force whose base the asker is looking at, when not their own.
+  local watching = type(spec.watching_force) == "string" and spec.watching_force ~= force
+    and spec.watching_force or nil
   -- Looked up once, here, and stored: the asker may have left by the time the
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
@@ -99,6 +102,7 @@ function M.ask(spec)
     physical_surface = physical,
     force = force,
     viewing_force = viewing,
+    watching_force = watching,
     tick = game.tick,
     answered = false,
     scope = key,
@@ -171,8 +175,9 @@ function M.ask_as_player(player, text, line)
   end
   -- The force a home force provider names, when one does: a member who
   -- spectates sits on another force, and "our team" still means theirs.
-  local force, viewing = home_force.resolve(player)
-  local qid = M.ask({ text = text, player_index = player.index, force = force, viewing_force = viewing, line = line })
+  local force, viewing, watching = home_force.resolve(player)
+  local qid = M.ask({ text = text, player_index = player.index, force = force, viewing_force = viewing,
+                      watching_force = watching, line = line })
   if qid and not line then
     -- A /ask command is not a chat line, so nobody else saw it. Echo it to
     -- the same audience the answer will reach, or a session others may

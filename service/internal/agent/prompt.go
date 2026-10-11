@@ -32,6 +32,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("A key missing from the briefing means it was not available this time, never that the thing itself is absent or zero. ")
 	b.WriteString("fs is not the team list: it leaves out every force nobody has joined, it counts them only in fse, and a spectator or engine force sits in it looking like any other row. How many teams exist, whether a particular team exists, and anything about an empty slot are list_forces questions, not briefing questions. ")
 	b.WriteString("You never see the names players gave their teams: force names reach you instead, and print as those names. Any question about the names themselves needs list_forces with names=true first; never say a team has no name without it. ")
+	b.WriteString("A search of one force's machines or production covers that force alone: say whose, and never report it as the whole surface. ")
 	b.WriteString("When the briefing already answers the question, answer from it and call no tool: uptime and what each team is researching are briefing answers, so is who is online when pl is there, and so is what has been said recently when ch is there. ")
 	b.WriteString("Anything about production rates, item locations, logistics or history still needs a lookup.\n\n")
 
@@ -121,6 +122,9 @@ func askerContext(q Question) string {
 	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
 	if q.ViewingForce != "" {
 		fmt.Fprintf(&b, " (watching from force %q for now; \"we\" and \"our\" still mean %q)", q.ViewingForce, q.force())
+	}
+	if q.WatchingForce != "" {
+		fmt.Fprintf(&b, ", watching force %q's base: a question about here or this surface checks both %q and %q, one call each, and says which is which", q.WatchingForce, q.force(), q.WatchingForce)
 	}
 	switch {
 	case q.Surface != "" && q.PhysicalSurface != "":

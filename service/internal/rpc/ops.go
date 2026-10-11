@@ -148,7 +148,10 @@ type Question struct {
 	// home force provider named another one as Force: a member watching
 	// from a spectator force. Empty otherwise, and from an older companion.
 	ViewingForce string `json:"viewing_force,omitempty"`
-	Tick         uint64 `json:"tick"`
+	// WatchingForce is the force whose base the asker was looking at, when
+	// a provider named one other than Force: the team a spectator watches.
+	WatchingForce string `json:"watching_force,omitempty"`
+	Tick          uint64 `json:"tick"`
 	// Scope and Private come from the companion's chat scope probe (Phase 3):
 	// the session pool this question belongs to, and whether its answer stays
 	// inside an audience. An older companion sends neither, which reads as

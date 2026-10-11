@@ -72,6 +72,16 @@ function M.has_window(name)
   return type(name) == "string" and WINDOWS[name] ~= nil
 end
 
+--- Up to `n` window names longer than `name`, shortest first.
+function M.longer(name, n)
+  local out, past = {}, false
+  for _, w in ipairs(ORDER) do
+    if past and #out < n then out[#out + 1] = w end
+    if w == name then past = true end
+  end
+  return out
+end
+
 --- Resolves a window name to {precision, ticks}, or error()s with the full
 --- list of names, which scripts/probe.lua turns into a provider_error reply.
 function M.require_window(name)

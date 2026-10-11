@@ -72,6 +72,24 @@ check("item_rate asked the engine for every quality",
       S.qualities_asked.normal == 2 and S.qualities_asked.uncommon == 2, F.encode(S.qualities_asked))
 check("item_rate says it summed every quality", rate.ok and rate.r.all_qualities == true)
 
+-- Nothing made this minute, plenty in the last ten: the reply says when it
+-- was last made. Mutation-tested: without the fallback last_made is nil.
+do
+  local real = S.stats.get_flow_count
+  S.stats.get_flow_count = function(a)
+    if a.precision_index == defines.flow_precision_index.one_minute then return 0 end
+    return real(a)
+  end
+  local stalled = call("ai-agent-bridge-tools", "item_rate",
+    { force = "player", surface = "nauvis", item = "iron-plate", window = "one_minute" })
+  S.stats.get_flow_count = real
+  check("item_rate with nothing made in the window says the next window that made any",
+        stalled.ok and stalled.r.produced_per_min == 0 and stalled.r.last_made
+        and stalled.r.last_made.window == "ten_minutes" and stalled.r.last_made.produced_per_min == 90,
+        F.encode(stalled))
+  check("and a window that made some carries no last_made", rate.r.last_made == nil, F.encode(rate.r))
+end
+
 local by_index = call("ai-agent-bridge-tools", "item_rate",
   { force = "player", surface = 1, item = "iron-plate", window = "one_minute" })
 check("item_rate takes the surface index list_surfaces published",
@@ -395,6 +413,32 @@ check("a force the game does not have, or a provider that fails, leaves the aske
       poll_bad.r[1].force == "player" and poll_bad.r[1].viewing_force == nil, F.encode(poll_bad))
 S.interfaces["test-home"] = nil
 S.interfaces["test-home-broken"] = nil
+end
+
+-- ── watching force: whose base a spectator is looking at ──────────────
+-- Asked "are we making repair packs here?" while watching another team's
+-- surface, the model searched the asker's own machines and said nothing
+-- there made any. A provider now names the watched force. Mutation-tested:
+-- resolve() ignoring watching() fails the first check.
+do
+local watched = "team-3"
+remote.add_interface("test-watch", {
+  home_force_v1 = function() return "player" end,
+  watching_force_v1 = function() return watched end,
+})
+local qid_w = ask_cmd("are they making repair packs here?")
+local poll_w = rpc({ op = "poll", after = qid_w - 1, limit = 1 })
+check("a watching force provider puts the watched force on the question",
+      poll_w.r[1].force == "player" and poll_w.r[1].watching_force == "team-3", F.encode(poll_w))
+watched = "player"
+local qid_own = ask_cmd("and here?")
+local poll_own = rpc({ op = "poll", after = qid_own - 1, limit = 1 })
+check("watching one's own force carries no watching force", poll_own.r[1].watching_force == nil, F.encode(poll_own))
+watched = "no-such-force"
+local qid_no = ask_cmd("and here?")
+local poll_no = rpc({ op = "poll", after = qid_no - 1, limit = 1 })
+check("a force the game does not have is no watching force", poll_no.r[1].watching_force == nil, F.encode(poll_no))
+S.interfaces["test-watch"] = nil
 end
 
 -- ── tags the game cannot draw never print raw ────────────────────────

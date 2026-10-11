@@ -52,7 +52,7 @@ local function item_rate(a)
   local spec = { item = a.item, qualities = flow.quality_names(), window = window }
   local produced = flow.item_flow(stats, spec, "input")
   local consumed = flow.item_flow(stats, spec, "output")
-  return {
+  local reply = {
     found = true,
     force = force.name, surface = surface.name, item = a.item, window = a.window,
     all_qualities = true,
@@ -60,6 +60,21 @@ local function item_rate(a)
     consumed_per_min = bounded.round(consumed, 2),
     net_per_min = bounded.round(produced - consumed, 2),
   }
+  -- Nothing made in the window: the shortest of the next three longer ones
+  -- that saw any, so "are they making repair packs?" is not answered no for
+  -- a machine that made 48 in the hour and stalled a minute ago. The rig
+  -- answered exactly that from one_minute alone.
+  if produced == 0 then
+    for _, name in ipairs(flow.longer(a.window, 3)) do
+      local earlier = flow.item_flow(stats, { item = a.item, qualities = spec.qualities,
+        window = flow.require_window(name) }, "input")
+      if earlier > 0 then
+        reply.last_made = { window = name, produced_per_min = bounded.round(earlier, 2) }
+        break
+      end
+    end
+  end
+  return reply
 end
 
 local function top_items(a)

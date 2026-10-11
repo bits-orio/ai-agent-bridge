@@ -59,6 +59,7 @@ type Question struct {
 	PlayerName      string // empty when the asker is not a connected player
 	Force           string
 	ViewingForce    string       // the force the asker watches from, when a home force provider named another as Force
+	WatchingForce   string       // the force whose base the asker is looking at, when not Force
 	Asker           string       // a label the caller chose, used when no player name came with the question
 	Scope           string       // the chat scope key the companion resolved; "" means global
 	Private         bool         // true when the scope is private to an audience

@@ -149,6 +149,9 @@ messages and the portal page use them the same way.
   A member spectating from another force still asks about their own. The
   question carries the force they sit on as its viewing force. It never
   changes who hears the answer.
+- **Watching force**: the force whose base a player is looking at, from any mod
+  exposing `watching_force_v1(player_index)`. Carried on the question when it is
+  not the home force; "here" in such a question is that force's base.
 - **Tag**: the channel badge a scope provider hands back, printed verbatim, up
   to 200 bytes, after the companion's name on the first answer line. A longer
   tag is cut without tearing a rich-text tag inside it.

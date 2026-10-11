@@ -136,7 +136,7 @@ their own console gets one private line and nothing runs.
 | `tools` | `{}` | every provider's manifest at once, for small servers and tests | no |
 | `call` | `{i, f, a?}` | the tool's return value, plain data | no |
 | `labels` | `{}` | sorted `{name, label}` rows: what players call each force, from any labels provider | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id above `after`, oldest first, each `{id, text, player_index, player_name, force, viewing_force, tick, scope, private, surface, physical_surface, personality}` | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id above `after`, oldest first, each `{id, text, player_index, player_name, force, viewing_force, watching_force, tick, scope, private, surface, physical_surface, personality}` | no |
 | `answer` | `{qid, artifact}` | `true` | yes: validates, renders, marks answered, raises `on_answer` |
 | `answers` | `{after?, limit?}` | answered questions with id above `after`, oldest first, each `{id, shape, lines, player_index}` | no |
 
@@ -479,6 +479,12 @@ the spectator force. The question carries the force they sit on now as
 A name no force has, or an error, is ignored, and the first interface by name
 that names a real force wins. Who hears the answer is still the chat scope's
 call; this probe changes only what the question is about.
+
+A mod that lets players watch another force's base adds
+`watching_force_v1(player_index)` the same way, returning the force being
+watched, nil when nobody's. The question carries it as `watching_force`,
+and the model is told that "here" is that force's base, so "are they making
+repair packs here?" is about the watched force.
 
 ## Tools this mod provides
 

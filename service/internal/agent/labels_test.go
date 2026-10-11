@@ -73,3 +73,22 @@ func TestAskerContextViewingForce(t *testing.T) {
 		t.Errorf("a question with no viewing force must not mention one:\n%s", plain)
 	}
 }
+
+// Watching another team's surface, "are we making repair packs here?" was
+// answered from the asker's own machines alone, as "nothing on that surface
+// makes any". The asker line now names the watched force, and the system
+// prompt says a one-force search is never the whole surface.
+func TestAskerContextWatchingForce(t *testing.T) {
+	got := askerContext(Question{Text: "x", PlayerName: "bits-orio", Force: "team-4", ViewingForce: "spectator", WatchingForce: "team-6", Surface: "mts-nauvis-6", PhysicalSurface: "landing-pen"})
+	for _, want := range []string{`whose force is "team-4"`, `watching force "team-6"'s base`, `checks both "team-4" and "team-6"`, `looking at surface "mts-nauvis-6"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("asker line lacks %q:\n%s", want, got)
+		}
+	}
+	if plain := askerContext(Question{Text: "x", Force: "team-4"}); strings.Contains(plain, "base") {
+		t.Errorf("a question watching nobody must not name a watched force:\n%s", plain)
+	}
+	if sys := systemPrompt(""); !strings.Contains(sys, "never report it as the whole surface") {
+		t.Errorf("system prompt lacks the one-force search rule")
+	}
+}
