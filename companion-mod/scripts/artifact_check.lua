@@ -10,9 +10,15 @@
 --
 -- The protocol is open (CONTEXT.md: "Any client that speaks it can drive the
 -- companion"), so every field is checked here rather than trusted because the
--- reference service happens to get it right.
+-- reference service happens to get it right. That includes an artifact that
+-- is well formed and says nothing: marked answered, it would leave the asker
+-- a blank chat line and the question closed.
+
+local shapes   = require("scripts.render_shapes")
+local richtext = require("scripts.richtext")
 
 local SCALARS = { string = true, number = true, boolean = true }
+local CAPS = shapes.CAPS
 
 local function is_scalar(v) return SCALARS[type(v)] == true end
 
@@ -72,6 +78,65 @@ local SHAPES = {
   end,
 }
 
+--- True for a tag that draws nothing by itself: a colour or font span's
+--- ends, or a tag naming nothing, which the renderer closes up.
+local function draws_nothing(tag)
+  return richtext.is_style(tag) or tag:match("^[%w%-]+=%s*$") ~= nil
+end
+
+--- True when `v` shows the reader something: any number or boolean, or a
+--- string with a character left once spaces, control characters and the
+--- tags that draw nothing are gone.
+local function visible(v)
+  if type(v) == "number" or type(v) == "boolean" then return true end
+  if type(v) ~= "string" then return false end
+  local bare = v:gsub("%[([^%[%]]*)%]", function(tag)
+    if draws_nothing(tag) then return "" end
+  end)
+  return bare:find("[^%s%c]") ~= nil
+end
+
+--- The first `n` entries of an array, as the renderer clips one.
+local function first(list, n)
+  local out = {}
+  for i = 1, math.min(n, #list) do out[#out + 1] = list[i] end
+  return out
+end
+
+-- What each shape prints of its own text, within the renderer's caps. The
+-- labels a shape adds by itself, a comparison's A and B or a list's dash,
+-- are not the answer and do not count.
+local SHOWN = {
+  summary = function(a) return first(a.lines, CAPS.summary) end,
+  notice = function(a) return { a.text } end,
+  list = function(a) return first(a.items, CAPS.list) end,
+  table = function(a)
+    local out = first(a.columns, CAPS.table_columns)
+    local width = #out
+    for _, row in ipairs(first(a.rows, CAPS.table_rows)) do
+      for _, cell in ipairs(first(row, width)) do out[#out + 1] = cell end
+    end
+    return out
+  end,
+  comparison = function(a)
+    local out = first(a.columns, 2)
+    for _, row in ipairs(first(a.rows, CAPS.comparison)) do
+      for _, key in ipairs({ "label", "a", "b" }) do out[#out + 1] = row[key] end
+    end
+    return out
+  end,
+}
+
+--- True when nothing the artifact says would reach the chat line: its title
+--- and everything its shape prints are blank.
+local function says_nothing(a)
+  if visible(a.title) then return false end
+  for _, value in ipairs(SHOWN[a.shape](a)) do
+    if visible(value) then return false end
+  end
+  return true
+end
+
 local M = {}
 
 --- nil when this artifact can be rendered, or a sentence saying what is wrong
@@ -88,7 +153,12 @@ function M.problem(a)
   if a.title ~= nil and type(a.title) ~= "string" then return "title must be a string" end
   if a.session ~= nil and type(a.session) ~= "table" then return "session must be an object" end
   if a.to_asker ~= nil and type(a.to_asker) ~= "boolean" then return "to_asker must be a boolean" end
-  return check(a)
+  local wrong = check(a)
+  if wrong then return wrong end
+  if says_nothing(a) then
+    return a.shape .. " would print nothing: its title and every line, item or cell are blank"
+  end
+  return nil
 end
 
 return M

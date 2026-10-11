@@ -3,8 +3,9 @@
 // player typed can never change the layout of an answer.
 //
 // Sizes are enforced twice on purpose: here, before the artifact goes over
-// RCON, and again in the companion when it renders. This end clips rather
-// than refuses, except where a shape would be left with nothing to show.
+// RCON, and again in the companion when it renders. This end sends an answer
+// over a cap back to the model to rewrite while it has a round left, at most
+// twice, and cuts it after that (validate.go, overcaps.go).
 
 package agent
 
@@ -29,10 +30,12 @@ const (
 	LevelConfirmation = "confirmation"
 )
 
-// Caps, one per shape (docs/design/phase1-2-spec.md).
+// Caps, one per shape (docs/design/phase1-2-spec.md). MaxCellChars was 160
+// until questions 37 and 38 on the live server, 2026-10-11, ran past it in
+// ordinary sentences; the counts never needed raising.
 const (
 	MaxSummaryLines   = 3
-	MaxCellChars      = 160
+	MaxCellChars      = 320
 	MaxListItems      = 10
 	MaxTableColumns   = 5
 	MaxTableRows      = 8

@@ -1,7 +1,9 @@
 package rcon
 
 import (
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -150,6 +152,91 @@ func TestNextIDSkipsTheAuthFailureSentinel(t *testing.T) {
 	for range 4 {
 		if got := c.nextID(); got == authFailedID || got == 0 {
 			t.Fatalf("id %d collides with a reserved value", got)
+		}
+	}
+}
+
+// Every connection gets the next number, so a caller can tell a reply that
+// came over a new connection from one over the connection before: a server
+// restarted between two commands is otherwise invisible, since Execute dials
+// again on its own.
+func TestConnectionNumbersEveryDial(t *testing.T) {
+	server := newFakeServer(t, "pw", echo)
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	if got := c.Connection(); got != 0 {
+		t.Fatalf("Connection before any dial = %d, want 0", got)
+	}
+	mustExecute(t, c, "one")
+	mustExecute(t, c, "two")
+	if got := c.Connection(); got != 1 {
+		t.Fatalf("Connection after two commands on one connection = %d, want 1", got)
+	}
+	server.DropConnections()
+	mustExecute(t, c, "three")
+	if got := c.Connection(); got != 2 {
+		t.Errorf("Connection after the redial = %d, want 2", got)
+	}
+
+	refused := New(server.Addr(), "wrong")
+	defer refused.Close()
+	if _, _, err := refused.Execute("help"); err == nil {
+		t.Fatal("a wrong password was accepted")
+	}
+	if got := refused.Connection(); got != 0 {
+		t.Errorf("Connection after a refused password = %d, want 0: no connection was opened", got)
+	}
+}
+
+// ExecuteOn sends over the connection it names or not at all. After the
+// server drops it, the command fails and is not sent again over a new
+// connection; once Execute has dialed again, the old number refuses and the
+// new one works.
+func TestExecuteOnNeverDialsAndNeverRetries(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	server := newFakeServer(t, "pw", func(cmd string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, cmd)
+		return cmd
+	})
+	c := New(server.Addr(), "pw")
+	defer c.Close()
+
+	if _, _, err := c.ExecuteOn(0, "before any dial"); !errors.Is(err, ErrConnectionChanged) {
+		t.Fatalf("ExecuteOn before any dial: err = %v, want ErrConnectionChanged", err)
+	}
+	mustExecute(t, c, "first")
+	first := c.Connection()
+	if got, _, err := c.ExecuteOn(first, "held"); err != nil || got != "held" {
+		t.Fatalf("ExecuteOn on the live connection = %q, %v", got, err)
+	}
+
+	server.DropConnections()
+	if _, _, err := c.ExecuteOn(first, "after the drop"); err == nil {
+		t.Fatal("ExecuteOn over a dropped connection reported success")
+	}
+	if _, _, err := c.ExecuteOn(first, "again"); !errors.Is(err, ErrConnectionChanged) {
+		t.Errorf("ExecuteOn after the failure: err = %v, want ErrConnectionChanged", err)
+	}
+	if got := server.auths.Load(); got != 1 {
+		t.Errorf("auth count = %d, want 1: ExecuteOn dialed", got)
+	}
+
+	mustExecute(t, c, "redial")
+	if _, _, err := c.ExecuteOn(first, "stale"); !errors.Is(err, ErrConnectionChanged) {
+		t.Errorf("ExecuteOn on the old number after a redial: err = %v, want ErrConnectionChanged", err)
+	}
+	if got, _, err := c.ExecuteOn(c.Connection(), "fresh"); err != nil || got != "fresh" {
+		t.Errorf("ExecuteOn on the new number = %q, %v", got, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, cmd := range seen {
+		if cmd == "after the drop" || cmd == "again" || cmd == "stale" || cmd == "before any dial" {
+			t.Errorf("the server received %q, which ExecuteOn must never have sent", cmd)
 		}
 	}
 }

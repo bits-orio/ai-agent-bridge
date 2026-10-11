@@ -189,6 +189,15 @@ func TestAskerLabel(t *testing.T) {
 	}
 }
 
+// The map's voice setting rides from the polled question onto the agent's,
+// where it is resolved over the config's own.
+func TestAgentQuestionCarriesThePersonality(t *testing.T) {
+	q := agentQuestion(rpc.Question{ID: 9, Text: "status", Personality: "Talk like a ship's captain"})
+	if q.Personality != "Talk like a ship's captain" {
+		t.Errorf("personality = %q, want the polled question's own", q.Personality)
+	}
+}
+
 // Two services on one server each answer every question; the companion keeps
 // the first and says yes to the second. The rendered read-back is where that
 // becomes visible, by shape and line count, which survive the companion's

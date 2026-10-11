@@ -5,7 +5,9 @@
 -- The chat trigger (PLAN.md open question 2). Off until an operator sets
 -- aab-chat-prefix, so ordinary chat never reaches the model by accident.
 -- A line a player types that starts with the prefix becomes a question, with
--- the rest of the line as its text.
+-- the rest of the line as its text and the scope the line had
+-- (scripts/chat_visibility.lua), so its answer reaches the players who saw
+-- the line and nobody else.
 --
 -- The prefix is matched literally, leading and trailing spaces included, and
 -- never as a Lua pattern. Pick something no ordinary sentence starts with,

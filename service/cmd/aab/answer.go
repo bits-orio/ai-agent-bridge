@@ -47,7 +47,9 @@ func failureNotice(err error) string {
 const badArtifactNotice = "I could not put that answer into a shape the game can show."
 
 // answerPage takes one polled page as far as it can go this tick: run what is
-// new, deliver what is waiting, and leave alone what is finished with.
+// new, deliver what is waiting, and leave alone what is finished with. It
+// stops the moment the companion goes out of reach (lost): nothing more is
+// paid for or sent until the next reply has started the service again.
 //
 // The catalog is read once for the whole page, on the first question that needs
 // it, so a tick costs one providers round trip rather than one per question.
@@ -55,6 +57,9 @@ func (r *runner) answerPage(ctx context.Context, questions rpc.PollReply) {
 	var game []tools.Tool
 	var haveCatalog, readCatalog bool
 	for _, q := range questions {
+		if r.lost {
+			return
+		}
 		state := r.inFlight[q.ID]
 		if state == nil {
 			if !readCatalog {
@@ -100,13 +105,18 @@ func (r *runner) run(ctx context.Context, q rpc.Question, game []tools.Tool) age
 	return result
 }
 
-// deliver offers one artifact to the companion. A delivery that failed on the
-// wire is tried again on the next tick with the artifact already in hand: the
-// model is never asked the same question twice. Three failures and the service
-// stops trying, with a line saying so.
+// deliver offers one artifact to the companion, over the RCON connection the
+// question was polled on and no other (rpc.Client.AnswerOn): a server that
+// restarted in between may have loaded a save where the same id is someone
+// else's question, in someone else's scope. A delivery the companion refused
+// or failed to confirm is tried again on the next tick with the artifact
+// already in hand: the model is never asked the same question twice. Three
+// failures and the service stops trying, with a line saying so. A delivery
+// that got no reply at all puts the companion out of reach, and the next
+// reply starts the service again with nothing held (startAgain).
 func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 	state.attempts++
-	delivered, err := r.rpc.Answer(ctx, q.ID, state.result.Artifact)
+	delivered, err := r.rpc.AnswerOn(ctx, r.conn, q.ID, state.result.Artifact)
 	if err == nil && !delivered {
 		// The companion replied without confirming. Treated as a failed
 		// delivery, so the three-attempt budget applies instead of the answer
@@ -121,7 +131,7 @@ func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 			q.ID, state.result.Artifact.Shape, state.result.Rounds,
 			u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens, state.result.CostUSD)
 		// The artifact as sent, so an odd answer in game can be traced to
-		// what the model wrote rather than guessed at. At most 6 KB.
+		// what the model wrote rather than guessed at. At most 12 KB.
 		if raw, err := json.Marshal(state.result.Artifact); err == nil {
 			log.Printf("answer %d artifact %s", q.ID, raw)
 		}
@@ -133,6 +143,9 @@ func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 		r.logRendered(ctx, q.ID, state.result.Artifact)
 	case rpc.HasCode(err, rpc.CodeBadArtifact):
 		r.refused(ctx, q, state, err)
+	case rpc.Unreachable(err):
+		r.lost = true
+		log.Printf("answer %d: dropped unsent, no reply or a new connection since the poll: after a restart this id may name another question: %v", q.ID, err)
 	case state.attempts >= maxDeliveries:
 		state.done = true
 		log.Printf("answer %d: giving up after %d failed deliveries: %v", q.ID, state.attempts, err)
@@ -151,8 +164,9 @@ func (r *runner) refused(ctx context.Context, q rpc.Question, state *delivery, c
 	log.Printf("answer %d: the companion refused the artifact, sending a notice instead: %v", q.ID, cause)
 
 	state.result.Artifact = agent.Notice(agent.LevelWarning, badArtifactNotice)
-	delivered, err := r.rpc.Answer(ctx, q.ID, state.result.Artifact)
+	delivered, err := r.rpc.AnswerOn(ctx, r.conn, q.ID, state.result.Artifact)
 	if err != nil {
+		r.lost = r.lost || rpc.Unreachable(err)
 		log.Printf("answer %d: the notice did not land either: %v", q.ID, err)
 		return
 	}
@@ -167,6 +181,8 @@ func (r *runner) refused(ctx context.Context, q rpc.Question, state *delivery, c
 // scoped to the person who asked when the prompt carries their name (review-fix
 // contract 9). The label itself is built in one place, agent.Question.AskerLabel,
 // so the log line and the system prompt always name the asker the same way.
+// The map's voice setting travels too: the agent resolves it per question,
+// over the config's own.
 func agentQuestion(q rpc.Question) agent.Question {
 	return agent.Question{
 		ID:              q.ID,
@@ -178,6 +194,7 @@ func agentQuestion(q rpc.Question) agent.Question {
 		Private:         q.Private,
 		Surface:         q.Surface,
 		PhysicalSurface: q.PhysicalSurface,
+		Personality:     q.Personality,
 	}
 }
 

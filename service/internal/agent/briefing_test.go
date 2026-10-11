@@ -1133,3 +1133,19 @@ func TestAssembleAsksListSurfacesForItsRowCap(t *testing.T) {
 		t.Errorf("args = %s, want limit=%d, the tool's row cap on every companion", gotArgs, surfacesLimit)
 	}
 }
+
+// Every ch row names its speaker's force, and a line said in a private
+// channel says so; a line said in the open carries no flag at all. On the
+// rig a team-6 member asked what their team had said and was told the only
+// chat came from other teams: nothing in ch said Pirion was on team-6.
+func TestChatRowsCarryTheSpeakersForceAndPrivateLines(t *testing.T) {
+	chat := fakeChat{lines: []ChatLine{
+		{Who: "Pirion", Force: "team-6", Private: true, Msg: "we need more iron"},
+		{Who: "Trophium", Force: "team-2", Msg: "gg all"},
+	}}
+	got := Assemble(context.Background(), index(happyGroupATools()), askerQuestion(), freshMark(), chat, BriefingBudget)
+	body := fencedBody(t, got.Text)
+	if want := `[{"who":"Pirion","f":"team-6","msg":"we need more iron","private":true},{"who":"Trophium","f":"team-2","msg":"gg all"}]`; string(body["ch"]) != want {
+		t.Errorf("ch = %s, want %s", body["ch"], want)
+	}
+}

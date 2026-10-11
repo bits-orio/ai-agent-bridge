@@ -15,39 +15,38 @@
 -- a supported feature of player.print and of a label caption.
 --
 -- MAX_BYTES is a safety net, not the cap a reader sees. The service clips
--- every cell to 160 characters before it sends the artifact, and 160
--- characters of Japanese or emoji take up to 640 bytes, so clipping at 160
--- bytes here would cut a legal answer to a third of its length. A client that
--- drives the protocol without the service meets the net instead.
+-- every cell to 320 characters (MaxCellChars) before it sends the artifact,
+-- and 320 characters of Japanese or emoji take up to 1280 bytes, so clipping
+-- at 320 bytes here would cut a legal answer to a quarter of its length. The
+-- net fires on a line the decoration below carried past it, or on a client
+-- that drives the protocol without the service; when it does, the line is cut
+-- on a character boundary and ends with an ellipsis, the way the service ends
+-- its own cuts, so a reader can tell a cut line from one that simply ends.
 
-local sprites = require("scripts.sprites")
-local richtext = require("scripts.richtext")
+local sprites       = require("scripts.sprites")
+local richtext      = require("scripts.richtext")
 local player_colors = require("scripts.player_colors")
-local labels  = require("scripts.labels")
-local MAX_BYTES = 640
+local labels        = require("scripts.labels")
+local text_clip     = require("scripts.text_clip")
 
--- Cut to n bytes without leaving half a UTF-8 sequence behind. Player names
--- and team names carry non-ASCII often enough to matter. Walks back to the
--- lead byte of the sequence the cut lands in and keeps that sequence only if
--- all of it fits.
-local function clip_bytes(s, n)
-  if #s <= n then return s end
-  local cut = n
-  local i = cut
-  while i > 0 do
-    local b = s:byte(i)
-    if b < 0x80 or b >= 0xC0 then break end -- reached the lead byte
-    i = i - 1
-  end
-  if i > 0 then
-    local lead = s:byte(i)
-    local width = 1
-    if lead >= 0xF0 then width = 4
-    elseif lead >= 0xE0 then width = 3
-    elseif lead >= 0xC0 then width = 2 end
-    if i + width - 1 > cut then cut = i - 1 end
-  end
-  return s:sub(1, cut)
+local MAX_BYTES = 1280
+local ELLIPSIS = text_clip.ELLIPSIS
+
+-- The count caps the service enforces before it sends an artifact, one for one
+-- (service/internal/agent/artifact.go, the Go name beside each), so a client
+-- that drives the protocol without the service meets the same limits.
+local SUMMARY_LINES   = 3  -- MaxSummaryLines
+local LIST_ITEMS      = 10 -- MaxListItems
+local TABLE_COLUMNS   = 5  -- MaxTableColumns
+local TABLE_ROWS      = 8  -- MaxTableRows
+local COMPARISON_ROWS = 5  -- MaxComparisonRows
+
+--- `text` within MAX_BYTES. Over it, the text is cut on a character
+--- boundary, a tag the cut tore is dropped, open colour and font spans are
+--- closed, and an ellipsis goes in before the closers, all of it within
+--- MAX_BYTES: a torn tag would make Factorio draw the whole line raw.
+local function fit_line(text)
+  return richtext.fit(text, MAX_BYTES, ELLIPSIS)
 end
 
 -- Scalars render as themselves; anything else says so. A table reaching
@@ -60,17 +59,13 @@ local function line(v)
   if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
     return "(unrenderable value)"
   end
-  -- Pruned, decorated, then cut, then repaired. Pruned first: a sprite tag
-  -- the model wrote for a sprite the game does not have prints the whole
-  -- line raw, so it goes before anything else is added. The labels and
+  -- Repaired, decorated, then fitted. Repaired first: a sprite tag the
+  -- model wrote for a sprite the game does not have prints the whole line
+  -- raw, so it is fixed before anything else is added. The labels and
   -- sprites decorated in here can carry a line past MAX_BYTES that the
-  -- service kept within it, and a cut that lands inside one of their tags
-  -- would make the whole chat line render raw. richtext.repair drops a torn
-  -- tag and closes an open span.
-  local decorated = player_colors.decorate(labels.decorate(sprites.decorate(sprites.prune((tostring(v):gsub("%c+", " "))))))
-  local cut = clip_bytes(decorated, MAX_BYTES)
-  if cut ~= decorated then cut = richtext.repair(cut) end
-  return cut
+  -- service kept within it, and fit_line never cuts inside one of their tags.
+  local flat = tostring(v):gsub("%c+", " ")
+  return fit_line(player_colors.decorate(labels.decorate(sprites.decorate(sprites.repair(flat)))))
 end
 
 local function clip(t, n)
@@ -80,6 +75,13 @@ local function clip(t, n)
 end
 
 local M = {}
+
+--- The count caps by shape. The artifact check reads them so it judges an
+--- artifact by what the renderer would show of it.
+M.CAPS = {
+  summary = SUMMARY_LINES, list = LIST_ITEMS, comparison = COMPARISON_ROWS,
+  table_columns = TABLE_COLUMNS, table_rows = TABLE_ROWS,
+}
 
 --- The artifact's optional title, sanitised, or nil when it has none. Every
 --- shape but `notice` may carry one.
@@ -93,7 +95,7 @@ end
 -- { shape="summary", lines={...} }: up to three lines.
 function M.summary(a)
   local out = {}
-  for _, l in ipairs(clip(a.lines or {}, 3)) do
+  for _, l in ipairs(clip(a.lines or {}, SUMMARY_LINES)) do
     out[#out + 1] = line(l)
   end
   return out
@@ -107,7 +109,7 @@ end
 -- { shape="list", items={...} }: up to ten one-line rows.
 function M.list(a)
   local out = {}
-  for _, item in ipairs(clip(a.items or {}, 10)) do
+  for _, item in ipairs(clip(a.items or {}, LIST_ITEMS)) do
     out[#out + 1] = "- " .. line(item)
   end
   return out
@@ -122,7 +124,7 @@ function M.comparison(a)
     return text
   end
   local out = { name(cols[1], "A") .. "  vs  " .. name(cols[2], "B") }
-  for _, row in ipairs(clip(a.rows or {}, 5)) do
+  for _, row in ipairs(clip(a.rows or {}, COMPARISON_ROWS)) do
     out[#out + 1] = string.format("- %s: %s vs %s", line(row.label), line(row.a), line(row.b))
   end
   return out
@@ -146,8 +148,7 @@ end
 local function visible_width(s)
   local icons = 0
   local text = s:gsub("%[([^%[%]]*)%]", function(tag)
-    if tag:sub(1, 6) == "color=" or tag:sub(1, 5) == "font=" or tag == "/color" or tag == "/font" then return "" end
-    icons = icons + 1
+    if not richtext.is_style(tag) then icons = icons + 1 end
     return ""
   end)
   -- Characters, not bytes: every UTF-8 sequence has exactly one lead byte,
@@ -210,9 +211,9 @@ end
 --- to the column count so the GUI table stays rectangular.
 function M.grid(a)
   local columns = {}
-  for i, c in ipairs(clip(a.columns or {}, 5)) do columns[i] = line(c) end
+  for i, c in ipairs(clip(a.columns or {}, TABLE_COLUMNS)) do columns[i] = line(c) end
   local rows = {}
-  for _, row in ipairs(clip(a.rows or {}, 8)) do
+  for _, row in ipairs(clip(a.rows or {}, TABLE_ROWS)) do
     local cells = {}
     for i = 1, #columns do cells[i] = line(row[i]) end
     rows[#rows + 1] = cells

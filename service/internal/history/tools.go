@@ -1,11 +1,13 @@
 package history
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -13,7 +15,13 @@ import (
 const defaultRecentLimit = 10
 const maxRecentLimit = 20
 
-const eventHeader = "id\ttick\tevent\tplayer\tforce\tdata"
+// eventHeader is the row shape recent_events and last_event share. It has no
+// row id: ids count up across every channel, so the gaps between the rows a
+// question may see would count another channel's private rows.
+const eventHeader = "tick\tevent\tplayer\tforce\tdata"
+
+// currentMapOnly ends every history tool's description.
+const currentMapOnly = " History covers the current map only."
 
 // Tools returns the service's five list tools (docs/design/phase4-spec.md
 // sections 13 and 15): recent_events, last_event, count_events, recent_chat
@@ -25,8 +33,9 @@ func (s *Store) Tools() []tools.Tool {
 	return []tools.Tool{
 		{
 			Name: "recent_events",
-			Description: "Recorded history events, newest first: one header line (id, tick, event, player, force, data) then one tab-separated row per event; data is that event's own JSON payload. " +
-				"Filter by event, force or player, and by since_tick for a window. At most 20 rows; use count_events for a total.",
+			Description: "Recorded history events, newest first: one header line (tick, event, player, force, data) then one tab-separated row per event; data is that event's own JSON payload. " +
+				"Filter by event, force or player, and by since_tick for a window. At most 20 rows; use count_events for a total. " +
+				"A chat line or question said in a private channel shows up only when this question was asked in that same channel." + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -56,7 +65,8 @@ func (s *Store) Tools() []tools.Tool {
 		{
 			Name: "last_event",
 			Description: "The newest recorded occurrence of one event key, optionally for one player or force: when a player last died, when research last finished. " +
-				"One header line (id, tick, event, player, force, data) then the one matching row, or the plain line \"none recorded\" when there is none.",
+				"One header line (tick, event, player, force, data) then the one matching row, or the plain line \"none recorded\" when there is none. " +
+				"A private channel's rows show only for that channel's own questions." + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -76,7 +86,8 @@ func (s *Store) Tools() []tools.Tool {
 		{
 			Name: "count_events",
 			Description: "How many times one event key was recorded, optionally for one force and only " +
-				"from since_tick on. One header line \"count\" then one row holding the number. Use it for totals instead of listing rows.",
+				"from since_tick on. One header line \"count\" then one row holding the number. Use it for totals instead of listing rows. " +
+				"A private channel's rows count only for that channel's own questions." + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -95,8 +106,9 @@ func (s *Store) Tools() []tools.Tool {
 		},
 		{
 			Name: "recent_chat",
-			Description: "The last N organic console chat lines, newest first: one header line (tick, player, message) then one tab-separated row per line. " +
-				"Server console lines and a player's own questions to this bot are already dropped, and an immediate repeat of the line before it collapses to one. Default limit 10, at most 20.",
+			Description: "The last N organic console chat lines, newest first: one header line (tick, player, force, private, message) then one tab-separated row per line; force is the speaker's, and private says yes for a line said in a private channel, a force's own chat for instance. " +
+				"Server console lines and a player's own questions to this bot are already dropped, and an immediate repeat of the line before it collapses to one. Default limit 10, at most 20. " +
+				"A line said in a private channel shows up only when this question was asked in that same channel, so a short or empty list can mean the rest was private, not that nobody spoke." + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"limit": map[string]any{
 					"type":        "integer",
@@ -111,8 +123,9 @@ func (s *Store) Tools() []tools.Tool {
 			Name: "catch_up",
 			Description: "What happened on the server, not just on one force: research finished, rockets launched, deaths, joins and leaves, plus the same filtered chat recent_chat reads. " +
 				"The window runs from since_tick when given (what happened in the last hour: the current tick less 216000), otherwise from that player's last recorded departure, what they missed while away; capped at 24 hours either way. " +
-				"One header line (tick, event, player, detail) then up to 15 tab-separated rows, newest first, merged by tick. " +
-				"A player with no record at all gets one row saying so instead of an error.",
+				"One header line (tick, event, player, force, private, detail) then up to 15 tab-separated rows, newest first, merged by tick; force is the force the row is about, the speaker's for a chat line, and private says yes for a chat line said in a private channel. " +
+				"A player with no record at all gets one row saying so instead of an error. " +
+				"Its chat follows recent_chat's rule: a private channel's lines show up only when this question was asked in that same channel." + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"player": map[string]any{
 					"type":        "string",
@@ -185,8 +198,11 @@ func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.Raw
 		return nil, errors.New(`count_events: "event" is required`)
 	}
 
-	query := "SELECT COUNT(*) FROM events WHERE event = ?"
-	params := []any{in.Event}
+	// Only the rows this question may read are counted: a total over hidden
+	// rows would tell another force how much a private channel said.
+	visible, params := visibleTo(ctx)
+	query := "SELECT COUNT(*) FROM events WHERE " + visible + " AND event = ?"
+	params = append(params, in.Event)
 	if in.Force != "" {
 		query += " AND force = ?"
 		params = append(params, in.Force)
@@ -203,19 +219,58 @@ func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.Raw
 	return json.RawMessage(columnar("count", []string{strconv.FormatInt(count, 10)})), nil
 }
 
-// eventRowsToTSV renders recent_events/last_event's shared row shape: id,
-// tick, event, player, force, data, tab-joined in that order.
+// eventRowsToTSV renders recent_events/last_event's shared row shape: tick,
+// event, player, force, data, tab-joined in that order.
 func eventRowsToTSV(rows []eventRow) []string {
 	out := make([]string, len(rows))
 	for i, r := range rows {
 		out[i] = tsvRow(
-			strconv.FormatInt(r.ID, 10),
 			strconv.FormatInt(r.Tick, 10),
 			r.Event,
 			r.Player,
 			r.Force,
-			string(r.Data),
+			modelData(r.Event, r.Data),
 		)
 	}
 	return out
+}
+
+// modelData is a row's data as the model reads it. A question's or an
+// answer's qid stays in the file and out of the reply, for the same reason
+// row ids do: question ids count up across every channel. A session row's
+// last_id, how many questions had been issued (Store.NoteMap), counts them
+// the same way and stays out too. Data that does not parse, which Ingest
+// never stores, reads as empty rather than raw.
+func modelData(event string, data json.RawMessage) string {
+	hidden := countingField(event)
+	if hidden == "" {
+		return string(data)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil {
+		return "{}"
+	}
+	if _, ok := fields[hidden]; !ok {
+		return string(data)
+	}
+	delete(fields, hidden)
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false) // a question's text reads as the player typed it
+	if enc.Encode(fields) != nil {
+		return "{}"
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// countingField is the field of a row's data that counts questions across
+// every channel, "" for a row that has none.
+func countingField(event string) string {
+	switch event {
+	case questionEvent, "answer":
+		return "qid"
+	case sessionEvent:
+		return "last_id"
+	}
+	return ""
 }

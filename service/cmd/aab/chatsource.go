@@ -34,7 +34,8 @@ func newHistoryChat(store *history.Store) agent.ChatSource {
 // RecentChat returns at most n filtered chat lines, oldest first. It honours
 // the context it is handed: the history database runs on one connection the
 // event tailer also writes on, so an uncancellable read here could hold up a
-// question.
+// question. That context also carries the question's scope (chatscope), which
+// is what keeps a private channel's lines out of a briefing anyone else hears.
 func (h *historyChat) RecentChat(ctx context.Context, n int) []agent.ChatLine {
 	if h == nil || h.store == nil || n <= 0 {
 		return nil
@@ -45,7 +46,7 @@ func (h *historyChat) RecentChat(ctx context.Context, n int) []agent.ChatLine {
 	}
 	out := make([]agent.ChatLine, 0, len(lines))
 	for _, line := range lines {
-		out = append(out, agent.ChatLine{Who: line.Player, Msg: line.Message})
+		out = append(out, agent.ChatLine{Who: line.Player, Force: line.Force, Private: line.Private, Msg: line.Message})
 	}
 	return out
 }

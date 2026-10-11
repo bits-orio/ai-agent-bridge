@@ -9,14 +9,16 @@
 -- registration points. Read CONTEXT.md and PLAN.md at the repo root first,
 -- they define the domain words and the aab-rpc-v1 protocol this wires up.
 
-local rpc          = require("scripts.rpc")
-local questions    = require("scripts.questions")
-local ask_command  = require("scripts.ask_command")
-local remote_iface = require("scripts.remote")
-local engine_tools = require("scripts.tools.engine")
-local events       = require("scripts.events")
-local chat         = require("scripts.chat")
-local ask_rate     = require("scripts.ask_rate")
+local rpc                 = require("scripts.rpc")
+local questions           = require("scripts.questions")
+local ask_command         = require("scripts.ask_command")
+local personality_command = require("scripts.personality_command")
+local remote_iface        = require("scripts.remote")
+local engine_tools        = require("scripts.tools.engine")
+local events              = require("scripts.events")
+local chat                = require("scripts.chat")
+local ask_rate            = require("scripts.ask_rate")
+local map_id              = require("scripts.map_id")
 
 -- Console commands. commands.add_command must run every time this mod's Lua
 -- state starts (nothing about a command registration persists across a
@@ -24,6 +26,7 @@ local ask_rate     = require("scripts.ask_rate")
 -- on_init/on_load.
 commands.add_command("aab-rpc", "AI Agent Bridge: the aab-rpc-v1 protocol command (RCON).", rpc.handle)
 ask_command.register()
+personality_command.register()
 
 -- Remote interfaces: same "every load" requirement as commands above.
 remote_iface.register()
@@ -49,6 +52,7 @@ end)
 
 script.on_init(function()
   questions.ensure_storage()
+  map_id.ensure()
 end)
 
 script.on_configuration_changed(function()

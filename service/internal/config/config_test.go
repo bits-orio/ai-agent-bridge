@@ -304,6 +304,72 @@ func TestLoadFromEnvAgentOverrides(t *testing.T) {
 	}
 }
 
+// personality takes off, a preset name, or the operator's own free text, in
+// either config mode, and reaches the agent as written: the agent sanitises
+// it and adds the guard, so the config never rewrites or refuses it.
+func TestPersonalityTakesFreeText(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		setEnvMode(t)
+		c, err := Load("/no/such/aab.yaml")
+		if err != nil {
+			t.Fatalf("env load: %v", err)
+		}
+		if c.Agent.Personality != "off" {
+			t.Errorf("personality default = %q, want off", c.Agent.Personality)
+		}
+	})
+	t.Run("env", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		setEnvMode(t)
+		t.Setenv("AAB_PERSONALITY", "Talk like a ship's captain: brief, salty.")
+		c, err := Load("/no/such/aab.yaml")
+		if err != nil {
+			t.Fatalf("env load: %v", err)
+		}
+		if c.Agent.Personality != "Talk like a ship's captain: brief, salty." {
+			t.Errorf("personality = %q, want the free text as written", c.Agent.Personality)
+		}
+	})
+	// An unquoted off is a boolean to a YAML 1.1 reader. It must load as the
+	// word off. An unquoted false or no loads as that word, which the agent
+	// reads as off too (agent.VoiceLabel), never as a voice to speak in.
+	for _, tc := range []struct{ name, value, want string }{
+		{"yaml free text", `"Talk like a ship's captain: brief, salty."`, "Talk like a ship's captain: brief, salty."},
+		{"yaml off unquoted", "off", "off"},
+		{"yaml false unquoted", "false", "false"},
+		{"yaml no unquoted", "no", "no"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+			cfgPath := filepath.Join(dir, "aab.yaml")
+			yaml := `
+factorio:
+  rcon:
+    address: "game:27015"
+    password_env: FACTORIO_RCON_PASSWORD
+  events_file: /tmp/events.jsonl
+model:
+  provider: fake
+  id: fake
+agent:
+  personality: ` + tc.value + "\n"
+			if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			c, err := Load(cfgPath)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if c.Agent.Personality != tc.want {
+				t.Errorf("personality = %q, want %q", c.Agent.Personality, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadFromEnvInvalidSessionIdle(t *testing.T) {
 	t.Chdir(t.TempDir())
 	setEnvMode(t)

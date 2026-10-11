@@ -30,12 +30,13 @@ local kills            = require("scripts.tools.kills")
 local built            = require("scripts.tools.built")
 local fluid_rate       = require("scripts.tools.fluid_rate")
 local trains           = require("scripts.tools.trains")
+local recipe_needs     = require("scripts.tools.recipe_needs")
 local sweep            = require("scripts.sweep.tool")
 
 local MODULES = {
   basics, surfaces, production, production_since,
   research, tech_status, logistics, entity_count, environment, rockets, game_time,
-  locate, kills, built, fluid_rate, trains, sweep,
+  locate, kills, built, fluid_rate, trains, recipe_needs, sweep,
 }
 
 local INTERFACE = "ai-agent-bridge-tools"

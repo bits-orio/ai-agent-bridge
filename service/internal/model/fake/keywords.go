@@ -11,8 +11,14 @@ import (
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 )
 
-// resultChars is how much of a tool result the artifact carries.
-const resultChars = 160
+// resultChars is how many runes of a tool result the artifact carries, and of
+// a question it echoes. It was 160, which left an end-to-end answer no longer
+// than two chat lines; 300 lets it run on the way a real answer does. It stays
+// under the service's 320-character cell (agent.MaxCellChars) with room for
+// the few words the echo and the recall put in front of the cut text. A line
+// over the cell goes back to the model to be rewritten, and the fake can only
+// send the same line again.
+const resultChars = 300
 
 type call struct {
 	tool string
@@ -24,6 +30,34 @@ type call struct {
 // into "<iface>__<fn>", so a bare function name is enough to find it.
 func firstCall(text string, defs []model.ToolDef) *call {
 	switch {
+	// What it takes to make something (docs/design/recipe-needs-spec.md,
+	// part 1). First, so no broader word in the same question shadows it.
+	// The arguments are fixed, 60 red science a minute, so the end-to-end
+	// harness can check the figures the game works out for itself.
+	case has(text, "recipe needs"):
+		return resolve(defs, "recipe_needs", map[string]any{
+			"items":   []string{"automation-science-pack"},
+			"per_min": []float64{60},
+		})
+	// Pirion's question (recipe-needs-spec.md, stage 4): "I have 48 blue
+	// science, 24 red, 24 green", read as machine counts and asked in one
+	// call, as the tool's desc teaches a real model to, on the surface the
+	// asker stands on. Second, beside the other recipe_needs rule, so "how
+	// many" or "rate" in the same question cannot shadow it. The answer
+	// quotes the plate rows (recipe.go).
+	case has(text, scienceBelts):
+		return resolve(defs, "recipe_needs", map[string]any{
+			"items":    []string{"chemical-science-pack", "automation-science-pack", "logistic-science-pack"},
+			"machines": []float64{48, 24, 24},
+			"surface":  "nauvis",
+		})
+	// Chat history, for the harness's privacy scenarios: which lines a
+	// question may read depends on the scope it was asked in, and the
+	// answer carries what recent_chat returned. Second, so "what did the
+	// players say in chat" or "where was that chat" still reads the chat.
+	// No question any other scenario asks says chat.
+	case has(text, "chat"):
+		return resolve(defs, "recent_chat", nil)
 	case has(text, "where"):
 		return resolve(defs, "find_entities", map[string]any{"surface": "nauvis", "name": "lab"})
 	case has(text, "queue"):

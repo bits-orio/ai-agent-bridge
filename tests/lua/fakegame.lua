@@ -157,6 +157,7 @@ function F.install(opts)
       -- Off for the suite; the rate-limit section turns them on.
       ["aab-ask-cooldown-seconds"] = { value = 0 },
       ["aab-asks-per-minute"]      = { value = 0 },
+      ["aab-personality"]          = { value = "" },
     },
   }
 
@@ -214,6 +215,9 @@ function F.install(opts)
   S.stats = stats
 
   local nauvis = { name = "nauvis", index = 1, valid = true, planet = { name = "nauvis", valid = true } }
+  -- LuaSurface::map_gen_settings, MapGenSettings: only seed (uint32, "the
+  -- random seed used to generate this map") is read, for the map id.
+  nauvis.map_gen_settings = { seed = opts.seed or 2894571 }
   local orbit  = { name = "platform-1", index = 2, valid = true, planet = nil }
   -- LuaGameScript::surfaces is a LuaCustomTable[uint32 or string -> LuaSurface]:
   -- "this sparse table allows you to find surfaces by indexing it with either
@@ -498,16 +502,20 @@ function F.install(opts)
     table_to_json = encode,
     json_to_table = F.decode,
     -- LuaHelpers::is_valid_sprite_path(path): "Checks if the given SpritePath
-    -- is valid and contains a loaded sprite" (2.0.77). The class must be one
-    -- this fake knows and the name a prototype it has. planet/<x> is not a
-    -- sprite path, measured on the live engine; space-location/<x> is.
+    -- is valid and contains a loaded sprite" (2.0.77). A SpritePath is a
+    -- SpritePrototype's own name or "type/name"; the class must be one this
+    -- fake knows and the name a prototype it has. planet/<x> is not a sprite
+    -- path, measured on the live engine; space-location/<x> is. quality_info
+    -- is a sprite prototype the base game's own locale draws bare.
     is_valid_sprite_path = function(path)
       assert(type(path) == "string", "is_valid_sprite_path wants a string")
+      if S.sprite_prototypes[path] then return true end
       local class, name = path:match("^([%w%-]+)/(.+)$")
       if not class then return false end
       local P = _G.prototypes
       local tables = { item = P.item, entity = P.entity, fluid = P.fluid, technology = P.technology,
-                       recipe = P.recipe, quality = P.quality, ["space-location"] = { nauvis = true } }
+                       recipe = P.recipe, quality = P.quality, tile = P.tile, ["virtual-signal"] = P.virtual_signal,
+                       ["space-location"] = { nauvis = true }, utility = { warning_icon = true } }
       local t = tables[class]
       return t ~= nil and t[name] ~= nil
     end,
@@ -537,10 +545,17 @@ function F.install(opts)
       ["military-science-pack"] = { name = "military-science-pack", products = { { type = "item", name = "military-science-pack", amount = 2 } } },
     },
     quality = { normal = { name = "normal", level = 0 }, uncommon = { name = "uncommon", level = 1 } },
+    -- LuaPrototypes::tile and ::virtual_signal, for the clickable [tile=..]
+    -- and [virtual-signal=..] tags and their sprite paths. F.install_recipes
+    -- swaps tile for strict tiles that carry the fluid a pump draws.
+    tile = { water = { name = "water" }, ["grass-1"] = { name = "grass-1" } },
+    virtual_signal = { ["signal-A"] = { name = "signal-A" } },
     -- LuaPrototypes::font: the mod's own data.lua declares aab-mono, and the
     -- table renderer checks it is there before setting rows in it.
     font = { ["aab-mono"] = { name = "aab-mono" } },
   }
+
+  S.sprite_prototypes = { quality_info = true }
 
   _G.rcon = { print = function(s) S.rcon_replies[#S.rcon_replies + 1] = s end }
 
@@ -580,7 +595,22 @@ function F.install(opts)
     on_nth_tick = function(_n, _fn) end,
   }
 
-  _G.settings = { global = S.settings }
+  -- LuaSettings::global. A mod changes one of its own settings by writing a
+  -- whole ModSetting table, { value = ... }, of the setting's own type; the
+  -- engine refuses anything else, so this does too. S.settings is the store
+  -- tests read and poke directly.
+  S.setting_writes = {}
+  _G.settings = { global = setmetatable({}, {
+    __index = S.settings,
+    __newindex = function(_, name, setting)
+      local was = S.settings[name]
+      assert(was ~= nil, "no mod setting named " .. tostring(name))
+      assert(type(setting) == "table" and setting.value ~= nil, "a setting is written as { value = ... }")
+      assert(type(setting.value) == type(was.value), "setting " .. name .. " holds a " .. type(was.value))
+      S.settings[name] = { value = setting.value }
+      S.setting_writes[#S.setting_writes + 1] = { name = name, value = setting.value }
+    end,
+  }) }
 
   -- A second force with nobody on it, for private-scope answers.
   S.team3 = {
@@ -650,6 +680,9 @@ function F.install(opts)
       if i == 2 or i == "Ann" then return gone end
       return nil
     end,
+    -- LuaGameScript::get_surface takes an index or a name, nil when no
+    -- surface matches.
+    get_surface = function(id) return S.surfaces[id] end,
     print = function(text) S.printed[#S.printed + 1] = { who = "*", text = text } end,
   }
   -- tick and ticks_played both live on the handle so a test can move the clock.
@@ -805,6 +838,536 @@ function F.install(opts)
   }
 
   return S
+end
+
+-- ══ recipe_needs: recipes, crafting machines, belts (opt-in) ═══════════
+-- One self-contained block for scripts/tools/recipe_needs.lua and its
+-- helpers. Opt-in: a suite calls F.install_recipes(S) after F.install(), and
+-- no other suite sees any of it. That matters, because find_entities sorts
+-- its name suggestions, and a science pack added to every suite's items
+-- would move "military-science-pack" off the top of a list aab_test.lua reads.
+--
+-- Ground truth, not memory: the vanilla recipes below are transcribed from
+-- headless 2.0.77 data/base/prototypes/recipe.lua, the machines from
+-- entity/entities.lua and the belts from entity/transport-belts.lua. Where a
+-- data field is left out the prototype default applies: category "crafting",
+-- energy_required 0.5, maximum_productivity 3.
+--
+-- Engine behaviour the fake holds the tool to:
+--   * Every prototype and LuaRecipe is a strict object. Reading a key it does
+--     not carry raises, as a LuaObject does, and so does iterating one or
+--     encoding one. category, additional_categories and is_parameter raise
+--     with a 2.1 message: 2.1.17 removes all three, so code that reads them
+--     dies on the next game version. LuaRecipePrototype::enabled is left off
+--     on purpose: it is the prototype default, never what a force has.
+--   * get_recipe_filtered and get_entity_filtered return a LuaCustomTable:
+--     pairs works, next() sees nothing, as on the real engine.
+--   * Both implement exactly the filters the tool sends and assert on any
+--     other, so a filter the engine reads differently cannot pass silently.
+--   * get_crafting_speed and has_category assert their argument, so a colon
+--     call, which passes the object as the first argument, fails here as it
+--     would misbehave there.
+-- No centrifuge is defined: the uranium recipes have no machine, which is the
+-- "no crafting machine can make it" path.
+do
+  local REMOVED_IN_2_1 = { category = true, additional_categories = true, is_parameter = true }
+
+  --- A read-only object that raises on any key it does not carry, the way a
+  --- LuaObject does. `optional` names keys that may read as nil.
+  local function strict(class, fields, optional, writable)
+    optional = optional or {}
+    return setmetatable({}, {
+      __index = function(_, key)
+        if REMOVED_IN_2_1[key] then
+          error(class .. "::" .. key .. " does not exist in Factorio 2.1 (removed after 2.0.77)", 2)
+        end
+        local value = fields[key]
+        if value == nil and not optional[key] then
+          error(class .. " doesn't contain key " .. tostring(key), 2)
+        end
+        return value
+      end,
+      __newindex = function(_, key, value)
+        if not (writable and writable[key]) then error(class .. "::" .. tostring(key) .. " is read only", 2) end
+        fields[key] = value
+      end,
+      __pairs = function() error("cannot iterate a " .. class .. ": it is a LuaObject, not a table", 2) end,
+    })
+  end
+
+  --- LuaCustomTable: indexable and walkable with pairs, but next() on it sees
+  --- nothing, because the entries are not stored in the table itself.
+  local function custom_table(entries)
+    return setmetatable({}, {
+      __index = function(_, key) return entries[key] end,
+      __pairs = function() return next, entries, nil end,
+      __len = function()
+        local n = 0
+        for _ in pairs(entries) do n = n + 1 end
+        return n
+      end,
+      __newindex = function() error("LuaCustomTable is read only", 2) end,
+    })
+  end
+
+  local function product(kind, name, amount, extra)
+    local p = { type = kind, name = name, amount = amount, probability = 1 }
+    for key, value in pairs(extra or {}) do p[key] = value end
+    return p
+  end
+  local function item(name, amount, extra) return product("item", name, amount, extra) end
+  local function fluid(name, amount, extra) return product("fluid", name, amount, extra) end
+  -- An Ingredient carries no probability; strip the one product() adds.
+  local function input(p) p.probability = nil return p end
+
+  local VANILLA = {
+    { name = "iron-plate", category = "smelting", energy = 3.2,
+      ingredients = { input(item("iron-ore", 1)) }, products = { item("iron-plate", 1) } },
+    { name = "copper-plate", category = "smelting", energy = 3.2,
+      ingredients = { input(item("copper-ore", 1)) }, products = { item("copper-plate", 1) } },
+    { name = "steel-plate", category = "smelting", energy = 16,
+      ingredients = { input(item("iron-plate", 5)) }, products = { item("steel-plate", 1) } },
+    { name = "stone-brick", category = "smelting", energy = 3.2,
+      ingredients = { input(item("stone", 2)) }, products = { item("stone-brick", 1) } },
+    { name = "iron-gear-wheel",
+      ingredients = { input(item("iron-plate", 2)) }, products = { item("iron-gear-wheel", 1) } },
+    { name = "copper-cable",
+      ingredients = { input(item("copper-plate", 1)) }, products = { item("copper-cable", 2) } },
+    { name = "electronic-circuit",
+      ingredients = { input(item("iron-plate", 1)), input(item("copper-cable", 3)) },
+      products = { item("electronic-circuit", 1) } },
+    { name = "advanced-circuit", energy = 6,
+      ingredients = { input(item("electronic-circuit", 2)), input(item("plastic-bar", 2)), input(item("copper-cable", 4)) },
+      products = { item("advanced-circuit", 1) } },
+    { name = "pipe", ingredients = { input(item("iron-plate", 1)) }, products = { item("pipe", 1) } },
+    { name = "engine-unit", category = "advanced-crafting", energy = 10,
+      ingredients = { input(item("steel-plate", 1)), input(item("iron-gear-wheel", 1)), input(item("pipe", 2)) },
+      products = { item("engine-unit", 1) } },
+    { name = "inserter",
+      ingredients = { input(item("electronic-circuit", 1)), input(item("iron-gear-wheel", 1)), input(item("iron-plate", 1)) },
+      products = { item("inserter", 1) } },
+    { name = "transport-belt",
+      ingredients = { input(item("iron-plate", 1)), input(item("iron-gear-wheel", 1)) },
+      products = { item("transport-belt", 2) } },
+    { name = "automation-science-pack", energy = 5,
+      ingredients = { input(item("copper-plate", 1)), input(item("iron-gear-wheel", 1)) },
+      products = { item("automation-science-pack", 1) } },
+    { name = "logistic-science-pack", energy = 6,
+      ingredients = { input(item("inserter", 1)), input(item("transport-belt", 1)) },
+      products = { item("logistic-science-pack", 1) } },
+    { name = "chemical-science-pack", energy = 24,
+      ingredients = { input(item("engine-unit", 2)), input(item("advanced-circuit", 3)), input(item("sulfur", 1)) },
+      products = { item("chemical-science-pack", 2) } },
+    { name = "plastic-bar", category = "chemistry", energy = 1,
+      ingredients = { input(fluid("petroleum-gas", 20)), input(item("coal", 1)) }, products = { item("plastic-bar", 2) } },
+    { name = "sulfur", category = "chemistry", energy = 1,
+      ingredients = { input(fluid("water", 30)), input(fluid("petroleum-gas", 30)) }, products = { item("sulfur", 2) } },
+    -- main_product = "" in the data: no main product at runtime.
+    { name = "basic-oil-processing", category = "oil-processing", energy = 5, main_product = "",
+      ingredients = { input(fluid("crude-oil", 100)) }, products = { fluid("petroleum-gas", 45) } },
+    -- The multi-product recipe: picked for petroleum gas by net output, so it
+    -- is what puts "byproducts" in approx.
+    { name = "advanced-oil-processing", category = "oil-processing", energy = 5,
+      ingredients = { input(fluid("water", 50)), input(fluid("crude-oil", 100)) },
+      products = { fluid("heavy-oil", 25), fluid("light-oil", 45), fluid("petroleum-gas", 55) } },
+    { name = "light-oil-cracking", category = "chemistry", energy = 2, main_product = "",
+      ingredients = { input(fluid("water", 30)), input(fluid("light-oil", 30)) }, products = { fluid("petroleum-gas", 20) } },
+    { name = "heavy-oil-cracking", category = "chemistry", energy = 2, main_product = "",
+      ingredients = { input(fluid("water", 30)), input(fluid("heavy-oil", 40)) }, products = { fluid("light-oil", 30) } },
+    -- A chance on every product, and the catalyst: kovarex nets 1 uranium-235
+    -- out of 41 made, the other 40 being the ones it took in.
+    { name = "uranium-processing", category = "centrifuging", energy = 12,
+      ingredients = { input(item("uranium-ore", 10)) },
+      products = { item("uranium-235", 1, { probability = 0.007 }), item("uranium-238", 1, { probability = 0.993 }) } },
+    { name = "kovarex-enrichment-process", category = "centrifuging", energy = 60, main_product = "",
+      ingredients = { input(item("uranium-235", 40, { ignored_by_stats = 40 })),
+                      input(item("uranium-238", 5, { ignored_by_stats = 2 })) },
+      products = { item("uranium-235", 41, { ignored_by_stats = 40, ignored_by_productivity = 40 }),
+                   item("uranium-238", 2, { ignored_by_stats = 2, ignored_by_productivity = 2 }) } },
+    -- What places the machines and belts below.
+    { name = "assembling-machine-1",
+      ingredients = { input(item("electronic-circuit", 3)), input(item("iron-gear-wheel", 5)), input(item("iron-plate", 9)) },
+      products = { item("assembling-machine-1", 1) } },
+    { name = "assembling-machine-2",
+      ingredients = { input(item("steel-plate", 2)), input(item("electronic-circuit", 3)),
+                      input(item("iron-gear-wheel", 5)), input(item("assembling-machine-1", 1)) },
+      products = { item("assembling-machine-2", 1) } },
+    { name = "assembling-machine-3",
+      ingredients = { input(item("speed-module", 4)), input(item("assembling-machine-2", 2)) },
+      products = { item("assembling-machine-3", 1) } },
+    { name = "stone-furnace", ingredients = { input(item("stone", 5)) }, products = { item("stone-furnace", 1) } },
+    { name = "steel-furnace", energy = 3,
+      ingredients = { input(item("steel-plate", 6)), input(item("stone-brick", 10)) }, products = { item("steel-furnace", 1) } },
+    { name = "electric-furnace", energy = 5,
+      ingredients = { input(item("steel-plate", 10)), input(item("advanced-circuit", 5)), input(item("stone-brick", 10)) },
+      products = { item("electric-furnace", 1) } },
+    { name = "chemical-plant", energy = 5,
+      ingredients = { input(item("steel-plate", 5)), input(item("iron-gear-wheel", 5)),
+                      input(item("electronic-circuit", 5)), input(item("pipe", 5)) },
+      products = { item("chemical-plant", 1) } },
+    { name = "oil-refinery", energy = 8,
+      ingredients = { input(item("steel-plate", 15)), input(item("iron-gear-wheel", 10)), input(item("stone-brick", 10)),
+                      input(item("electronic-circuit", 10)), input(item("pipe", 10)) },
+      products = { item("oil-refinery", 1) } },
+    { name = "fast-transport-belt",
+      ingredients = { input(item("iron-gear-wheel", 5)), input(item("transport-belt", 1)) },
+      products = { item("fast-transport-belt", 1) } },
+    { name = "express-transport-belt", category = "crafting-with-fluid",
+      ingredients = { input(item("iron-gear-wheel", 10)), input(item("fast-transport-belt", 1)), input(fluid("lubricant", 20)) },
+      products = { item("express-transport-belt", 1) } },
+    -- Not vanilla. A research-progress product exists in the wild (it crashed
+    -- RateCalculator, e5453bf), is not in the runtime docs' Product union, and
+    -- has no name.
+    { name = "test-research-progress",
+      ingredients = { input(item("iron-plate", 1)) },
+      products = { item("test-progress-item", 1), { type = "research-progress", research_item = "automation-science-pack", amount = 1 } } },
+    { name = "barrel", energy = 1, ingredients = { input(item("steel-plate", 1)) }, products = { item("barrel", 1) } },
+  }
+  -- Barrels, as data/base/data-updates.lua makes them for every fluid with a
+  -- barrel: a fill recipe named <fluid>-barrel and an empty-<fluid>-barrel
+  -- recipe, 50 units each way, 0.2 s, crafting-with-fluid, neither hidden nor
+  -- a parameter, both unlocked by fluid handling, no main_product. Emptying
+  -- nets 50 of the fluid, so without its round-trip rule the tool would make
+  -- water out of barrels filled from water.
+  for _, fluid_name in ipairs({ "water", "crude-oil", "petroleum-gas" }) do
+    local full = fluid_name .. "-barrel"
+    VANILLA[#VANILLA + 1] = { name = full, category = "crafting-with-fluid", energy = 0.2,
+      ingredients = { input(fluid(fluid_name, 50, { ignored_by_stats = 50 })), input(item("barrel", 1, { ignored_by_stats = 1 })) },
+      products = { item(full, 1, { ignored_by_stats = 1 }) } }
+    VANILLA[#VANILLA + 1] = { name = "empty-" .. full, category = "crafting-with-fluid", energy = 0.2,
+      ingredients = { input(item(full, 1, { ignored_by_stats = 1 })) },
+      products = { fluid(fluid_name, 50, { ignored_by_stats = 50 }), item("barrel", 1, { ignored_by_stats = 1 }) } }
+  end
+
+  -- Recipes a fresh freeplay force starts with, among the ones above: every
+  -- recipe in data/base/prototypes/recipe.lua without enabled = false. A
+  -- fresh force has no assembler and no science pack recipe; it does have the
+  -- stone furnace and the yellow belt.
+  local FREEPLAY_START = { "iron-plate", "copper-plate", "stone-brick", "iron-gear-wheel", "transport-belt", "stone-furnace" }
+
+  -- Crafting machines and belts: name, type, speed, categories.
+  local MACHINES = {
+    { "assembling-machine-1", "assembling-machine", 0.5, { "crafting", "basic-crafting", "advanced-crafting" } },
+    { "assembling-machine-2", "assembling-machine", 0.75, { "basic-crafting", "crafting", "advanced-crafting", "crafting-with-fluid" } },
+    { "assembling-machine-3", "assembling-machine", 1.25, { "basic-crafting", "crafting", "advanced-crafting", "crafting-with-fluid" } },
+    { "stone-furnace", "furnace", 1, { "smelting" } },
+    { "steel-furnace", "furnace", 2, { "smelting" } },
+    { "electric-furnace", "furnace", 2, { "smelting" } },
+    { "chemical-plant", "assembling-machine", 1, { "chemistry" } },
+    { "oil-refinery", "assembling-machine", 1, { "oil-processing" } },
+    { "rocket-silo", "rocket-silo", 1, { "rocket-building" } },
+    -- Not vanilla, which has no hidden crafting machine; mods do. Faster than
+    -- anything real, so a tool that offered either would name it.
+    { "test-hidden-assembler", "assembling-machine", 10, { "crafting" }, { hidden = true } },
+    { "test-parameter-assembler", "assembling-machine", 9, { "crafting" }, { parameter = true } },
+  }
+  local BELTS = {
+    { "transport-belt", 0.03125 }, { "fast-transport-belt", 0.0625 }, { "express-transport-belt", 0.09375 },
+  }
+
+  local function main_product_of(spec)
+    if spec.main_product == "" then return nil end
+    for _, p in ipairs(spec.products) do
+      if spec.main_product ~= nil and p.name == spec.main_product then return p end
+    end
+    if spec.main_product == nil and #spec.products == 1 then return spec.products[1] end
+    return nil
+  end
+
+  function F.install_recipes(S)
+    local P = _G.prototypes
+    local specs, protos, entities = {}, {}, {}
+    local refresh
+    S.recipe_state = { player = {}, ["team-3"] = {}, enemy = {}, neutral = {} }
+    S.recipe_filter_calls, S.entity_filter_calls = 0, 0
+
+    local function register(p)
+      if p.type == "item" and not P.item[p.name] then P.item[p.name] = { name = p.name } end
+      if p.type == "fluid" and not P.fluid[p.name] then P.fluid[p.name] = { name = p.name } end
+    end
+
+    --- Adds one recipe prototype, registering every item and fluid it names.
+    --- spec: name, category?, energy?, ingredients, products, main_product?,
+    --- hidden?, parameter?, maximum_productivity?, allowed_effects?,
+    --- enabled? (force name -> boolean; player defaults to true, every
+    --- other force to false).
+    function S.add_recipe(spec)
+      for _, p in ipairs(spec.products) do if p.name then register(p) end end
+      for _, p in ipairs(spec.ingredients) do register(p) end
+      local category = spec.category or "crafting"
+      specs[spec.name] = spec
+      protos[spec.name] = strict("LuaRecipePrototype", {
+        name = spec.name, type = "recipe", valid = true, object_name = "LuaRecipePrototype",
+        products = spec.products, ingredients = spec.ingredients,
+        energy = spec.energy or 0.5, main_product = main_product_of(spec),
+        hidden = spec.hidden == true, parameter = spec.parameter == true,
+        maximum_productivity = spec.maximum_productivity or 3,
+        -- LuaRecipePrototype::allowed_effects, dictionary[string -> boolean],
+        -- optional: only a suite that asks for one gets it.
+        allowed_effects = spec.allowed_effects,
+        has_category = function(wanted)
+          assert(type(wanted) == "string", "has_category wants a category name (called with a colon?)")
+          return wanted == category
+        end,
+      }, { main_product = true, allowed_effects = true })
+      P.recipe[spec.name] = protos[spec.name]
+      for force_name, state in pairs(S.recipe_state) do
+        local on = (spec.enabled or {})[force_name]
+        if on == nil then on = force_name == "player" end
+        state[spec.name] = { enabled = on, productivity_bonus = 0 }
+      end
+      if refresh then refresh() end
+    end
+
+    for _, spec in ipairs(VANILLA) do S.add_recipe(spec) end
+    for _, name in ipairs(FREEPLAY_START) do S.recipe_state["team-3"][name].enabled = true end
+    for _, name in ipairs({ "iron-ore", "copper-ore", "stone", "coal", "uranium-ore", "speed-module" }) do
+      register({ type = "item", name = name })
+    end
+
+    local function place(name, extra)
+      local fields = { name = name, valid = true, hidden = false, parameter = false,
+                       items_to_place_this = { { name = name, count = 1 } } }
+      for key, value in pairs(extra) do fields[key] = value end
+      entities[name] = strict("LuaEntityPrototype", fields)
+      P.entity[name] = entities[name]
+      P.item[name] = { name = name, place_result = entities[name] }
+    end
+    --- One crafting machine, {name, type, speed, categories, flags?}, flags
+    --- hidden, parameter and productivity. Every crafting machine has an
+    --- EffectReceiver (measured: all of the live save's), a plain table whose
+    --- base_effect carries productivity only on a machine that has some: the
+    --- electromagnetic plant, foundry and biochamber's 0.5.
+    function S.add_crafter(m)
+      local categories = {}
+      for _, c in ipairs(m[4]) do categories[c] = true end
+      local speed, flags = m[3], m[5] or {}
+      place(m[1], { type = m[2], crafting_categories = categories,
+                    hidden = flags.hidden == true, parameter = flags.parameter == true,
+                    effect_receiver = { base_effect = { productivity = flags.productivity },
+                                        uses_module_effects = true, uses_beacon_effects = true, uses_surface_effects = true },
+                    get_crafting_speed = function(quality)
+        assert(quality == nil or quality == "normal", "get_crafting_speed takes a quality, not the prototype (called with a colon?)")
+        return speed
+      end })
+    end
+    for _, m in ipairs(MACHINES) do S.add_crafter(m) end
+    for _, b in ipairs(BELTS) do place(b[1], { type = "transport-belt", belt_speed = b[2] }) end
+
+    --- A resource entity, as data/base/prototypes/entity/resources.lua
+    --- declares one: a LuaEntityPrototype of type "resource" whose
+    --- MineableProperties, a plain table, name what a drill or pumpjack gets.
+    --- extra overrides MineableProperties fields, minable for one.
+    function S.add_resource(name, products, extra)
+      for _, p in ipairs(products) do if p.name then register(p) end end
+      local mining = { minable = true, mining_time = 1, products = products }
+      for key, value in pairs(extra or {}) do mining[key] = value end
+      entities[name] = strict("LuaEntityPrototype", {
+        name = name, type = "resource", valid = true, hidden = false, parameter = false,
+        mineable_properties = mining,
+      })
+      P.entity[name] = entities[name]
+    end
+    for _, ore in ipairs({ "iron-ore", "copper-ore", "coal", "stone", "uranium-ore" }) do
+      S.add_resource(ore, { item(ore, 1) })
+    end
+    -- data: crude-oil's minable result is the fluid, amount_min = amount_max = 10.
+    S.add_resource("crude-oil", { fluid("crude-oil", nil, { amount_min = 10, amount_max = 10 }) })
+
+    -- LuaPrototypes::tile as the engine has it: a LuaCustomTable of strict
+    -- LuaTilePrototypes, `fluid` the one an offshore pump draws there or nil.
+    -- The tiles F.install made stay, now as strict ones with no fluid.
+    local tiles = {}
+    function S.add_tile(name, fluid_name)
+      if fluid_name then register({ type = "fluid", name = fluid_name }) end
+      tiles[name] = strict("LuaTilePrototype", { name = name, valid = true, fluid = fluid_name and P.fluid[fluid_name] or nil },
+        { fluid = true })
+    end
+    for name in pairs(P.tile) do S.add_tile(name, nil) end
+    S.add_tile("water", "water")
+    S.add_tile("deepwater", "water")
+    P.tile = custom_table(tiles)
+
+    -- What a surface's map generator places, as recipe_needs reads it:
+    -- MapGenSettings::autoplace_settings, a plain table, entity and tile
+    -- each { treat_missing_as_default, settings = { [prototype name] =
+    -- AutoplaceControl } }. Nauvis lists what the live 2.0.77 save's does
+    -- (data/base/prototypes/planet/planet-map-gen.lua), shortened to names
+    -- the fake has: resources, a fish, a rock, a land tile and the waters.
+    -- Its LuaPlanet gains the prototype, with the same lists, and platform-1
+    -- is a platform already. Every planet on the live save, and on a fresh
+    -- 2.1.17 map, sets treat_missing_as_default and places nothing it leaves
+    -- out, so the fake sets it too.
+    local function autoplace(lists)
+      local out = {}
+      for kind, names in pairs(lists) do
+        local settings = {}
+        for _, name in ipairs(names) do settings[name] = { frequency = 1, size = 1, richness = 1 } end
+        out[kind] = { treat_missing_as_default = true, settings = settings }
+      end
+      return out
+    end
+    local NAUVIS_PLACES = { entity = { "iron-ore", "copper-ore", "stone", "coal", "crude-oil", "uranium-ore", "fish", "big-rock" },
+                            tile = { "grass-1", "water", "deepwater" } }
+    local nauvis = S.surfaces.nauvis
+    nauvis.map_gen_settings.autoplace_settings = autoplace(NAUVIS_PLACES)
+    nauvis.planet.prototype = { name = "nauvis", map_gen_settings = { autoplace_settings = autoplace(NAUVIS_PLACES) } }
+
+    --- A surface to ask recipe_needs about. spec: name; platform (true for a
+    --- space platform); places, what its own map generator lists ({entity,
+    --- tile}, nothing when left out); planet, what its planet prototype
+    --- lists (no planet when left out).
+    function S.add_surface(spec)
+      local surface = { name = spec.name, index = #S.surfaces + 1, valid = true,
+                        map_gen_settings = { autoplace_settings = autoplace(spec.places or {}) } }
+      if spec.platform then surface.platform = { name = spec.name, valid = true } end
+      if spec.planet then
+        surface.planet = { name = spec.name, valid = true,
+                           prototype = { name = spec.name, map_gen_settings = { autoplace_settings = autoplace(spec.planet) } } }
+      end
+      rawset(S.surfaces, surface.index, surface)
+      getmetatable(S.surfaces).__index[spec.name] = surface
+      return surface
+    end
+
+    --- One force's LuaCustomTable of LuaRecipe: enabled and
+    --- productivity_bonus are writable, as on the engine.
+    local function force_recipes(force_name)
+      local entries = {}
+      for name in pairs(specs) do
+        local state = S.recipe_state[force_name][name]
+        entries[name] = strict("LuaRecipe", setmetatable({ name = name, valid = true, prototype = protos[name] },
+          { __index = state, __newindex = state }), nil, { enabled = true, productivity_bonus = true })
+      end
+      return custom_table(entries)
+    end
+    -- Rebuilt whenever a recipe is added, so a recipe a suite adds later is in
+    -- every force's table the way a loaded prototype always is.
+    refresh = function()
+      S.force.recipes = force_recipes("player")
+      S.team3.recipes = force_recipes("team-3")
+      S.enemy.recipes = force_recipes("enemy")
+      S.neutral.recipes = force_recipes("neutral")
+    end
+    refresh()
+
+    local function names_of(filter_value)
+      if type(filter_value) == "string" then return { [filter_value] = true } end
+      local set = {}
+      for _, one in ipairs(filter_value) do set[one] = true end
+      return set
+    end
+
+    -- RecipePrototypeFilter, a list of them read the way the engine reads it
+    -- (runtime docs, 2.0.77 and 2.1.17): each filter tests one recipe,
+    -- `invert` flips that test, and `mode` joins it to the filter before,
+    -- "or" when left out, "and" binding tighter than "or". Measured on a
+    -- live 2.0.77 Space Age game of 712 recipes: X or Y and Z gave X plus
+    -- (Y and Z), never (X or Y) and Z; the first filter's mode joins nothing;
+    -- an empty list matched all 712; and (not hidden and makes these items)
+    -- or (not hidden and makes these fluids) equalled the single filters'
+    -- union less hidden recipes over 712 samples. Only the filters the tool
+    -- sends are implemented; any other is refused.
+    local PRODUCT_KIND = { ["has-product-item"] = "item", ["has-product-fluid"] = "fluid" }
+    local MODES = { ["or"] = true, ["and"] = true }
+
+    --- The names one has-product filter asks for. Every one must be a real
+    --- prototype: stricter than the engine, which quietly matches nothing for
+    --- a name it does not have (2.0.77), because a tool that sends one has a
+    --- bug and here it shows.
+    local function product_names(f, kind)
+      local elem = f.elem_filters
+      assert(type(elem) == "table" and #elem == 1 and elem[1].filter == "name",
+        "the fake implements elem_filters = {{filter = \"name\", name = ...}} only")
+      local wanted = names_of(elem[1].name)
+      for name in pairs(wanted) do
+        assert(P[kind][name], "no " .. kind .. " prototype named " .. name)
+      end
+      return wanted
+    end
+
+    --- The bare test one filter makes of a recipe spec, before invert.
+    local function recipe_condition(f)
+      if f.filter == "hidden" then return function(spec) return spec.hidden == true end end
+      local kind = PRODUCT_KIND[f.filter]
+      assert(kind, "the fake does not implement recipe filter " .. tostring(f.filter))
+      local wanted = product_names(f, kind)
+      return function(spec)
+        for _, p in ipairs(spec.products) do
+          if p.type == kind and wanted[p.name] then return true end
+        end
+        return false
+      end
+    end
+
+    local function recipe_test(f)
+      assert(type(f) == "table", "each recipe filter is a table")
+      assert(f.mode == nil or MODES[f.mode], "a filter's mode is \"or\" or \"and\", not " .. tostring(f.mode))
+      assert(f.invert == nil or type(f.invert) == "boolean", "a filter's invert is a boolean")
+      local condition, invert = recipe_condition(f), f.invert == true
+      return function(spec) return condition(spec) ~= invert end
+    end
+
+    --- The filters as groups joined by "or", the tests in each joined by
+    --- "and". A filter opens a new group unless its mode is "and".
+    local function recipe_groups(filters)
+      local groups = {}
+      for i, f in ipairs(filters) do
+        if i == 1 or f.mode ~= "and" then groups[#groups + 1] = {} end
+        local group = groups[#groups]
+        group[#group + 1] = recipe_test(f)
+      end
+      return groups
+    end
+
+    local function passes_all(group, spec)
+      for _, test in ipairs(group) do
+        if not test(spec) then return false end
+      end
+      return true
+    end
+
+    local function passes(groups, spec)
+      if #groups == 0 then return true end
+      for _, group in ipairs(groups) do
+        if passes_all(group, spec) then return true end
+      end
+      return false
+    end
+
+    P.get_recipe_filtered = function(filters)
+      assert(type(filters) == "table", "get_recipe_filtered wants an array of filters")
+      local groups = recipe_groups(filters)
+      S.recipe_filter_calls = S.recipe_filter_calls + 1
+      local out = {}
+      for name, spec in pairs(specs) do
+        if passes(groups, spec) then out[name] = protos[name] end
+      end
+      return custom_table(out)
+    end
+
+    P.get_entity_filtered = function(filters)
+      assert(type(filters) == "table" and #filters == 1, "the fake implements one entity filter at a time")
+      local f = filters[1]
+      assert(f.filter == "type", "the fake does not implement entity filter " .. tostring(f.filter))
+      assert(f.invert == nil and f.mode == nil, "the fake does not implement invert or mode")
+      local types = names_of(f.type)
+      S.entity_filter_calls = S.entity_filter_calls + 1
+      local out = {}
+      for name, entity in pairs(entities) do
+        if types[entity.type] then out[name] = entity end
+      end
+      return custom_table(out)
+    end
+
+    --- Sets one force's state for one recipe, e.g. {enabled = true} or
+    --- {productivity_bonus = 0.5}, the way the engine's own writes would.
+    function S.set_recipe(force_name, recipe_name, fields)
+      for key, value in pairs(fields) do S.recipe_state[force_name][recipe_name][key] = value end
+    end
+
+    return S
+  end
 end
 
 return F

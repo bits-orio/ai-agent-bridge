@@ -94,6 +94,7 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	r.agent.BriefingEnabled = cfg.BriefingEnabled()
 	r.agent.Chat = newHistoryChat(store)
 	r.agent.Personality = cfg.Agent.Personality
+	logVoice(cfg.Agent.Personality)
 	if cfg.BriefingEnabled() {
 		log.Print("briefing: on, riding with every question (briefing.enabled: true)")
 	} else {
@@ -120,6 +121,13 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	r.greet(ctx)
 	r.loop(ctx)
 	log.Print("run: stopped")
+}
+
+// logVoice says at startup which voice the config picks, by the label the
+// agent logs again whenever the map's own setting takes over or lets go
+// (internal/agent, voice.go).
+func logVoice(configured string) {
+	log.Printf("voice: %s, from agent.personality; a personality set in game overrides it", agent.VoiceLabel(configured))
 }
 
 // tailEvents feeds the companion's events.jsonl into history. A read failure

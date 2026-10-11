@@ -4,11 +4,16 @@
 --
 -- Append-only event log the service tails into history (CONTEXT.md "Event
 -- file", "History"; PLAN.md decision 4). Truncated once per session, then
--- appended, written by the server copy only.
+-- appended, written by the server copy only. The first line of every session
+-- is a `session` event naming the map (scripts/map_id.lua), so the service
+-- can tell a new map from an older save of the same one.
 --
 -- One handler in this mod may register for any given event, so on_console_chat
 -- is NOT registered here: control.lua owns the single handler and calls
 -- M.on_console_chat as one of its two fan-out targets.
+
+local chat_visibility = require("scripts.chat_visibility")
+local map_id          = require("scripts.map_id")
 
 local EVENTS_FILE = "ai-agent-bridge/events.jsonl"
 
@@ -21,21 +26,31 @@ local function events_enabled()
   return settings.global["aab-events-enabled"].value
 end
 
+local function json_line(event_key, data)
+  return helpers.table_to_json({
+    event = event_key,
+    tick  = game.tick,
+    data  = data or {},
+  }) .. "\n"
+end
+
 local M = {}
 
 --- Appends one line to events.jsonl, or does nothing when the setting is off.
 --- Public because questions and answers are logged from outside this module.
 function M.write(event_key, data)
   if not events_enabled() then return end
-  local line = helpers.table_to_json({
-    event = event_key,
-    tick  = game.tick,
-    data  = data or {},
-  }) .. "\n"
+  -- A save made before map ids has none until here. Every peer runs this
+  -- same handler with the same storage, so every peer makes the same id.
+  local id = map_id.ensure()
+  local text = json_line(event_key, data)
+  if not truncated_this_session then
+    text = json_line("session", { map_id = id }) .. text
+  end
   -- for_player=0: only the server writes its own copy. Without it, every
   -- connected client would independently write its own copy of the file,
   -- which is wasteful and can race on a server with multiple clients.
-  helpers.write_file(EVENTS_FILE, line, truncated_this_session, 0)
+  helpers.write_file(EVENTS_FILE, text, truncated_this_session, 0)
   truncated_this_session = true
 end
 
@@ -44,17 +59,25 @@ local function death_cause(e)
   return (e.cause.type == "character" and e.cause.player and e.cause.player.name) or e.cause.name
 end
 
---- Logs one chat line. Called by control.lua's single on_console_chat handler.
+--- Logs one chat line with who could read it (scripts/chat_visibility.lua):
+--- `scope` and `private` beside the player, force and message every
+--- companion has always logged. Called by control.lua's single
+--- on_console_chat handler.
 function M.on_console_chat(e)
+  -- Nothing to log, so no scope provider is asked either.
+  if not events_enabled() then return end
   -- player_index is absent for messages typed into the server's own console
   -- (stdin), not just for players. Log those too, tagged Server.
-  if not e.player_index then
-    M.write("console_chat", { player = "Server", message = e.message })
-    return
-  end
-  local player = game.get_player(e.player_index)
-  if not player then return end
-  M.write("console_chat", { player = player.name, force = player.force.name, message = e.message })
+  local player = e.player_index and game.get_player(e.player_index) or nil
+  if e.player_index and not player then return end
+  local seen_by = chat_visibility.of(player, e.message)
+  M.write("console_chat", {
+    player = player and player.name or "Server",
+    force = player and player.force.name or nil,
+    message = e.message,
+    scope = seen_by.scope,
+    private = seen_by.private,
+  })
 end
 
 --- Logs a player leaving. Public because control.lua fans on_player_left_game

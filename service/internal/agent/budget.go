@@ -1,19 +1,25 @@
 // The whole-artifact byte budget. The shape caps bound how many rows an answer
 // has and how long one cell is; they say nothing about what the two together
-// add up to, and a table at its caps marshals to several thousand bytes.
+// add up to, and a table at its caps marshals to well over ten thousand bytes.
 //
 // The transport is not the reason for the budget. The rcon client accepts
 // 262144 bytes per command, measured on the rig, so a maxed artifact would
 // reach the game. The reason is that an answer a player reads in chat is small
-// by nature: a few hundred bytes. Anything that needs thousands is a different
-// answer, not a bigger one.
+// by nature: a few hundred bytes. Anything that needs many thousands is a
+// different answer, not a bigger one.
+//
+// An answer over the budget is refused back to the model like any other cap
+// while it has a round left (overcaps.go), so fit only ever shrinks an answer
+// that goes out with no round left to rewrite it.
 
 package agent
 
 import "encoding/json"
 
-// MaxArtifactBytes is the marshalled size an artifact has to fit in.
-const MaxArtifactBytes = 6000
+// MaxArtifactBytes is the marshalled size an artifact has to fit in. It was
+// 6000 while a cell was capped at 160 characters, and doubled with the cell
+// cap so a summary at its caps fits with room to spare.
+const MaxArtifactBytes = 12000
 
 // minCellRunes is as short as shortening a cell ever gets. A cell this short
 // carries nothing, so an artifact still over budget here is left over budget
@@ -24,7 +30,8 @@ const minCellRunes = 8
 // fit shrinks an artifact that has already passed the shape caps until it
 // marshals inside the budget. Trailing rows and items go first, one at a time,
 // because the rows a model writes first are the ones it thought mattered. Only
-// when a single row is still too big do the cells get shorter.
+// when a single row is still too big do the cells get shorter, each cut with
+// an ellipsis, the same cut validate makes.
 func fit(a Artifact) Artifact {
 	if within(a) {
 		return a
@@ -81,7 +88,7 @@ func dropLast(a Artifact) Artifact {
 	return a
 }
 
-// shorten clips every cell in the artifact to limit runes, the title and the
+// shorten cuts every cell in the artifact to limit runes, the title and the
 // column names included.
 func shorten(a Artifact, limit int) Artifact {
 	a.Title = clipRichText(a.Title, limit)
@@ -117,14 +124,4 @@ func shortenAll(in []string, limit int) []string {
 		out = append(out, clipRichText(s, limit))
 	}
 	return out
-}
-
-// clipRunes trims a string to limit runes, counted in runes so a clip never
-// splits a character in half.
-func clipRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) > limit {
-		return string(r[:limit])
-	}
-	return s
 }

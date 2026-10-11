@@ -24,6 +24,7 @@
 local force_lookup   = require("scripts.tools.force_lookup")
 local surface_lookup = require("scripts.tools.surface_lookup")
 local bounded        = require("scripts.tools.bounded")
+local close_names    = require("scripts.close_names")
 
 local SCAN_CAP      = 2000
 local DEFAULT_SHOWN = 5
@@ -87,26 +88,9 @@ M.manifest = {
 }
 
 -- Up to five prototype names sharing a fragment of three or more letters
--- with what was asked for, so "repair-kit" answers with repair-pack. One
--- pass over one prototype table, only on the miss.
-local MAX_SUGGESTIONS = 5
-
-local function suggestions(table_, query)
-  local out, seen = {}, {}
-  for fragment in tostring(query):lower():gmatch("[%l%d]+") do
-    if #fragment >= 3 then
-      for name in pairs(table_) do
-        if not seen[name] and name:find(fragment, 1, true) then
-          seen[name] = true
-          out[#out + 1] = name
-          if #out >= MAX_SUGGESTIONS then return out end
-        end
-      end
-    end
-  end
-  table.sort(out)
-  return out
-end
+-- with what was asked for, so "repair-kit" answers with repair-pack
+-- (scripts/close_names.lua, which recipe_needs shares).
+local suggestions = close_names.sharing_fragment
 
 --- Whether a recipe makes `product`, by product name.
 local function makes(recipe, product)

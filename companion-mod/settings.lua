@@ -55,4 +55,16 @@ data:extend({
         maximum_value = 10000,
         order = "a-e",
     },
+    {
+        -- How the bot sounds. Fixed on each question when it is asked and
+        -- read by the service, which owns what it means; see
+        -- scripts/personality.lua. Blank leaves it to the operator's config.
+        type = "string-setting",
+        name = "aab-personality",
+        setting_type = "runtime-global",
+        default_value = "",
+        allow_blank = true,
+        auto_trim = true,
+        order = "a-f",
+    },
 })

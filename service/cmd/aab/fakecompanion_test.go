@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/bits-orio/ai-agent-bridge/service/internal/controlapi"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/history"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model/fake"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/rcon"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -51,6 +53,83 @@ type fakeCompanion struct {
 	answers   int
 	manifests int
 	shapes    []string // the shape of every artifact the answer op accepted
+
+	// gameTick is what status reports as the game tick, and issued the
+	// highest question id handed out so far, as status's last_id: never below
+	// a pending id. delivered is the artifact each answered id last carried.
+	// statusErr refuses the status op with a protocol error code. mapID is
+	// status's map_id, left out while empty, the way a companion too old to
+	// name its map replies.
+	gameTick  uint64
+	issued    int64
+	delivered map[int64]string
+	statusErr string
+	mapID     string
+
+	// down makes every command fail with no reply at all, the way a server
+	// that is not running fails: the service sees an outage, not a refusal.
+	// crashOnAnswer takes the server down as the next answer arrives, so
+	// that delivery fails the same way. conn numbers the connection the
+	// service is on, as rcon.Client does; 0 means the fake does not number
+	// them, the way a plain executor does not. A restart moves it on.
+	down          bool
+	crashOnAnswer bool
+	conn          uint64
+
+	// unreachable gets no reply for the ops it names, the way down does for
+	// every op. pollErr refuses the poll op with a protocol error code.
+	unreachable map[string]bool
+	pollErr     string
+
+	// askers says who asked a question and where, by id; a question with
+	// none was asked by Bob on force player, in the open. onCall runs as
+	// each op arrives, and onStatus as the status op answers, for what
+	// happens on the server beside the service's calls.
+	askers   map[int64]fakeAsker
+	onCall   func(op string)
+	onStatus func()
+}
+
+// fakeAsker is who asked one question: a player on a force, in a scope, and
+// whether that scope is private.
+type fakeAsker struct {
+	player  string
+	force   string
+	scope   string
+	private bool
+}
+
+// errDown is what a call to a server that is not running gets: no reply.
+var errDown = errors.New("dial tcp 127.0.0.1:27015: connect: connection refused")
+
+// crash takes the server down: every call fails with no reply until restart.
+func (f *fakeCompanion) crash() { f.down = true }
+
+// restart brings the server back on the save it loads: tick and questions
+// as that save has them, ids starting again from what it had issued. The
+// service reaches it over a new connection.
+func (f *fakeCompanion) restart(tick uint64, texts map[int64]string) {
+	f.down = false
+	f.crashOnAnswer = false
+	f.newMap(tick, texts)
+	if f.conn != 0 {
+		f.conn++
+	}
+}
+
+// Connection numbers the connection the service is on, as rcon.Client does.
+func (f *fakeCompanion) Connection() uint64 { return f.conn }
+
+// ExecuteOn runs a command on connection conn only, as rcon.Client does:
+// on another one, or while the server is down, nothing is sent.
+func (f *fakeCompanion) ExecuteOn(conn uint64, cmd string) (string, time.Duration, error) {
+	if f.down {
+		return "", 0, errDown
+	}
+	if conn != f.conn {
+		return "", 0, rcon.ErrConnectionChanged
+	}
+	return f.Execute(cmd)
 }
 
 func newFakeCompanion(texts map[int64]string) *fakeCompanion {
@@ -58,17 +137,50 @@ func newFakeCompanion(texts map[int64]string) *fakeCompanion {
 		texts = map[int64]string{}
 	}
 	return &fakeCompanion{
-		pending: texts,
-		catalog: map[string][]string{"ai-agent-bridge-tools": {"list_forces"}},
+		pending:   texts,
+		catalog:   map[string][]string{"ai-agent-bridge-tools": {"list_forces"}},
+		gameTick:  1,
+		delivered: map[int64]string{},
 	}
+}
+
+// lastID is status's last_id: the highest id issued, which every pending
+// question's id is at most.
+func (f *fakeCompanion) lastID() int64 {
+	for id := range f.pending {
+		f.issued = max(f.issued, id)
+	}
+	return f.issued
+}
+
+// newMap is the server starting a new map, or loading a save from before
+// some of what the service saw: the tick goes back, and question ids start
+// again, so the ones pending now may repeat ids the service already used.
+func (f *fakeCompanion) newMap(tick uint64, texts map[int64]string) {
+	f.gameTick = tick
+	f.issued = 0
+	f.pending = texts
 }
 
 // Execute satisfies the rcon executor. The fake does no real I/O, so the
 // wire duration it reports is zero; the real client measures it inside its
 // own connection lock.
 func (f *fakeCompanion) Execute(cmd string) (string, time.Duration, error) {
+	if f.down || f.unreachable[opOf(cmd)] {
+		return "", 0, errDown
+	}
 	resp, err := f.execute(cmd)
 	return resp, 0, err
+}
+
+// opOf is the op an aab-rpc command carries, "" when it carries none.
+func opOf(cmd string) string {
+	var req struct {
+		Op string `json:"op"`
+	}
+	body, _ := strings.CutPrefix(cmd, "/aab-rpc ")
+	_ = json.Unmarshal([]byte(body), &req)
+	return req.Op
 }
 
 func (f *fakeCompanion) execute(cmd string) (string, error) {
@@ -77,22 +189,34 @@ func (f *fakeCompanion) execute(cmd string) (string, error) {
 		return "", fmt.Errorf("not an aab-rpc command: %q", cmd)
 	}
 	var req struct {
-		Op       string `json:"op"`
-		After    int64  `json:"after"`
-		Limit    int    `json:"limit"`
-		QID      int64  `json:"qid"`
-		I        string `json:"i"`
-		Artifact struct {
-			Shape string `json:"shape"`
-		} `json:"artifact"`
+		Op       string          `json:"op"`
+		After    int64           `json:"after"`
+		Limit    int             `json:"limit"`
+		QID      int64           `json:"qid"`
+		I        string          `json:"i"`
+		Artifact json.RawMessage `json:"artifact"`
 	}
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		return `{"ok":false,"e":"bad_json","m":"unparseable"}`, nil
 	}
+	if f.onCall != nil {
+		f.onCall(req.Op)
+	}
 
 	switch req.Op {
 	case "status":
-		return `{"ok":true,"r":{"protocol":1,"mod_version":"test","tick":1,"player_count":1,"pending":0,"ask_command":"ask","last_id":0}}`, nil
+		if f.onStatus != nil {
+			f.onStatus()
+		}
+		if f.statusErr != "" {
+			return refusal(f.statusErr), nil
+		}
+		mapField := ""
+		if f.mapID != "" {
+			mapField = fmt.Sprintf(`,"map_id":%q`, f.mapID)
+		}
+		return fmt.Sprintf(`{"ok":true,"r":{"protocol":1,"mod_version":"test","tick":%d,"player_count":1,"pending":%d,"ask_command":"ask","last_id":%d%s}}`,
+			f.gameTick, len(f.pending), f.lastID(), mapField), nil
 	case "providers":
 		if f.providersErr != "" {
 			return refusal(f.providersErr), nil
@@ -113,10 +237,25 @@ func (f *fakeCompanion) execute(cmd string) (string, error) {
 		return `{"ok":true,"r":{"ok":true}}`, nil
 	case "poll":
 		f.polls++
+		if f.pollErr != "" {
+			return refusal(f.pollErr), nil
+		}
 		return f.pollReply(req.After, req.Limit), nil
 	case "answer":
+		if f.crashOnAnswer {
+			f.crash()
+			return "", errDown
+		}
 		f.answers++
-		return f.answerReply(req.QID, req.Artifact.Shape), nil
+		var artifact struct {
+			Shape string `json:"shape"`
+		}
+		_ = json.Unmarshal(req.Artifact, &artifact)
+		reply := f.answerReply(req.QID, artifact.Shape)
+		if strings.Contains(reply, `"ok":true`) {
+			f.delivered[req.QID] = string(req.Artifact)
+		}
+		return reply, nil
 	}
 	return `{"ok":false,"e":"bad_op","m":"unknown op"}`, nil
 }
@@ -191,11 +330,20 @@ func (f *fakeCompanion) pollReply(after int64, limit int) string {
 		ids = ids[:limit]
 	}
 
-	rows := make([]string, 0, len(ids))
+	rows := make([]rpc.Question, 0, len(ids))
 	for _, id := range ids {
-		rows = append(rows, fmt.Sprintf(`{"id":%d,"text":%q,"player_index":1,"player_name":"Bob","force":"player","tick":100}`, id, f.pending[id]))
+		who, ok := f.askers[id]
+		if !ok {
+			who = fakeAsker{player: "Bob", force: "player"}
+		}
+		index := 1
+		rows = append(rows, rpc.Question{
+			ID: id, Text: f.pending[id], PlayerIndex: &index, PlayerName: who.player,
+			Force: who.force, Tick: 100, Scope: who.scope, Private: who.private,
+		})
 	}
-	return `{"ok":true,"r":[` + strings.Join(rows, ",") + `]}`
+	page, _ := json.Marshal(rows)
+	return `{"ok":true,"r":` + string(page) + `}`
 }
 
 func (f *fakeCompanion) answerReply(qid int64, shape string) string {
@@ -206,6 +354,7 @@ func (f *fakeCompanion) answerReply(qid int64, shape string) string {
 		return refusal(rpc.CodeBadArtifact)
 	}
 	f.shapes = append(f.shapes, shape)
+	f.issued = max(f.issued, qid)
 	delete(f.pending, qid)
 	return `{"ok":true,"r":true}`
 }

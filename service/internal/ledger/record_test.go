@@ -44,7 +44,7 @@ func TestQuestionRecordRoundTrip(t *testing.T) {
 		"question_id", "asker", "force", "surface", "session_key", "session_fresh",
 		"text", "rounds", "lookups", "zero_lookup", "shape", "cost", "ms_model", "ms_rcon",
 		"briefing", "briefing_bytes", "briefing_tokens", "briefing_ms",
-		"asked_back", "awaiting_reply_resolved", "refused", "refused_reason", "model_error", "voice",
+		"asked_back", "awaiting_reply_resolved", "refused", "refused_reason", "model_error", "voice", "clipped",
 	} {
 		if _, ok := fields[key]; !ok {
 			t.Errorf("marshaled JSON missing key %q: %s", key, raw)
@@ -61,6 +61,9 @@ func TestQuestionRecordRoundTrip(t *testing.T) {
 	}
 	if string(fields["voice"]) != `"off"` {
 		t.Errorf("voice = %s, want \"off\" from NewQuestionRecord", fields["voice"])
+	}
+	if string(fields["clipped"]) != "false" {
+		t.Errorf("clipped = %s, want false from NewQuestionRecord", fields["clipped"])
 	}
 
 	var got QuestionRecord
@@ -189,6 +192,10 @@ func TestRoundRecordRoundTrip(t *testing.T) {
 		}
 	}
 
+	if _, ok := fields["submit_refusals"]; ok {
+		t.Errorf("a round that refused nothing carries submit_refusals, want it omitted: %s", raw)
+	}
+
 	var got RoundRecord
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -219,5 +226,34 @@ func TestRoundRecordRoundTrip(t *testing.T) {
 	}
 	if string(first["error"]) != "null" {
 		t.Errorf("first tool call error = %s, want null when ok", first["error"])
+	}
+}
+
+// TestRoundRecordSubmitRefusalsRoundTrip: a round that refused a
+// submit_answer carries each refusal as {kind, reason} under
+// submit_refusals, in order, and reads back the same.
+func TestRoundRecordSubmitRefusalsRoundTrip(t *testing.T) {
+	want := RoundRecord{
+		QuestionID: 41,
+		Round:      3,
+		ToolCalls:  []ToolCall{},
+		SubmitRefusals: []SubmitRefusal{
+			{Kind: RefusedOverCap, Reason: "Not sent, nothing reached the player: the answer is over the caps. Line 2 is 410 characters, the cap is 320."},
+			{Kind: RefusedSecondSubmit, Reason: "only the first submit_answer of a round is used. This one was ignored."},
+		},
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"submit_refusals":[{"kind":"over_cap","reason":"Not sent`) {
+		t.Errorf("marshaled round = %s, want submit_refusals as kind and reason", raw)
+	}
+	var got RoundRecord
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("round trip mismatch:\n want %+v\n got  %+v", want, got)
 	}
 }

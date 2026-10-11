@@ -10,10 +10,16 @@ import (
 // ChatLine is one organic console_chat line, already filtered the way
 // recent_chat and catch_up both need it (docs/design/phase4-spec.md
 // section 15): no server console lines, no line that is itself a question
-// to the bot, no immediate repeat of the line before it.
+// to the bot, no immediate repeat of the line before it. Force is the
+// speaker's, and Private says the line was said in a private channel, a
+// force's own chat for instance. Only a question asked in that same channel
+// ever reads a private line (visibleTo), so the flag tells the reader nothing
+// it could not already read; it tells a team's own chat from the open one.
 type ChatLine struct {
 	Tick    int64
 	Player  string
+	Force   string
+	Private bool
 	Message string
 }
 
@@ -38,7 +44,7 @@ type chatMoment struct {
 // lines standing.
 const chatFetchLimit = 4 * maxRecentLimit
 
-const chatHeader = "tick\tplayer\tmessage"
+const chatHeader = "tick\tplayer\tforce\tprivate\tmessage"
 
 // FilteredChat returns organic console_chat lines, newest first (section
 // 15): "Server" lines dropped, a line that is itself an echo of a
@@ -47,10 +53,11 @@ const chatHeader = "tick\tplayer\tmessage"
 // produced it, so this package never needs to learn it), and an immediate
 // repeat of the line before it collapsed to one.
 //
-// This is the one filter both recent_chat and catch_up read through, and
-// the one a caller outside this package (service/cmd/aab/chatsource.go's
-// historyChat, which reimplements it today) should call instead of
-// reimplementing it again: see this task's handoff note.
+// This is the one filter recent_chat, catch_up and the briefing's chat
+// (RecentChatLines) all read through. Both of its reads go through
+// queryEvents, so it only ever sees the rows the question on ctx may see:
+// a private channel's lines and questions reach it only for a question
+// asked in that same channel (visibility.go).
 //
 // sinceTick floors the raw read at that tick when positive (catch_up's own
 // use); 0 means no floor. fetchLimit bounds how many raw console_chat rows
@@ -87,7 +94,7 @@ func (s *Store) FilteredChat(ctx context.Context, sinceTick int64, fetchLimit in
 		if last := len(out) - 1; last >= 0 && out[last].Player == row.Player && out[last].Message == data.Message {
 			continue
 		}
-		out = append(out, ChatLine{Tick: row.Tick, Player: row.Player, Message: data.Message})
+		out = append(out, ChatLine{Tick: row.Tick, Player: row.Player, Force: row.Force, Private: row.Private, Message: data.Message})
 	}
 	return out, nil
 }
@@ -98,7 +105,7 @@ func (s *Store) FilteredChat(ctx context.Context, sinceTick int64, fetchLimit in
 // package has to know the fetch depth the filter needs, or reimplement the
 // filter itself. An error reads as no chat, because the briefing is best
 // effort and a missing `ch` is the documented way to say a source did not
-// land.
+// land. ctx must carry the question's scope, as every read here does.
 func (s *Store) RecentChatLines(ctx context.Context, n int) []ChatLine {
 	if s == nil || n <= 0 {
 		return nil
@@ -120,7 +127,7 @@ func (s *Store) RecentChatLines(ctx context.Context, n int) []ChatLine {
 
 // recentChat is the recent_chat tool: the last `limit` organic chat lines,
 // newest first, header line then one tab-separated row per line (tick,
-// player, message).
+// player, the speaker's force, whether the line was private, message).
 func (s *Store) recentChat(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
 		Limit int `json:"limit"`
@@ -140,7 +147,15 @@ func (s *Store) recentChat(ctx context.Context, args json.RawMessage) (json.RawM
 
 	rows := make([]string, len(lines))
 	for i, l := range lines {
-		rows[i] = tsvRow(strconv.FormatInt(l.Tick, 10), l.Player, l.Message)
+		rows[i] = tsvRow(strconv.FormatInt(l.Tick, 10), l.Player, l.Force, yesNo(l.Private), l.Message)
 	}
 	return json.RawMessage(columnar(chatHeader, rows)), nil
+}
+
+// yesNo is a flag as a cell of these tools' rows.
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }

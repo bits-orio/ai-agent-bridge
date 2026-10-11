@@ -107,7 +107,7 @@ func seed(t *testing.T, s *Store) []tools.Tool {
 }
 
 // eventRowTicks parses a recent_events/last_event columnar reply (header
-// "id\ttick\tevent\tplayer\tforce\tdata") into the tick column of each row,
+// "tick\tevent\tplayer\tforce\tdata") into the tick column of each row,
 // checking the header along the way.
 func eventRowTicks(t *testing.T, out json.RawMessage) []int64 {
 	t.Helper()
@@ -118,10 +118,10 @@ func eventRowTicks(t *testing.T, out json.RawMessage) []int64 {
 	ticks := make([]int64, 0, len(rows))
 	for _, row := range rows {
 		fields := splitRow(row)
-		if len(fields) != 6 {
-			t.Fatalf("row %q has %d fields, want 6", row, len(fields))
+		if len(fields) != 5 {
+			t.Fatalf("row %q has %d fields, want 5", row, len(fields))
 		}
-		tick, err := strconv.ParseInt(fields[1], 10, 64)
+		tick, err := strconv.ParseInt(fields[0], 10, 64)
 		if err != nil {
 			t.Fatalf("row %q: bad tick: %v", row, err)
 		}
@@ -320,7 +320,7 @@ func TestOpenExistingFileKeepsRows(t *testing.T) {
 		t.Fatalf("reply = %q, want one row under %q", out, eventHeader)
 	}
 	fields := splitRow(rows[0])
-	if fields[3] != "Alice" || fields[1] != "5" {
+	if fields[2] != "Alice" || fields[0] != "5" {
 		t.Errorf("row = %v, want player Alice at tick 5", fields)
 	}
 }
@@ -328,17 +328,19 @@ func TestOpenExistingFileKeepsRows(t *testing.T) {
 // chatFixture ingests the same shape of console_chat / question rows the
 // filter has to sort out: a server console line, a chat-prefix question and
 // its own console_chat echo at the same tick, an immediate repeat, and one
-// distinct organic line, in that order (ticks 100..105).
+// distinct organic line, in that order (ticks 100..105). Every player line
+// is public, logged the way a companion after 1.0.5 logs a line everyone
+// could read, so these tests read it back with no scope at all.
 func chatFixture(t *testing.T, s *Store) {
 	t.Helper()
 	for _, l := range []string{
-		`{"event":"console_chat","tick":100,"data":{"player":"Bob","force":"player","message":"hello"}}`,
+		`{"event":"console_chat","tick":100,"data":{"player":"Bob","force":"player","message":"hello","scope":"global","private":false}}`,
 		`{"event":"console_chat","tick":101,"data":{"player":"Server","message":"[MTS] milestone"}}`,
-		`{"event":"console_chat","tick":102,"data":{"player":"Bob","force":"player","message":"?what time is it"}}`,
+		`{"event":"console_chat","tick":102,"data":{"player":"Bob","force":"player","message":"?what time is it","scope":"global","private":false}}`,
 		`{"event":"question","tick":102,"data":{"qid":7,"player":"Bob","force":"player","text":"what time is it","scope":"global","private":false}}`,
-		`{"event":"console_chat","tick":103,"data":{"player":"Bob","force":"player","message":"same line"}}`,
-		`{"event":"console_chat","tick":104,"data":{"player":"Bob","force":"player","message":"same line"}}`,
-		`{"event":"console_chat","tick":105,"data":{"player":"Alice","force":"player","message":"hi all"}}`,
+		`{"event":"console_chat","tick":103,"data":{"player":"Bob","force":"player","message":"same line","scope":"global","private":false}}`,
+		`{"event":"console_chat","tick":104,"data":{"player":"Bob","force":"player","message":"same line","scope":"global","private":false}}`,
+		`{"event":"console_chat","tick":105,"data":{"player":"Alice","force":"player","message":"hi all","scope":"global","private":false}}`,
 	} {
 		ingest(t, s, l)
 	}
@@ -359,9 +361,9 @@ func TestFilteredChatDropsServerBotQuestionsAndRepeats(t *testing.T) {
 		t.Fatalf("FilteredChat: %v", err)
 	}
 	want := []ChatLine{
-		{Tick: 105, Player: "Alice", Message: "hi all"},
-		{Tick: 104, Player: "Bob", Message: "same line"},
-		{Tick: 100, Player: "Bob", Message: "hello"},
+		{Tick: 105, Player: "Alice", Force: "player", Message: "hi all"},
+		{Tick: 104, Player: "Bob", Force: "player", Message: "same line"},
+		{Tick: 100, Player: "Bob", Force: "player", Message: "hello"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("FilteredChat = %+v, want %+v", got, want)
@@ -391,8 +393,8 @@ func TestRecentChat(t *testing.T) {
 		if len(rows) != 3 {
 			t.Fatalf("rows = %v, want 3 organic lines", rows)
 		}
-		if got := splitRow(rows[0]); got[1] != "Alice" || got[2] != "hi all" {
-			t.Errorf("row 0 = %v, want Alice/hi all (newest)", got)
+		if got := splitRow(rows[0]); got[1] != "Alice" || got[2] != "player" || got[3] != "no" || got[4] != "hi all" {
+			t.Errorf("row 0 = %v, want Alice/player/no/hi all (newest)", got)
 		}
 	})
 
@@ -411,14 +413,14 @@ func TestRecentChat(t *testing.T) {
 // TestRecentChatSanitisesEmbeddedTab covers the one sanitising rule section
 // 13 sets: a tab already inside a value (here, a chat message) is replaced
 // with a single space before the row is built, so the row never carries
-// more tabs than recent_chat's three columns need.
+// more tabs than recent_chat's five columns need.
 func TestRecentChatSanitisesEmbeddedTab(t *testing.T) {
 	s := mustOpen(t, filepath.Join(t.TempDir(), "history.sqlite"))
 	defer s.Close()
 	// The backtick literal's \t is two literal characters, the JSON escape
 	// for a tab, exactly what a real chat message carrying one would send
 	// (JSON itself forbids an unescaped literal tab byte inside a string).
-	ingest(t, s, `{"event":"console_chat","tick":200,"data":{"player":"Bob","force":"player","message":"hello\tworld"}}`)
+	ingest(t, s, `{"event":"console_chat","tick":200,"data":{"player":"Bob","force":"player","message":"hello\tworld","scope":"global","private":false}}`)
 	recentChat := findTool(t, s.Tools(), "recent_chat")
 
 	out := callTool(t, recentChat, nil)
@@ -427,11 +429,11 @@ func TestRecentChatSanitisesEmbeddedTab(t *testing.T) {
 		t.Fatalf("rows = %v, want exactly 1", rows)
 	}
 	fields := splitRow(rows[0])
-	if len(fields) != 3 {
-		t.Fatalf("row %q split into %d fields on tab, want 3 (the embedded tab must become a space)", rows[0], len(fields))
+	if len(fields) != 5 {
+		t.Fatalf("row %q split into %d fields on tab, want 5 (the embedded tab must become a space)", rows[0], len(fields))
 	}
-	if fields[2] != "hello world" {
-		t.Errorf("message = %q, want %q", fields[2], "hello world")
+	if fields[4] != "hello world" {
+		t.Errorf("message = %q, want %q", fields[4], "hello world")
 	}
 }
 
@@ -446,9 +448,11 @@ func TestCatchUp(t *testing.T) {
 
 	const left = int64(1000)
 	ingest(t, s, `{"event":"player_joined","tick":900,"data":{"player":"Dave","force":"player"}}`)
-	ingest(t, s, fmt.Sprintf(`{"event":"player_left","tick":%d,"data":{"player":"Dave","force":"player"}}`, left))
-	// Before Dave left: never something he "missed", must not appear.
+	// Before Dave left: never something he "missed", must not appear. Logged
+	// in tick order, as the game logs it: a line whose tick went back would
+	// be a new map (epoch.go).
 	ingest(t, s, `{"event":"player_died","tick":950,"data":{"player":"Alice","force":"player","cause":"biter"}}`)
+	ingest(t, s, fmt.Sprintf(`{"event":"player_left","tick":%d,"data":{"player":"Dave","force":"player"}}`, left))
 
 	// Push "now" (the newest tick this store has seen, of any kind) far
 	// enough past left that the 24-hour cap, not Dave's own departure,
@@ -461,7 +465,7 @@ func TestCatchUp(t *testing.T) {
 	ingest(t, s, fmt.Sprintf(`{"event":"research_finished","tick":%d,"data":{"force":"player","tech":"automation","level":1}}`, left+500))
 	// Inside the capped window: must appear.
 	chatTick := windowStart + 200
-	ingest(t, s, fmt.Sprintf(`{"event":"console_chat","tick":%d,"data":{"player":"Eve","force":"player","message":"hi"}}`, chatTick))
+	ingest(t, s, fmt.Sprintf(`{"event":"console_chat","tick":%d,"data":{"player":"Eve","force":"player","message":"hi","scope":"global","private":false}}`, chatTick))
 	// This is the row that sets "now" itself, also inside the window.
 	ingest(t, s, fmt.Sprintf(`{"event":"rocket_launched","tick":%d,"data":{"force":"player","surface":"nauvis"}}`, nowTick))
 
@@ -479,8 +483,9 @@ func TestCatchUp(t *testing.T) {
 		t.Errorf("row 0 = %v, want the rocket_launched row first (newest)", rocket)
 	}
 	chat := splitRow(rows[1])
-	if chat[0] != strconv.FormatInt(chatTick, 10) || chat[1] != "console_chat" || chat[2] != "Eve" || chat[3] != "hi" {
-		t.Errorf("row 1 = %v, want Eve's chat line second", chat)
+	if chat[0] != strconv.FormatInt(chatTick, 10) || chat[1] != "console_chat" || chat[2] != "Eve" ||
+		chat[3] != "player" || chat[4] != "no" || chat[5] != "hi" {
+		t.Errorf("row 1 = %v, want Eve's public chat line on force player second", chat)
 	}
 }
 
@@ -550,7 +555,7 @@ func TestCatchUpNeverSeen(t *testing.T) {
 		t.Fatalf("rows = %v, want exactly one notice row", rows)
 	}
 	fields := splitRow(rows[0])
-	want := []string{"", "none", "Ghost", "no record of this player"}
+	want := []string{"", "none", "Ghost", "", "", "no record of this player"}
 	for i := range want {
 		if fields[i] != want[i] {
 			t.Errorf("field %d = %q, want %q (row %v)", i, fields[i], want[i], fields)

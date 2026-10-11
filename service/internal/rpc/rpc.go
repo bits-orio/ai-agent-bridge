@@ -54,6 +54,15 @@ type RCON interface {
 	Execute(cmd string) (string, time.Duration, error)
 }
 
+// pinnedRCON is an executor that numbers its connections and can hold one
+// command to a connection a caller already knows (*rcon.Client: Connection,
+// ExecuteOn). An executor without it is used as plain RCON, and Connection is
+// then always 0.
+type pinnedRCON interface {
+	Connection() uint64
+	ExecuteOn(conn uint64, cmd string) (string, time.Duration, error)
+}
+
 // Error is a typed {"ok":false,...} reply, carrying the protocol's error code so callers
 // can switch on it (e.g. CodeNoQuestion to mean "nothing pending", not a real failure).
 type Error struct {
@@ -75,6 +84,26 @@ func HasCode(err error, code string) bool {
 	return errors.As(err, &protocol) && protocol.Code == code
 }
 
+// unreachable is a call that got no reply at all: the RCON round trip itself
+// failed before the server said anything. The server may be down, starting
+// again or out of reach, and the connection is gone either way.
+type unreachable struct {
+	op  string
+	err error
+}
+
+func (e *unreachable) Error() string { return fmt.Sprintf("aab-rpc: %s: %v", e.op, e.err) }
+func (e *unreachable) Unwrap() error { return e.err }
+
+// Unreachable reports whether err is a call that got no reply from the
+// server at all, rather than one the companion refused (*Error) or answered
+// in a shape this client could not read. Only the first is an outage: a
+// server that replied at all was up for the whole round trip.
+func Unreachable(err error) bool {
+	var u *unreachable
+	return errors.As(err, &u)
+}
+
 // Client sends aab-rpc-v1 requests over an RCON connection.
 type Client struct {
 	rc    RCON
@@ -84,6 +113,19 @@ type Client struct {
 // Floor is the fastest recent RCON round trip: the part of any call's time
 // that the wire costs rather than the game. Zero before the first reply.
 func (c *Client) Floor() time.Duration { return c.trips.floor() }
+
+// Connection is the number of the RCON connection the latest reply came over
+// (rcon.Client.Connection), 0 when the executor does not number them. Two
+// replies under different numbers have a broken connection between them,
+// which is what a server restart looks like from here even when no call
+// failed: the executor dials again on its own and answers as if nothing
+// happened.
+func (c *Client) Connection() uint64 {
+	if p, ok := c.rc.(pinnedRCON); ok {
+		return p.Connection()
+	}
+	return 0
+}
 
 func New(rc RCON) *Client {
 	return &Client{rc: rc}
@@ -112,6 +154,12 @@ func (c *Client) Call(ctx context.Context, op string, payload any) (json.RawMess
 // tool calls at once is mostly queueing behind the other calls rather than
 // anything the game did.
 func (c *Client) CallTimed(ctx context.Context, op string, payload any) (json.RawMessage, time.Duration, error) {
+	return c.call(ctx, op, payload, c.rc.Execute)
+}
+
+// call is CallTimed over one way of executing the command: the executor's
+// own Execute, or one held to a connection (AnswerOn).
+func (c *Client) call(ctx context.Context, op string, payload any, execute func(cmd string) (string, time.Duration, error)) (json.RawMessage, time.Duration, error) {
 	var wire time.Duration
 	if err := ctx.Err(); err != nil {
 		return nil, wire, err
@@ -128,9 +176,9 @@ func (c *Client) CallTimed(ctx context.Context, op string, payload any) (json.Ra
 		}
 	}
 
-	resp, wire, err := c.rc.Execute(cmd)
+	resp, wire, err := execute(cmd)
 	if err != nil {
-		return nil, wire, fmt.Errorf("aab-rpc: %s: %w", op, err)
+		return nil, wire, &unreachable{op: op, err: err}
 	}
 	// wire is the time on the socket, measured inside Execute after the
 	// connection lock. The ring holds those rather than what the caller

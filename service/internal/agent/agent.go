@@ -4,9 +4,11 @@
 // conversation so far and every tool the server exposes. It calls tools, all
 // of a round's calls run at once and come back in one user message, and it
 // ends by calling submit_answer in a round of its own: an answer written
-// beside a read it has not seen yet is refused. Anything else that can end a
-// question, a model that stops talking, a round cap, a token budget, a quota,
-// ends it with an artifact too, so a player always gets an answer.
+// beside a read it has not seen yet is refused, and so is an answer over a
+// cap, at most twice, while a round is left to rewrite it in; after that it
+// goes out cut. Anything else that can end a question, a model that stops
+// talking or fails, a round cap, a token budget, a quota, ends it with an
+// artifact too, so a player always gets an answer.
 package agent
 
 import (
@@ -20,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/catalog"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/chatscope"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
@@ -61,6 +64,7 @@ type Question struct {
 	Labels          []ForceLabel // names players use for forces, from the companion's labels op
 	Surface         string       // the surface the asker was looking at, "" when unknown
 	PhysicalSurface string       // where their character stood, when that differs
+	Personality     string       // the map's voice setting when the question was asked, "" when none came (voice.go)
 }
 
 // ForceLabel is a force name and what players call it.
@@ -69,12 +73,39 @@ type ForceLabel struct {
 	Label string
 }
 
-// scope is the session pool this question belongs to.
+// scope is the question's scope key, "global" when the companion sent none.
 func (q Question) scope() string {
 	if q.Scope == "" {
-		return "global"
+		return chatscope.GlobalKey
 	}
 	return q.Scope
+}
+
+// chatScope is who will hear this question's answer. Every history read the
+// question makes is checked against it (chatscope, internal/history).
+func (q Question) chatScope() chatscope.Scope {
+	return chatscope.Scope{Key: q.scope(), Private: q.Private}
+}
+
+// privatePool marks a private session pool. Scope keys are force and channel
+// names, none of which starts with a NUL, so no public key spells a private
+// pool.
+const privatePool = "\x00private:"
+
+// pool is the session pool this question's follow-ups share. A private
+// question's pool is never a public one's, whatever keys a scope provider
+// hands out: a private answer may carry that channel's own chat, and a public
+// question reading it back as an earlier exchange would print it to everyone.
+// A private scope with no key of its own pools by asker, so two channels a
+// provider forgot to name never share one transcript either.
+func (q Question) pool() string {
+	if !q.Private {
+		return q.scope()
+	}
+	if key, ok := q.chatScope().PrivateKey(); ok {
+		return privatePool + key
+	}
+	return privatePool + "asker " + q.key()
 }
 
 // askerName is how the asker appears in a session transcript, where every
@@ -247,12 +278,16 @@ type Agent struct {
 	// same as any other Group A source that did not land.
 	Chat ChatSource
 
-	// Personality is the operator's voice setting (phase4-spec.md section
-	// 16): "off", the default, or "factorio". It picks a fixed flavour
-	// string the service owns, appended to the end of the system prompt, so
-	// it is the same text for every question on this server and turning it
-	// on costs one cache write rather than one per question.
+	// Personality is the operator's voice setting, agent.personality: "off",
+	// the default, a preset name such as "factorio", or free text. A
+	// question whose own Personality says anything is answered in that
+	// voice instead (voice.go). The voice ends the system prompt, so every
+	// question in the same voice shares one cached prefix.
 	Personality string
+
+	// voiceLog says through Trace when the map's setting starts or stops
+	// overriding Personality.
+	voiceLog voiceLog
 }
 
 func New(m model.Model, caps Caps) *Agent {
@@ -270,10 +305,20 @@ func New(m model.Model, caps Caps) *Agent {
 // Model is the model id answers are being charged against.
 func (a *Agent) Model() string { return a.mdl.Name() }
 
+// ForgetSessions ends every session at once. The caller says when: the game
+// went back to a new map or an older save, where the same scope keys may
+// name other people, and a follow-up must not read what the old map's
+// players were told.
+func (a *Agent) ForgetSessions() { a.sess.clear() }
+
 // Answer runs one question to an artifact. An error means the model itself
 // failed and the caller decides what to tell the player; every other ending
 // comes back as a Result.
 func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result, error) {
+	// First, before anything can read: every history read below, the
+	// briefing's chat and each tool call alike, runs on this ctx, and the
+	// store shows a private channel's rows only to a question asked in it.
+	ctx = chatscope.With(ctx, q.chatScope())
 	now := a.now()
 	// Captured before substituteLabels rewrites q.Text for the model, so
 	// every ledger line below logs the same text the companion sent,
@@ -328,14 +373,14 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// open has already cleared the flag, since this question's arrival
 	// resolves that wait whatever it turns out to ask. It rides through
 	// every ending below as the ledger's awaiting_reply_resolved.
-	earlier, fresh, wasAwaiting := a.sess.open(q.scope(), req.Name, now, req.Fresh)
+	earlier, fresh, wasAwaiting := a.sess.open(q.pool(), req.Name, now, req.Fresh)
 	mark.Fresh = fresh
 	q.Text = substituteLabels(req.Question, q.Labels)
 
 	ctx = catalog.WithForce(ctx, q.force())
 	byName := index(ts)
 	defs := defsFor(ts)
-	system := systemPrompt(voiceText(a.Personality))
+	system := systemPrompt(a.voiceFor(q).text)
 
 	var msModel, msRCON int64
 	// The briefing runs once per question, before round 1, on its own budget
@@ -398,16 +443,35 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// than one question's worth of rounds, and flushRounds (called from
 	// finish and the model-error path below) is what actually writes them.
 	rounds := make([]ledger.RoundRecord, 0, a.caps.maxRounds())
+	// pending is the newest answer refused only for being over a cap. If the
+	// question ends before the model sends a better one, that answer goes out
+	// cut to the caps rather than a notice that the rounds or the tokens ran
+	// out, or that the model failed (fallback): the model did answer, just
+	// too long. overCapRounds counts the rounds that refused one, so the
+	// model is sent back at most maxOverCapRefusals times.
+	var pending *Artifact
+	overCapRounds := 0
 	for round := 1; round <= a.caps.maxRounds(); round++ {
 		modelStart := time.Now()
 		step, err := a.mdl.Step(ctx, system, msgs, defs)
 		roundModelMs := time.Since(modelStart).Milliseconds()
 		if err != nil {
-			// The asker got no answer, so the slot goes back: a model
-			// outage must not spend anyone's hourly allowance.
-			a.quota.refund(q.key(), now)
 			msModel += roundModelMs
+			if pending != nil {
+				// An answer is in hand, so it goes out, cut, and the slot it
+				// took stays spent: the asker gets an answer.
+				if a.Trace != nil {
+					a.Trace("question %d round %d: the model failed before a rewrite came back, sending the answer refused for its length: %v", q.ID, round, err)
+				}
+				return a.finish(q, *pending, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+			}
+			// The asker got no answer, so the slot goes back: a model
+			// outage must not spend anyone's hourly allowance. The rounds
+			// before the failure were paid for all the same, so they count
+			// toward the day's budget.
+			a.quota.refund(q.key(), now)
 			res := Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage), Session: mark}
+			a.budget.spend(res.CostUSD, a.now())
 			a.flushRounds(rounds)
 			// The runner (cmd/aab/answer.go) turns this error into a
 			// failure notice before it ever reaches the player, so the
@@ -431,12 +495,23 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		calls := model.ToolUses(step.Blocks)
 		if len(calls) == 0 {
 			if ledgerOn {
-				rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, 0, nil))
+				rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, 0, nil, nil))
 			}
-			return a.finish(q, fromText(step), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+			// Prose after a refusal is the model talking about the rewrite,
+			// not the answer: the refused answer goes out instead, cut.
+			answer, _ := fromText(step)
+			return a.finish(q, a.fallback(q, answer, pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
-		var results []model.Block
-		var calledTools []ledger.ToolCall
+		// cutNow is a round that may not refuse an answer for its length: no
+		// round can follow it, the round cap or a token budget this round has
+		// already spent, which ends the question as soon as its results are
+		// in (below); or the model has been sent back maxOverCapRefusals
+		// times already. An answer over a cap in such a round goes out cut
+		// instead of refused, since a refusal there would end the question
+		// with a notice in place of an answer the model has already written,
+		// or send it round again.
+		cutNow := round == a.caps.maxRounds() || a.overTokenBudget(usage) || overCapRounds >= maxOverCapRefusals
+		var out roundResult
 		var roundToolMs int64
 		if reads, left := countReads(calls), a.caps.maxToolCalls()-toolCalls; reads > left {
 			// The round is refused, not the question: the model is told what
@@ -445,14 +520,13 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// the refusal text as its error), so a round the cap refused
 			// still shows up in the repeat-count report instead of leaving
 			// it blind in exactly the case that motivates it.
-			results, calledTools = refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls(), a.caps.toolResultBytes(), ledgerOn)
+			results, calledTools := refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls(), a.caps.toolResultBytes(), ledgerOn)
+			out = roundResult{results: results, calledTools: calledTools, refused: lookupCapRefusals(calls, results)}
 			if a.Trace != nil {
 				a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
 			}
 		} else {
 			toolCalls += reads
-			var artifact Artifact
-			var submitted bool
 			// A round's reads run concurrently (runReads fans them out over
 			// goroutines), so the tool phase's own wall clock, not the sum
 			// of each call's own ms, is what a round actually spent on
@@ -460,7 +534,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// wall clock that actually passed, inflating the RCON side of
 			// the one report the ledger exists to settle.
 			toolStart := time.Now()
-			results, artifact, submitted, calledTools = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.caps.roundToolResultBytes(), a.Floor, ledgerOn)
+			out = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.caps.roundToolResultBytes(), a.Floor, ledgerOn, cutNow)
 			roundToolMs = time.Since(toolStart).Milliseconds()
 			if reads > 0 {
 				// A round that was nothing but a submission never dispatched
@@ -468,62 +542,156 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 				// submission), not RCON, so it must not bill to ms_rcon.
 				msRCON += roundToolMs
 			}
-			if submitted {
-				if ledgerOn {
-					rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
-				}
-				return a.finish(q, artifact, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
-			}
 		}
+		a.traceRefusals(q, round, out.refused)
 		if ledgerOn {
-			rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, calledTools))
+			rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, out.calledTools, out.refused))
 		}
-		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: results})
+		if out.answer != nil {
+			return a.finish(q, *out.answer, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+		}
+		if out.pending != nil {
+			pending = out.pending
+			overCapRounds++
+		}
+		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: out.results})
 
-		if budget := a.caps.MaxTokensPerQuestion; budget > 0 && usage.Budgeted() >= budget {
-			return a.finish(q, Notice(LevelWarning, tokenNotice), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+		if a.overTokenBudget(usage) {
+			return a.finish(q, a.fallback(q, Notice(LevelWarning, tokenNotice), pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
 	}
-	return a.finish(q, Notice(LevelWarning, roundsNotice), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+	return a.finish(q, a.fallback(q, Notice(LevelWarning, roundsNotice), pending), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+}
+
+// overTokenBudget reports whether the question has spent its token budget.
+// The loop ends after any round that leaves it so.
+func (a *Agent) overTokenBudget(usage model.Usage) bool {
+	budget := a.caps.MaxTokensPerQuestion
+	return budget > 0 && usage.Budgeted() >= budget
+}
+
+// maxOverCapRefusals is how many rounds may send an answer back for being
+// over a cap. A model that has rewritten twice and is still over will not
+// get there on a third try, and every try is a paid round; the next answer
+// over a cap goes out cut.
+const maxOverCapRefusals = 2
+
+// fallback is how a question ends when the loop has to answer for itself,
+// or when the model ended without a rewrite: with instead, unless an answer
+// was refused earlier only for being over a cap. That answer goes out
+// instead, cut to the caps in finish: the model did answer the question, and
+// a notice that the rounds ran out, or prose about the rewrite, would throw
+// the answer away.
+func (a *Agent) fallback(q Question, instead Artifact, pending *Artifact) Artifact {
+	if pending == nil {
+		return instead
+	}
+	if a.Trace != nil {
+		a.Trace("question %d: no rewrite came back, sending the answer refused for its length instead of %q", q.ID, instead.Line())
+	}
+	return *pending
+}
+
+// roundResult is what one round's tool calls came to.
+type roundResult struct {
+	results     []model.Block          // one per call, in the order the model made them: what it reads next round
+	answer      *Artifact              // the submission that ends the question, as the model wrote it
+	pending     *Artifact              // the round's first submission refused only for being over a cap
+	refused     []ledger.SubmitRefusal // every submit_answer the round refused, and why
+	calledTools []ledger.ToolCall      // the ledger entry of every lookup the round ran
+}
+
+// refuse turns call i's result into a refusal the model reads back, and
+// records why.
+func (r *roundResult) refuse(i int, id, kind, reason string) {
+	r.results[i] = failed(id, errors.New(reason))
+	r.refused = append(r.refused, ledger.SubmitRefusal{Kind: kind, Reason: reason})
 }
 
 // runCalls executes one round's tool calls and reports whether the round
 // answered. submit_answer is handled here rather than as a tool, because it
-// ends the loop: a round that mixes it with reads is refused, and a round that
-// submits twice keeps the first submission in block order, so which answer
-// reaches the player never depends on which goroutine finished first.
-// The fourth return is this round's ledger entries, one per lookup it
-// actually ran; a pure submit_answer round runs no lookups and returns nil.
-// ledgerOn false skips building that fourth return's entries at all, down
-// through runReads and read: the calls still run, only the ledger side of
-// them is left out. roundBudget is the round-wide byte cap on top of limit's
-// per-result one (docs/design/phase4-spec.md section 13): limit bounds one
-// result, roundBudget bounds what every result in the round adds up to.
-func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn bool) ([]model.Block, Artifact, bool, []ledger.ToolCall) {
-	results := make([]model.Block, len(calls))
+// ends the loop: a round that mixes it with reads is refused, and a round
+// that submits more than once answers with the first submission in block
+// order fit to send (pickSubmission), so which answer reaches the player
+// never depends on which goroutine finished first. A submission over a cap is
+// sent back with what is over, and kept as the round's pending answer, unless
+// the round may not refuse one (cutNow) and has nothing better: then it is
+// taken as it is, to be cut in finish. calledTools is this round's ledger
+// entries, one per lookup it actually ran; a pure submit_answer round runs no
+// lookups and has none. ledgerOn false skips building those entries at all,
+// down through runReads and read: the calls still run, only the ledger side
+// of them is left out. roundBudget is the round-wide byte cap on top of
+// limit's per-result one (docs/design/phase4-spec.md section 13): limit
+// bounds one result, roundBudget bounds what every result in the round adds
+// up to.
+func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn, cutNow bool) roundResult {
+	out := roundResult{results: make([]model.Block, len(calls))}
 	submits, reads := partition(calls)
 
 	if len(reads) > 0 {
 		for _, i := range submits {
-			results[i] = failed(calls[i].ID, errors.New(besideReadsRefusal))
+			out.refuse(i, calls[i].ID, ledger.RefusedBesideReads, besideReadsRefusal)
 		}
-		calledTools := runReads(ctx, calls, reads, results, byName, force, limit, roundBudget, floor, ledgerOn)
-		return results, Artifact{}, false, calledTools
+		out.calledTools = runReads(ctx, calls, reads, out.results, byName, force, limit, roundBudget, floor, ledgerOn)
+		return out
 	}
 
+	subs := make([]submission, len(submits))
 	for n, i := range submits {
-		artifact, err := parseSubmission(calls[i].Input)
-		if err != nil {
-			results[i] = failed(calls[i].ID, err)
-			continue
-		}
-		results[i] = model.Block{Type: model.BlockToolResult, ID: calls[i].ID, Content: "sent"}
-		for _, later := range submits[n+1:] {
-			results[later] = failed(calls[later].ID, errors.New(secondSubmitRefusal))
-		}
-		return results, artifact, true, nil
+		subs[n] = parseSubmission(calls[i].Input)
 	}
-	return results, Artifact{}, false, nil
+	chosen := pickSubmission(subs, cutNow)
+	for n, i := range submits {
+		switch sub := subs[n]; {
+		case n == chosen:
+			out.results[i] = model.Block{Type: model.BlockToolResult, ID: calls[i].ID, Content: "sent"}
+			out.answer = &subs[n].artifact
+		case chosen >= 0 && n > chosen:
+			out.refuse(i, calls[i].ID, ledger.RefusedSecondSubmit, secondSubmitRefusal)
+		case sub.err != nil:
+			out.refuse(i, calls[i].ID, ledger.RefusedInvalid, sub.err.Error())
+		default:
+			// Over a cap, with a rewrite still allowed or a better answer
+			// beside it in this round.
+			out.refuse(i, calls[i].ID, ledger.RefusedOverCap, overCapsRefusal(sub.over))
+			if out.pending == nil {
+				out.pending = &subs[n].artifact
+			}
+		}
+	}
+	return out
+}
+
+// pickSubmission is the index of the submission a round answers with, or -1
+// for none: the first within every cap, or, when the round may not refuse
+// one for its length, the first that is an artifact at all, to go out cut to
+// the caps.
+func pickSubmission(subs []submission, cutNow bool) int {
+	for n, sub := range subs {
+		if sub.err == nil && len(sub.over) == 0 {
+			return n
+		}
+	}
+	if cutNow {
+		for n, sub := range subs {
+			if sub.err == nil {
+				return n
+			}
+		}
+	}
+	return -1
+}
+
+// lookupCapRefusals records the submit_answer calls in a round the lookup cap
+// refused: each was sent back the same refusal as the reads beside it.
+func lookupCapRefusals(calls, results []model.Block) []ledger.SubmitRefusal {
+	var out []ledger.SubmitRefusal
+	for i, call := range calls {
+		if call.Name == SubmitTool {
+			out = append(out, ledger.SubmitRefusal{Kind: ledger.RefusedLookupCap, Reason: results[i].Content})
+		}
+	}
+	return out
 }
 
 // countReads is how many of a round's calls are lookups; a submission is
@@ -645,6 +813,105 @@ func enforceRoundBudget(results []model.Block, reads []int, cap int) {
 	}
 }
 
+// didYouMean names the tool the model meant by a name that is no tool, or ""
+// when no one tool can be meant. The catalog names an engine tool
+// <iface>__<fn> while the five history tools and the two ranking tools carry
+// bare names, and a model that has read nineteen prefixed names will put a
+// prefix on one of the seven that has none: question 78 on 2026-09-15 called
+// "mts-v1__catch_up", which does not exist, then "catch_up", which does, and
+// spent a whole round on the guess. On the rig the model went on to call
+// "ai-agent-bridge-tools__mts-v1__records", a prefix on top of a prefix, and
+// "mts-v1__player_teems", a slip of the keys, a round each.
+//
+// Three slips, tried in order, and each answers only when exactly one tool
+// fits, so acting on it is not a guess:
+//   - a prefix invented or doubled: the longest tail after a "__" that is a
+//     tool's whole name;
+//   - a prefix dropped or wrong: the one tool whose function name, the part
+//     after its last "__", is the name's own;
+//   - a typo: the one tool within maxSlipEdits edits of the whole name.
+func didYouMean(name string, byName map[string]tools.Tool) string {
+	if _, ok := byName[name]; ok {
+		return "" // a tool already: nothing to correct
+	}
+	for rest := name; ; {
+		i := strings.Index(rest, "__")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+2:]
+		if _, ok := byName[rest]; ok && rest != "" {
+			return rest
+		}
+	}
+	fn := functionName(name)
+	if only := onlyTool(byName, func(full string) bool { return fn != "" && functionName(full) == fn }); only != "" {
+		return only
+	}
+	return onlyTool(byName, func(full string) bool { return editsApart(name, full, maxSlipEdits) <= maxSlipEdits })
+}
+
+// maxSlipEdits is how many single-character edits a name may be from the one
+// tool it is corrected to: enough for a doubled, dropped or swapped letter,
+// and the one-tool rule keeps it from choosing between two close names.
+const maxSlipEdits = 2
+
+// functionName is a tool name's function, the part after its last "__", or
+// the whole name when it has no prefix.
+func functionName(name string) string {
+	if i := strings.LastIndex(name, "__"); i >= 0 {
+		return name[i+2:]
+	}
+	return name
+}
+
+// onlyTool is the one tool name fits, or "" when none does or more than one
+// does: a guess between two tools would run the wrong one.
+func onlyTool(byName map[string]tools.Tool, fits func(full string) bool) string {
+	var only string
+	for full := range byName {
+		if !fits(full) {
+			continue
+		}
+		if only != "" {
+			return ""
+		}
+		only = full
+	}
+	return only
+}
+
+// editsApart is the edit distance between a and b, insertions, deletions and
+// substitutions of one byte each, or limit+1 as soon as it is sure to be more
+// than limit. Tool names are ASCII.
+func editsApart(a, b string, limit int) int {
+	if d := len(a) - len(b); d > limit || -d > limit {
+		return limit + 1
+	}
+	prev := make([]int, len(b)+1)
+	cur := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur[0] = i
+		least := i
+		for j := 1; j <= len(b); j++ {
+			substitute := prev[j-1]
+			if a[i-1] != b[j-1] {
+				substitute++
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, substitute)
+			least = min(least, cur[j])
+		}
+		if least > limit {
+			return limit + 1
+		}
+		prev, cur = cur, prev
+	}
+	return prev[len(b)]
+}
+
 // read runs one tool. Every tool that declares force gets the asker's force
 // filled in when the model left it out, game tools and history tools alike,
 // which is what the system prompt promises the model. Alongside the model's
@@ -652,46 +919,13 @@ func enforceRoundBudget(results []model.Block, reads []int, cap int) {
 // so every lookup the model asked for shows up in the ledger exactly once;
 // ledgerOn false makes that second return the zero value instead, skipping
 // the args clip and the Floor call that building a real one costs.
-// didYouMean names the tool the model probably wanted, or "" when nothing is
-// close enough to say. The catalog names an engine tool <iface>__<fn> while the
-// five history tools and the two ranking tools carry bare names, and a model
-// that has read nineteen prefixed names will put a prefix on one of the seven
-// that has none: question 78 on 2026-09-15 called "mts-v1__catch_up", which
-// does not exist, then "catch_up", which does, and spent a whole round on the
-// guess. It is the only reason that question got slower rather than faster.
-//
-// Both directions are handled, because both are available to the model: a
-// prefix invented on a bare name, and a prefix dropped from a real one. The
-// second only answers when exactly one tool could be meant. Nothing here calls
-// the tool it names: a wrong guess acted on silently would be worse than the
-// round it saves, so this only ever improves the error the model reads.
-func didYouMean(name string, byName map[string]tools.Tool) string {
-	if i := strings.LastIndex(name, "__"); i >= 0 {
-		if bare := name[i+2:]; bare != "" {
-			if _, ok := byName[bare]; ok {
-				return bare
-			}
-		}
-	}
-	var only string
-	for full := range byName {
-		if i := strings.LastIndex(full, "__"); i >= 0 && full[i+2:] == name {
-			if only != "" {
-				return "" // more than one provider offers it, so say nothing
-			}
-			only = full
-		}
-	}
-	return only
-}
-
 func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) (model.Block, ledger.ToolCall) {
 	started := time.Now()
 	name := call.Name
 	t, known := byName[name]
 	correctedFrom := ""
 	if !known {
-		// An invented prefix is corrected, not merely pointed out. The catalog
+		// A slip in the name is corrected, not merely pointed out. The catalog
 		// names an engine tool <iface>__<fn> and the history and ranking tools
 		// bare, and a model that has read nineteen prefixed names keeps
 		// putting one on the seven that have none: question 78 called
@@ -732,11 +966,14 @@ func corrected(rec ledger.ToolCall, from string) ledger.ToolCall {
 	return rec
 }
 
-// finish clips the artifact, remembers the exchange, prices the question,
-// flushes the question's accumulated round records and writes its own ledger
-// line, in that order, once the artifact that ends the question already
-// exists. rawText is what the companion actually sent, for the ledger; q.Text
-// may already be the label-substituted form the model saw. The four
+// finish cuts the artifact to the caps, remembers the exchange, prices the
+// question, flushes the question's accumulated round records and writes its
+// own ledger line, in that order, once the artifact that ends the question
+// already exists. artifact is as the model wrote it: whatever in it is over a
+// cap is cut here with an ellipsis, between words wherever that keeps at
+// least half the cap (clipRichText), logged, and recorded as clipped.
+// rawText is what the companion actually sent, for the ledger;
+// q.Text may already be the label-substituted form the model saw. The four
 // briefing* arguments are what Answer computed once before round 1
 // (docs/design/phase4-observability-spec.md's briefing/briefing_bytes/
 // briefing_tokens/briefing_ms fields); finish only carries them into the
@@ -746,8 +983,14 @@ func corrected(rec ledger.ToolCall, from string) ledger.ToolCall {
 // awaiting_reply_resolved unchanged.
 func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Usage, mark SessionMark, lookups int, msModel, msRCON int64, rawText string, roundRecords []ledger.RoundRecord, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64, awaitingReplyResolved bool) Result {
 	clipped, err := validate(artifact)
+	var over []string
 	if err != nil {
 		clipped = Notice(LevelWarning, stalledNotice)
+	} else {
+		over = overCaps(artifact)
+	}
+	if len(over) > 0 && a.Trace != nil {
+		a.Trace("question %d: the answer was over the caps and went out cut: %s", q.ID, listOver(over))
 	}
 	clipped.Session = &mark
 	cost := CostUSD(a.mdl.Name(), usage)
@@ -757,11 +1000,13 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 	// cleared it on the way in) otherwise: record always takes the current
 	// answer's own verdict, never leaves the flag as open left it.
 	askedBack := isAskBack(clipped)
-	a.sess.record(q.scope(), mark.Name, Exchange{
+	a.sess.record(q.pool(), mark.Name, Exchange{
 		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
 	}, askedBack)
 	a.flushRounds(roundRecords)
-	a.writeQuestion(a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs, askedBack, awaitingReplyResolved))
+	rec := a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs, askedBack, awaitingReplyResolved)
+	rec.Clipped = len(over) > 0
+	a.writeQuestion(rec)
 	return Result{
 		Artifact: clipped,
 		Rounds:   rounds,
@@ -794,18 +1039,20 @@ func isAskBack(a Artifact) bool {
 
 // fromText rescues an answer from a turn with no tool calls in it. A model
 // that finished talking gets its text wrapped as a summary; one that stopped
-// for any other reason gets a notice, because its text is likely a fragment.
-func fromText(step model.Step) Artifact {
+// for any other reason gets the stalled notice, because its text is likely a
+// fragment. ok is false for the stalled notice: the model gave no answer, and
+// the loop may still have one of its own to send (fallback).
+func fromText(step model.Step) (answer Artifact, ok bool) {
 	if step.StopReason != model.StopEndTurn {
-		return Notice(LevelWarning, stalledNotice)
+		return Notice(LevelWarning, stalledNotice), false
 	}
 	// Blank lines go before the clip, or a model that opened with a newline
 	// would spend the three summary lines on nothing.
 	lines := written(strings.Split(model.TextOf(step.Blocks), "\n"))
 	if len(lines) == 0 {
-		return Notice(LevelWarning, stalledNotice)
+		return Notice(LevelWarning, stalledNotice), false
 	}
-	return Summary(lines...)
+	return Summary(lines...), true
 }
 
 // written keeps the lines that have something on them.
@@ -819,12 +1066,24 @@ func written(lines []string) []string {
 	return out
 }
 
-func parseSubmission(input json.RawMessage) (Artifact, error) {
+// submission is one submit_answer call, read: the artifact as the model wrote
+// it and whatever in it is over a cap, or err when it is no artifact the game
+// can show at all.
+type submission struct {
+	artifact Artifact
+	over     []string
+	err      error
+}
+
+func parseSubmission(input json.RawMessage) submission {
 	var artifact Artifact
 	if err := json.Unmarshal(input, &artifact); err != nil {
-		return Artifact{}, fmt.Errorf("that is not a valid artifact: %v", err)
+		return submission{err: fmt.Errorf("that is not a valid artifact: %v", err)}
 	}
-	return validate(artifact)
+	if _, err := validate(artifact); err != nil {
+		return submission{err: err}
+	}
+	return submission{artifact: artifact, over: overCaps(artifact)}
 }
 
 func failed(id string, err error) model.Block {

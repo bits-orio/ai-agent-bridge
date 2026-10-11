@@ -109,8 +109,8 @@ func TestValidateClipsEveryShape(t *testing.T) {
 		if len(row) != MaxTableColumns {
 			t.Fatalf("row is %d wide, want %d", len(row), MaxTableColumns)
 		}
-		if len([]rune(row[0])) != MaxCellChars {
-			t.Errorf("cell is %d characters, want %d", len([]rune(row[0])), MaxCellChars)
+		if len([]rune(row[0])) != MaxCellChars || !strings.HasSuffix(row[0], ellipsis) {
+			t.Errorf("cell is %d characters, want %d ending with the ellipsis: %q", len([]rune(row[0])), MaxCellChars, row[0])
 		}
 	}
 
@@ -124,6 +124,33 @@ func TestValidateClipsEveryShape(t *testing.T) {
 	}
 	if len(got.Columns) != 2 || len(got.Pairs) != MaxComparisonRows {
 		t.Errorf("comparison = %d columns and %d rows, want 2 and %d", len(got.Columns), len(got.Pairs), MaxComparisonRows)
+	}
+}
+
+// The cell cap is exact: a cell of MaxCellChars runes goes through untouched,
+// one rune more is cut between words with the ellipsis inside the cap.
+func TestValidateCellCapIsExact(t *testing.T) {
+	words := strings.TrimSpace(strings.Repeat("plates ", MaxCellChars))
+	atCap := words[:MaxCellChars]
+	got, err := validate(Artifact{Shape: ShapeNotice, Text: atCap})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if got.Text != atCap {
+		t.Errorf("a cell exactly at the cap was changed: %d runes", len([]rune(got.Text)))
+	}
+
+	over := words[:MaxCellChars+1]
+	got, err = validate(Artifact{Shape: ShapeNotice, Text: over})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	kept, cut := strings.CutSuffix(got.Text, ellipsis)
+	if !cut || len([]rune(got.Text)) > MaxCellChars {
+		t.Fatalf("one rune over the cap = %q, want it cut within the cap and ending with the ellipsis", got.Text)
+	}
+	if !strings.HasSuffix(kept, "plates") || !strings.HasPrefix(over, kept) {
+		t.Errorf("the cut did not land after a whole word: %q", kept)
 	}
 }
 

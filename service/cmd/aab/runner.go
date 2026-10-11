@@ -45,7 +45,9 @@ type runner struct {
 	// question the service abandoned from sitting at the head of every later
 	// page, which used to make the service permanently deaf (second review-fix
 	// contract 3). It is never persisted: a restart begins at 0 and the
-	// companion decides again what is still unanswered.
+	// companion decides again what is still unanswered. It starts again at 0
+	// when the game goes back under it, a new map or an older save
+	// (cursor.go).
 	after int64
 
 	answered     int
@@ -56,6 +58,26 @@ type runner struct {
 	// refuses a reply as too_large and doubles back toward pollLimit after every
 	// poll that lands (second review-fix contract 4).
 	page int
+
+	// ticks counts polls, so the companion's status is read every statusEvery
+	// of them (cursor.go). lastID, lastTick and lastMap are what that read saw
+	// last: the highest question id issued, the game tick and the map's id.
+	// Either of the first two going back, or another map, means the game
+	// went back.
+	ticks    int
+	lastID   int64
+	lastTick uint64
+	lastMap  rpc.MapID
+
+	// lost is true from a call that got no reply at all, a poll, a status
+	// read or a delivery, or a reply over a new connection, until the
+	// companion answers again. A restart is the only way a headless server
+	// loads a save, so the first reply after it starts the service again
+	// (cursor.go, startAgain) before anything is answered. conn is the RCON
+	// connection the last checked reply came over (reconnected), and every
+	// answer is held to it (deliver).
+	lost bool
+	conn uint64
 }
 
 // delivery is what the service knows about one question: the artifact the model
@@ -69,16 +91,29 @@ type delivery struct {
 }
 
 // greet says hello to the companion once, so an operator sees straight away
-// whether RCON and the mod are both there.
+// whether RCON and the mod are both there. It also tells history which map
+// the game is on: a map that changed while the service was down named
+// itself in a session line the tailer, starting at the end of the file,
+// never reads.
+//
+// When it cannot reach the companion, the first tick that can starts with a
+// look at the status instead (cursor.go), which tells history the map.
 func (r *runner) greet(ctx context.Context) {
+	mark := r.store.Mark()
 	st, err := r.rpc.Status(ctx)
+	if !rpc.Unreachable(err) {
+		r.reconnected() // any reply names the connection later ones compare with
+	}
 	if err != nil {
 		r.stats.SetConnected(false)
 		log.Printf("run: cannot reach the companion yet: %v", err)
+		r.lost = r.lost || rpc.Unreachable(err)
 		return
 	}
 	r.stats.SetConnected(true)
 	r.stats.SetModVersion(st.ModVersion)
+	r.see(st)
+	r.noteMap(mark, st)
 	log.Printf("run: companion %s on protocol %d, %d player(s), %d question(s) pending, %d asked so far, ask command %s",
 		st.ModVersion, st.ProtocolVersion, st.PlayerCount, st.PendingCount, st.LastID, st.AskCommand)
 }
@@ -111,8 +146,14 @@ func (r *runner) heartbeat() {
 }
 
 // pollFailed logs once per failure streak: a server that is down costs one line,
-// not one line per poll.
+// not one line per poll. A call that got no reply at all, rather than a
+// refusal, puts the companion out of reach (lost), so the next reply starts
+// the service again.
 func (r *runner) pollFailed(err error) {
+	r.stats.SetConnected(false)
+	if rpc.Unreachable(err) {
+		r.lost = true
+	}
 	if r.pollFailing {
 		return
 	}

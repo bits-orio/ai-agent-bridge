@@ -15,7 +15,8 @@
 local PROBE_FN = "force_labels_v1"
 local LABEL_LIMIT = 64
 
-local richtext = require("scripts.richtext")
+local richtext  = require("scripts.richtext")
+local text_clip = require("scripts.text_clip")
 
 local M = {}
 
@@ -36,8 +37,7 @@ local function plain(label)
   local text = label:gsub("%[[^%[%]]*%]", ""):gsub("%c+", " "):gsub("%s+", " ")
   text = text:match("^%s*(.-)%s*$")
   if text == "" then return nil end
-  if #text > LABEL_LIMIT then text = text:sub(1, LABEL_LIMIT) end
-  return text
+  return text_clip.bytes(text, LABEL_LIMIT)
 end
 
 --- A label as it renders: its own colour and font tags kept, every other
@@ -50,9 +50,7 @@ end
 local function rich(label)
   if type(label) ~= "string" then return nil end
   local text = label:gsub("%[([^%[%]]*)%]", function(tag)
-    if tag:sub(1, 6) == "color=" or tag:sub(1, 5) == "font=" or tag == "/color" or tag == "/font" then
-      return "[" .. tag .. "]"
-    end
+    if richtext.is_style(tag) then return "[" .. tag .. "]" end
     return ""
   end)
   text = text:gsub("%c+", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")

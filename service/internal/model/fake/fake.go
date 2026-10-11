@@ -110,8 +110,14 @@ func echo(text string) map[string]any {
 }
 
 // artifactOf builds the second turn's artifact: the shape the question asked
-// for, carrying the compacted tool result.
+// for, carrying the compacted tool result. Pirion's question is answered
+// from the plate rows recipe_needs returned instead, when it has them.
 func artifactOf(text, result string) map[string]any {
+	if has(text, scienceBelts) {
+		if table := plateTable(result); table != nil {
+			return table
+		}
+	}
 	body := clip(compact(result))
 	if body == "" {
 		body = "no tool result"

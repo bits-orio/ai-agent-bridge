@@ -35,9 +35,7 @@ import (
 func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, shape string, rounds, lookups int, cost float64, msModel, msRCON int64, refused bool, refusedReason *string, modelError *string, zeroLookup bool, briefingStatus string, briefingBytes, briefingTokens int, briefingMs int64, askedBack, awaitingReplyResolved bool) ledger.QuestionRecord {
 	r := ledger.NewQuestionRecord()
 	r.QuestionID = q.ID
-	if v := a.Personality; v != "" {
-		r.Voice = v
-	}
+	r.Voice = a.voiceFor(q).label
 	r.Asker = q.askerName()
 	r.Force = q.force()
 	r.Surface = q.Surface
@@ -95,7 +93,10 @@ func zeroLookupFor(rounds, lookups int, artifact Artifact) bool {
 // that long) but never builds a RoundRecord for it, since the round never
 // produced one, so ms_model there reflects one more round than the round
 // records on file for the question.
-func (a *Agent) roundRecord(questionID int64, round int, step model.Step, modelMs, toolMs int64, calls []ledger.ToolCall) ledger.RoundRecord {
+//
+// refused is every submit_answer the round sent back, with the text the
+// model read; nil on the rounds that refused none, which omits the key.
+func (a *Agent) roundRecord(questionID int64, round int, step model.Step, modelMs, toolMs int64, calls []ledger.ToolCall, refused []ledger.SubmitRefusal) ledger.RoundRecord {
 	return ledger.RoundRecord{
 		QuestionID:           questionID,
 		Round:                round,
@@ -111,6 +112,7 @@ func (a *Agent) roundRecord(questionID int64, round int, step model.Step, modelM
 		Cost:                 CostUSD(a.mdl.Name(), step.Usage),
 		StopReason:           step.StopReason,
 		ToolCalls:            calls,
+		SubmitRefusals:       refused,
 	}
 }
 

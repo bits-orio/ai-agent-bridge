@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -183,20 +184,6 @@ func TestPromptWithNoBriefingRendersNothing(t *testing.T) {
 	}
 }
 
-// The voice is one fixed string the service owns, not operator free text, and
-// an unrecognised setting is no voice at all rather than an error: a typo in a
-// config file must not stop a server answering questions.
-func TestVoiceTextOnlyRecognisesTheOneFlavour(t *testing.T) {
-	if voiceText("factorio") != VoiceFactorio {
-		t.Error("factorio should select the one flavour the service ships")
-	}
-	for _, setting := range []string{"off", "", "Factorio", "pirate", "off ", "factorio "} {
-		if got := voiceText(setting); got != "" {
-			t.Errorf("voiceText(%q) = %q, want no voice at all", setting, got)
-		}
-	}
-}
-
 // The free tier made one answer worse than the lookup it replaced. Question
 // 77 on 2026-09-15 answered "15 teams (team-1 through team-15)" from fs alone,
 // on a server with 14 populated teams, 20 team slots and a spectator force
@@ -285,6 +272,91 @@ func TestSystemPromptForbidsCopyingALabelIntoAnAnswer(t *testing.T) {
 	} {
 		if !strings.Contains(pa, want) {
 			t.Errorf("system prompt is missing the label rule, wanted %q:\n%s", want, pa)
+		}
+	}
+}
+
+// The caps the model is told come from the constants the service enforces,
+// in the system prompt and in submit_answer's own description alike, so
+// doubling a cap tells the model the new number without a second edit.
+func TestSystemPromptPrintsTheCapsFromTheConstants(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		fmt.Sprintf("Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows.",
+			MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows),
+		fmt.Sprintf("Every title, summary line, column name, list item, table or comparison cell and notice is at most %d characters, and the whole answer at most %d bytes.",
+			MaxCellChars, MaxArtifactBytes),
+		// As the model reads it: the cell cap is not only for summary lines.
+		"notice is at most 320 characters, and the whole answer at most 12000 bytes.",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt does not state the caps from the constants, wanted %q", want)
+		}
+	}
+	props := submitDef().Schema["properties"].(map[string]any)
+	lines := props["lines"].(map[string]any)["description"].(string)
+	if want := fmt.Sprintf("up to %d lines of at most %d characters", MaxSummaryLines, MaxCellChars); !strings.Contains(lines, want) {
+		t.Errorf("submit_answer's lines description = %q, want %q", lines, want)
+	}
+}
+
+// The live model wrote [img=item.red-transport-belt] for "red belt", a
+// prototype that does not exist and prints as raw text. Players name belts
+// by colour, so the prompt says which prototype each colour is, and that the
+// green one only exists with Space Age: without it a turbo tag prints raw.
+func TestSystemPromptNamesBeltsByColour(t *testing.T) {
+	pa := systemPrompt("")
+	want := "Players say yellow, red and blue belt for transport-belt, fast-transport-belt and express-transport-belt, " +
+		"and green belt for turbo-transport-belt, which exists only when Space Age is loaded."
+	if !strings.Contains(pa, want) {
+		t.Errorf("system prompt lacks the belt vocabulary %q", want)
+	}
+	if strings.Contains(pa, "blue and green belt") {
+		t.Error("the prompt still names green belt as if it were always there")
+	}
+}
+
+// The clickable-tag exception is about naming one recipe to look at. How much
+// or how many something takes is recipe_needs, never a tag and never the
+// model's own arithmetic: question 17 on the live server spent 2,420
+// reasoning tokens working a ratio out from memory.
+func TestSystemPromptSendsWhatItTakesToRecipeNeeds(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"what an item is, a recipe or a technology to look at, write the clickable tag instead",
+		"What it takes to make something, how much or how many inputs, machines or belts, is recipe_needs: never a clickable tag and never your own arithmetic; items still use their sprite tags.",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(pa, "what a recipe needs") {
+		t.Error("the clickable-tag rule still sends what a recipe needs to a [recipe=] tag")
+	}
+}
+
+// Live answers on the rig said "(set_fastest_ever=3)" and "(restarts=0)": a
+// reply's field names, and a tool's name with them, mean nothing to a player.
+func TestSystemPromptKeepsToolAndFieldNamesOutOfAnswers(t *testing.T) {
+	pa := systemPrompt("")
+	if want := "Never show the player a tool name or a field name from a reply; say what the value means in plain words."; !strings.Contains(pa, want) {
+		t.Errorf("system prompt is missing %q", want)
+	}
+}
+
+// On the rig a team-6 member asked privately what their team had said, read
+// team-6's own private line, and answered that the only chat came from other
+// teams: nothing said whose force the speaker was on. Every chat line now
+// carries its speaker's force and a private flag, and the prompt says what
+// both mean, in ch and in the chat tools alike.
+func TestSystemPromptSaysWhatAChatLinesForceAndPrivateFlagMean(t *testing.T) {
+	pa := systemPrompt("")
+	for _, want := range []string{
+		"ch is recent chat, what players said rather than something the game reports, each line with its speaker's force as f and private true when it was said in a private channel",
+		"A chat line marked private was said in the private channel this question was asked in",
+	} {
+		if !strings.Contains(pa, want) {
+			t.Errorf("system prompt is missing %q", want)
 		}
 	}
 }

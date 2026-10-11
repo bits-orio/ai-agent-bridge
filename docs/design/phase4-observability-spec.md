@@ -126,6 +126,7 @@ so a round can be joined back to the question it belongs to.
 | `reasoning_tokens` | `Usage.ReasoningTokens` |
 | `cost` | `Usage.Cost`, USD |
 | `stop_reason` | `model.Step.StopReason` |
+| `submit_refusals` | present only on a round that refused a `submit_answer` call, omitted on nearly every round: an array of `{kind, reason}`, one per refused call in the order the model made them. `reason` is the text the model read back, clipped like a tool error. `kind` is one of `over_cap` (over a cap, with a round left to rewrite in), `invalid` (not an artifact the game can show), `beside_reads` (sent in the same round as lookups), `second_submit` (a later submit in a round whose earlier one was taken) or `lookup_cap` (the round asked for more lookups than the question had left). A question that loops on refused answers until its rounds run out says why here; one did exactly that on an upstream host, and neither the log nor the ledger could say |
 | `tool_calls` | one entry per call this round actually ran or the lookup cap actually refused, from `runCalls`/`runReads` (`service/internal/agent/agent.go` lines 412, 501). A round the lookup cap refuses still records one entry per refused read, so the repeat-count report in section 4 sees the case it exists for; see the `ok` and `error` rows below. `submit_answer` is never recorded here, on any path: it is the loop's own terminator, not a catalog tool, so a pure submission round carries no entries at all, and a submission refused alongside reads leaves no entry of its own either, only the reads beside it do. |
 
 `ms_first_byte` is not recorded. The OpenRouter client posts a request and waits for the complete response rather than streaming it, so there is no first-byte moment to measure, and a zero here would read as a measurement rather than an absence. If the client starts streaming, the field returns.
@@ -139,7 +140,7 @@ Each `tool_calls` entry:
 | `result_bytes` | the size, in bytes, of the result this call returned. A sweep carries this inside the envelope [phase4-spec.md](phase4-spec.md)'s wire contract specifies; the service's own list tools (`recent_chat`, `catch_up`, `recent_events`, `last_event`, `count_events`) sweep no axis and return the same header-plus-tab-separated-rows shape with no sweep envelope, so their `result_bytes` counts a header line and rows, nothing else. Measured ahead of the service's own `max_tool_result_bytes` clip: 4096 in Group A, unchanged from today's default, and 8000 in Group B, raised in the same release as `CAPS.call`'s rise to 16384 (`service/internal/config/config.go` line 38) |
 | `ms` | wall clock for this one call, or `0` for a call the lookup cap refused, since it never ran. Nothing sums this into `ms_total` or `ms_rcon`; each of those times its round's tool phase once, as a single span, rather than adding per-call durations up. |
 | `ms_above_floor` | `ms` minus `rpc.Client.Floor()` (`service/internal/rpc/rpc.go` line 86, backed by the 32-sample ring in `service/internal/rpc/latency.go` lines 15-40): the part of the call that is not baseline RCON, so a genuinely slow tool stands out from a merely slow connection |
-| `corrected_from` | present only when the model named a tool that does not exist and exactly one tool could have been meant, so the service called that one: `name` is what ran, this is what was asked. Questions 78 and 86 on 2026-09-15 each invented a different provider prefix on the bare `catch_up` and paid a round for it; counting this field says how often that still happens |
+| `corrected_from` | present only when the model named a tool that does not exist and exactly one tool could have been meant (a bare name, a prefix on top of a prefix, a wrong prefix, or a typo within 2 edits of exactly one tool), so the service called that one: `name` is what ran, this is what was asked. Questions 78 and 86 on 2026-09-15 each invented a different provider prefix on the bare `catch_up` and paid a round for it; counting this field says how often that still happens |
 | `ok` | true when the call returned a result, false when it errored or when the lookup cap refused it before it ran |
 | `error` | the error string when `ok` is false, `null` otherwise: the call's own error, or the refusal text when the lookup cap refused the call |
 | `path` | present only when `name` is a `find_item` call, omitted for every other tool: which rung answered it, `logistic` (a logistic network already held the item, no walk needed), `walk` (the bounded entity walk under `work_budget` found it), or `refused` (no anchor and no logistic hit, so the structured refusal fired). This is what tests the prediction that the three-rung logistic path already answers most where-is-it questions ([phase4-spec.md](phase4-spec.md)), rather than leaving it assumed |
@@ -171,7 +172,8 @@ Each `tool_calls` entry:
   "refused": false,
   "refused_reason": null,
   "model_error": null,
-  "voice": "off"
+  "voice": "off",
+  "clipped": false
 }
 ```
 
@@ -181,7 +183,7 @@ Each `tool_calls` entry:
 | `asker` | player name, or the asker label for a mod (CONTEXT.md's Asker) |
 | `force` | the asker's force hint |
 | `surface` | the asker's surface at ask time |
-| `session_key` | `sessionKey(scope, name)` (`service/internal/agent/session.go` line 87): `scope` alone, or `scope#name` |
+| `session_key` | the session's identity as a display string: `scope` alone, or `scope#name`. The service's map is keyed by a struct of scope and name held apart, so this string is for reading only |
 | `session_fresh` | the `fresh` bool `sessions.open` returns (`service/internal/agent/session.go` line 104): true when this question started a new session rather than continuing one |
 | `text` | the question text, already capped at 400 bytes by the companion (`companion-mod/scripts/questions.lua` line 38) before it reaches the service |
 | `rounds` | how many rounds the question took, bound by `max_rounds` (default 6, `service/internal/config/config.go` line 35) |
@@ -200,7 +202,8 @@ Each `tool_calls` entry:
 | `refused` | true when the service refused the question outright, before or instead of asking the model at all: an hourly quota, the server-wide hourly quota, the daily cost budget, or an empty question (`refusal(...)`, `service/internal/agent/agent.go` lines 268, 274 and 281, and `service/internal/agent/commands.go` line 30). A tier 2 tool's own refusal does not set this field; see `asked_back`. A model outage does not set it either: the service still asked the model, it just failed to answer; see `model_error` |
 | `refused_reason` | the notice text delivered when `refused` is true (`quotaNotice`, `serverQuotaNotice`, `budgetNotice`, or the empty-question notice), `null` otherwise |
 | `model_error` | the error text when the model call itself failed and the question ended in a failure notice, `null` otherwise. Clipped like every other recorded string |
-| `voice` | the `personality` setting active for this question (Decision 12): `off`, or the flavour value |
+| `voice` | the voice the question ran in (Decision 12): `off`, a preset's own name (`factorio`), or `custom` for free text. The question's in-game `aab-personality` setting wins over the config's `agent.personality`. The service logs once when the map's setting starts or stops deciding the voice |
+| `clipped` | true when the answer the player got was over a cap and went out cut at a word boundary with an ellipsis: the model had no round left to rewrite it, the question ended before a rewrite came back, or the model answered in prose too long for a summary. False for an answer that was refused and rewritten whole |
 
 ## 3. Where it lives, its rotation, and its size
 

@@ -43,7 +43,7 @@ const (
 	defaultClarifyIdle             = 10 * time.Minute
 	// defaultPersonality is off: a server that never sets it answers in the
 	// plain voice, which is what an operator running this for other people
-	// gets unless they choose otherwise.
+	// gets unless they, or an admin in the map settings, choose otherwise.
 	defaultPersonality         = "off"
 	defaultSessionMaxExchanges = 10
 	defaultSessionMaxBytes     = 8000
@@ -103,7 +103,7 @@ type AgentConfig struct {
 	SessionIdle               Duration `yaml:"session_idle"`                  // a session ends after this long without a question
 	NamedSessionIdle          Duration `yaml:"named_session_idle"`            // a #named session waits longer
 	ClarifyIdle               Duration `yaml:"clarify_idle"`                  // widens the idle window while a session awaits the player's reply to an ask-back
-	Personality               string   `yaml:"personality"`                   // "off" (default) or "factorio": the fixed voice appended to the system prompt
+	Personality               string   `yaml:"personality"`                   // the voice answers are written in: "off" (default; false, no, none, disabled, 0 and n too), a preset ("factorio"), or free text up to 500 runes, sanitised and always followed by the fixed guard sentence; the map's own aab-personality setting wins when it is set
 	SessionMaxExchanges       int      `yaml:"session_max_exchanges"`         // oldest exchanges drop past this count
 	SessionMaxBytes           int      `yaml:"session_max_bytes"`             // and past this many bytes of question and answer text
 	QuestionsPerPlayerPerHour int      `yaml:"questions_per_player_per_hour"` // rolling-hour quota, -1 for no quota

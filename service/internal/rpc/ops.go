@@ -28,7 +28,8 @@ func unmarshalList(raw json.RawMessage, out any) error {
 }
 
 // StatusReply is the "r" of a status call: protocol version, mod version, tick, player
-// count, pending question count and which player command is live (PLAN.md).
+// count, pending question count, which player command is live (PLAN.md), the highest
+// question id issued and the map's id.
 // Field names must stay in step with OPS.status in companion-mod/scripts/rpc.lua.
 type StatusReply struct {
 	ProtocolVersion int    `json:"protocol"`
@@ -38,10 +39,39 @@ type StatusReply struct {
 	PendingCount    int    `json:"pending"`
 	AskCommand      string `json:"ask_command"`
 	// LastID is the highest question id the companion has issued so far
-	// (review-fix contract 4). The service polls from 0 and needs no cursor, so
-	// this is for the operator and the harness: how many questions a save has
-	// seen, and whether new ones are arriving at all.
+	// (review-fix contract 4): how many questions a save has seen, and
+	// whether new ones are arriving at all. One below what the last look saw
+	// means the game went back (cmd/aab, cursor.go).
 	LastID int64 `json:"last_id"`
+	// MapID names the map the game is on: the id the companion's session
+	// line in events.jsonl carries (companion-mod/scripts/map_id.lua). The
+	// service records it in history when no session line has said so, and
+	// another map is a reason to poll from the start (cmd/aab, cursor.go).
+	// An older companion sends none, and neither does a save that has not
+	// made its id yet; both read as "".
+	MapID MapID `json:"map_id"`
+}
+
+// MapID is a map id as the companion sends it. A string is taken as written
+// and a number as its JSON text, the way history reads the id a session line
+// carries, so the two compare equal. A value of any other type reads as no
+// id rather than failing the whole status reply.
+type MapID string
+
+// UnmarshalJSON reads a string or a number, and anything else as "".
+func (m *MapID) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*m = MapID(s)
+		return nil
+	}
+	var n json.Number
+	if json.Unmarshal(b, &n) == nil {
+		*m = MapID(n.String())
+		return nil
+	}
+	*m = ""
+	return nil
 }
 
 // Status calls the status op ({}) and returns the parsed reply.
@@ -127,6 +157,12 @@ type Question struct {
 	// PhysicalSurface is where the asker's character stood when Surface is
 	// the one they were looking at in remote view; empty when the same.
 	PhysicalSurface string `json:"physical_surface,omitempty"`
+	// Personality is the map's aab-personality setting at the moment the
+	// question was asked: trimmed, at most 500 bytes, and left out when
+	// empty. When it says anything it wins over the operator's
+	// agent.personality: off, a preset name, or free text (agent/voice.go).
+	// An older companion never sends it, which reads as the config's voice.
+	Personality string `json:"personality,omitempty"`
 }
 
 // PollReply is the "r" of a poll call: unanswered questions with id greater than
@@ -179,7 +215,21 @@ type answerRequest struct {
 // paying the model a second time. The one refusal not worth retrying is CodeBadArtifact:
 // the artifact itself is wrong (review-fix contract 5).
 func (c *Client) Answer(ctx context.Context, qid int64, artifact any) (bool, error) {
-	raw, err := c.Call(ctx, "answer", answerRequest{QID: qid, Artifact: artifact})
+	return c.AnswerOn(ctx, 0, qid, artifact)
+}
+
+// AnswerOn is Answer held to RCON connection conn: the one the poll that
+// offered qid came over (Connection). When that connection has broken, the
+// answer is not sent over a new one, and the call fails as Unreachable: a
+// server that restarted in between may have loaded a save where qid names
+// someone else's question, in someone else's scope. conn 0, or an executor
+// that does not number its connections, sends it as Answer does.
+func (c *Client) AnswerOn(ctx context.Context, conn uint64, qid int64, artifact any) (bool, error) {
+	execute := c.rc.Execute
+	if p, ok := c.rc.(pinnedRCON); ok && conn != 0 {
+		execute = func(cmd string) (string, time.Duration, error) { return p.ExecuteOn(conn, cmd) }
+	}
+	raw, _, err := c.call(ctx, "answer", answerRequest{QID: qid, Artifact: artifact}, execute)
 	if err != nil {
 		return false, err
 	}

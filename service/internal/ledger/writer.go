@@ -80,10 +80,26 @@ func (w *Writer) WriteQuestion(r QuestionRecord) {
 // non-Go reader can index it without a null check, and no caller has to
 // remember to leave it as an empty slice rather than nil. Each entry's own
 // Error is clipped the same way Args already is by the time it reaches
-// here (clip.go).
+// here (clip.go), and so is each submit refusal's reason.
 func (w *Writer) WriteRound(r RoundRecord) {
 	r.ToolCalls = normalizeToolCalls(r.ToolCalls)
+	r.SubmitRefusals = clipRefusals(r.SubmitRefusals)
 	w.write(r)
+}
+
+// clipRefusals returns refusals with every reason clipped to maxClipBytes,
+// in a fresh slice so a write never mutates what the caller holds. Nil stays
+// nil without an allocation: nearly every round refuses nothing.
+func clipRefusals(refusals []SubmitRefusal) []SubmitRefusal {
+	if refusals == nil {
+		return nil
+	}
+	out := make([]SubmitRefusal, len(refusals))
+	for i, r := range refusals {
+		r.Reason = clip(r.Reason, maxClipBytes)
+		out[i] = r
+	}
+	return out
 }
 
 // normalizeToolCalls returns calls as a non-nil slice, with every entry's

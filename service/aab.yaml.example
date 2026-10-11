@@ -25,7 +25,7 @@ factorio:
   #   known_hosts_path: /secrets/known_hosts # omit to skip host-key verification (logs a warning)
 
 transport: local        # local | sftp  (RCON is always the control path either way)
-poll_interval: 1s
+poll_interval: 1s       # every 30th poll also reads the companion's status, to notice a new map or an older save
 
 # Also write the service's own logs to a file (in addition to stdout). Useful when
 # stdout isn't visible, e.g. a hosting panel that backgrounds the service. Defaults to
@@ -98,7 +98,17 @@ agent:
   session_idle: 3m
   named_session_idle: 30m
   clarify_idle: 10m                   # widens the idle window while a session awaits the player's reply to an ask-back, so a clarifying question survives the walk to go look
-  personality: off                    # off, or factorio for a light engineer-on-the-floor voice on the summary line. The text is fixed and owned by the service, not written here: flavour never changes a number, a unit, an item name or a table cell
+  # The voice answers are written in: off, factorio for a dry engineer-on-the-floor
+  # voice on the summary line, or your own words in quotes, for instance
+  # "Talk like a ship's captain: brief and salty." false, no, none, disabled, 0 and n
+  # mean off too, in any case. Your words are kept to one line of at most 500
+  # characters with any rich-text tags taken out, and are always followed by
+  # "Flavour never changes a number, a unit, an item name or a table cell." An admin
+  # can set the same in game, Bot personality in Mod settings on the Map tab or
+  # /aab-personality; a value set there wins over this one, off there turns the
+  # voice off, and blank leaves it to this line. The log names the voice at startup
+  # and whenever the in-game setting takes over or lets go.
+  personality: off
   session_max_exchanges: 10
   session_max_bytes: 8000
   questions_per_player_per_hour: 20   # rolling-hour quota, -1 for no quota
@@ -107,7 +117,9 @@ agent:
   max_tool_calls: 30                  # lookups one question may make; a round over it is refused, the question goes on
 
 # The event history for this save. A relative path is resolved against this file, so
-# moving the config moves the database with it.
+# moving the config moves the database with it. One file can hold several maps; the
+# history tools read the current map's rows only. A file from an older service is
+# migrated in place on the first start.
 history:
   path: history.sqlite
 

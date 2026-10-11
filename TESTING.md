@@ -218,3 +218,130 @@ standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
 - [ ] Live on OpenRouter: one question on `deepseek/deepseek-v4-pro-0813` and one on an
   Anthropic route, recorded with the `cost` OpenRouter reported and the `reasoning=`
   count in the trace line. Needs `OPENROUTER_API_KEY` in `service/.env`.
+
+## 5. 2026-10-11: recipe_needs, MTS records, chat privacy, answers
+
+All work uncommitted on top of ai-agent-bridge `5f7427a` (main) and
+multi-team-support `b489742` (master, plus the `factorio-2.1` worktree). No
+version was bumped. Designs: `docs/design/recipe-needs-spec.md`, Parts 1 to 4.
+Rig: headless 2.0.77 on a copy of the `bnm-ai-save` live save, the dev
+companion, the dev MTS, released versions of every other mod.
+
+**The leak, before the fix (01:32, service built from `5f7427a`).** Pirion
+(team-6, MTS team-only channel) said "SECRET-7731 team six hides the nukes
+north". Trophium (team-9, global) asked what was said in chat recently. The
+answer printed Pirion's line. The event file had logged it with no scope.
+
+**Unit and mutation tests.**
+
+- [x] AAB Lua, `make lua-test`: 10 suites, 1397 checks, 0 failed. Every Lua file
+  parses. New: `aab_map_id_test.lua` (23 checks, reloads `control.lua` over the
+  same storage to simulate a save load); `aab_chat_visibility_test` 36 checks;
+  `aab_test` 378; `aab_sprites_test` 114.
+- [x] AAB Go, `make test` (Docker `golang:1.25-alpine`): gofmt and vet clean,
+  all 17 packages pass.
+- [x] MTS: `tests/run.py` 701 passed on `master` and on `factorio-2.1`;
+  syntax check clean; require graph clean apart from 1 cycle that was already
+  there. `tests/run.py` now runs six test files, including `test_team_release`.
+- [x] Mutation testing, every wave: each new guard broken on purpose in a
+  scratch copy, and the suite went red every time except 2 of 85 in the first
+  MTS wave (both fast paths). The recipe code took 47 Lua and 8 Go mutations in
+  its last wave, all red. The mutation scripts live in the session scratchpad,
+  not the repo.
+- [x] Live history copy: mount a copy read-only, set
+  `AAB_LIVE_HISTORY=/live/history.sqlite` (and `AAB_LIVE_HISTORY_CURRENT_DAY=2026-10-09`
+  if needed), then `go test -count=1 -run TestLiveHistoryCopyMigrates -v ./internal/history`.
+  It never writes the source.
+
+**End to end harness, `make e2e`.** 26 passed, 0 failed, 4 skipped (the four
+need a connected client). New: `recipe_needs` for 60 red science (120 iron
+plate, 60 copper plate, 6.4 stone furnaces), and Pirion's three packs by
+machine count, whose plate rows equal a direct `recipe_needs` call. One harness
+bug found and fixed: `LuaForce::reset_recipes` does not undo
+`enable_all_recipes` on 2.0.77, so the scenario now restores each recipe's
+enabled flag.
+
+**2.1 checks.**
+
+- [x] `recipe_yield` against `LuaRecipePrototype::get_product_amount` on
+  2.1.17: 0 mismatches over 1092 shipped products and 42 synthetic probes at
+  productivity 0, 0.25, 0.5, 1, 3 and 10 (worst 4.9e-8). A Monte Carlo of real
+  crafting on 2.1.17 and 2.0.77 (about 40,000 crafts a probe) agrees.
+- [x] The combined recipe filter equals the union of the single filters less
+  hidden: 712 of 712 (2.0.77), 684 of 684 (2.1.17).
+- [x] MTS on a 2.1.17 server: every agent tool reply is the same size as on
+  2.0.77, the sweep rule takes all 60 teams, the counter table is created on
+  update.
+- [ ] The bridge itself on 2.1. The companion declares `factorio_version` 2.0
+  and 2.1.17 refuses to load it.
+
+**`recipe_needs` cost on the real save (2.0.77, 60 calls a case).** Every
+median under 5 ms. Worst median 4.04 ms (seven packs, team-4), worst p95 5.9 ms.
+Before the speed work the seven-pack case took 7.7 ms median, 10.2 ms p95.
+
+**Holistic rig, fake model.** All passed.
+
+- Privacy matrix (MTS team-6 talks team-only): Trophium (team-9, global) saw
+  only the public line. LolyP0p (team-6, private) saw Pirion's line. zzh8829
+  (team-4, private) and simihu (spectator, global) did not.
+- Data: question rows private under `team-6@legacy` and `team-4@legacy`,
+  public for global; answers inherit; the server console line is public; all
+  rows epoch 1.
+- Session and status: one `session` line per server start; `status` carries
+  `map_id`.
+- A new map under a running service: the service logged "the game went back",
+  question 1 on the new map answered in 1.1 s, "chat" returned none of the old
+  map's lines, and history held epoch 1 and epoch 2.
+- `recipe_needs`: team-6 needs 3138 iron plate and 1836 copper plate a minute on
+  83.68 and 48.96 electric furnaces; a full red belt is 1800 iron plate a minute
+  on 48 steel furnaces; `red-science-pack` gets `did_you_mean`
+  `automation-science-pack`; lubricant on `mts-nauvis-6` charges 240 crude oil
+  and 120 water, and with no surface flags `any_planet`; all 12 packs on team-4
+  fit 3982 bytes.
+- MTS tools: records team-13 3 held, team-4 127, team-12 5; `record_chase`
+  team-9 26 in reach and 173 out; the bridge's sweep ranks `records_held` over
+  all 13 teams; every reply under 3900 bytes.
+- Icons on the engine: `[img=item.red-transport-belt]` becomes the
+  fast-transport-belt icon, `crude-oil` item becomes fluid, `entity.iron-plate`
+  becomes item, `blue-science-pack` becomes chemical-science-pack, `planet.nauvis`
+  becomes space-location, `entity.biter` becomes the word "biter".
+- Caps: three 320-character lines arrive whole, an 8-row table prints 8 rows, a
+  blank artifact is refused as `bad_artifact`, a ten-item list of 320-character
+  items and three lines of 320 CJK characters render whole.
+- Personality: `/aab-personality` over RCON sets the setting, the service logs
+  the override, the ledger records `voice` `custom`, reset works.
+
+**Holistic rig, DeepSeek V4 Pro through OpenRouter (pinned StreamLake), each
+question as its real asker.** 12 questions cost $0.058 in total.
+
+| question | before (live) | after |
+|---|---|---|
+| Pirion's belts of ore for three packs | 1 round, 2420 reasoning tokens, 113 s, one timeout | 13.2 s, 3 rounds, 227 reasoning tokens, two `recipe_needs` calls |
+| smelters for a full red belt | raw `[img=item.red-transport-belt]`, no answer | 19.3 s, one call, 48 steel furnaces, icon drawn |
+| records of Team Recordbreaking | 5 rounds, past the token budget, no answer | 10.2 s, one call |
+| Eagle34 against RuneBoggler's records | "I don't have a tool" | 21.3 s, `records` and `record_chase` |
+| can I beat all the records | no answer | 11.2 s, 169 out of reach, 22 in reach |
+| who has the most records | not answerable | 10.2 s, confirmed against the tool |
+| a long oil answer | not run | 49.8 s, one over-cap refusal, delivered whole |
+
+Privacy through the real model: Trophium (global) asking what team-6 said got no
+leak. Kyle372 (team-6) asking what his team said got Pirion's line marked
+private channel; before the speaker force reached the model it was attributed to
+"other teams". A restarts question now carries the counting caveat in the
+reply. The pirate voice kept every number. Known wrong: the oil answer's
+cracking ratio came from the model's memory, because `recipe_needs` does not
+balance oil byproducts.
+
+**Final adversarial review.** Epochs and keys: 10 defects found, all confirmed
+and fixed (an outage now resets before anything is answered; same-seed maps
+split by the question count; a status-tick race; session keys are a struct;
+a failed or over-long provider key is stored under a key nobody reads; MTS
+spectators no longer orphaned on a released force, a free slot gets the global
+scope, legacy keys unique per slot generation and save).
+
+**Not done.**
+
+- [ ] With a client: the tag and marker on the chat line by eye, and the
+  four client-only e2e scenarios.
+- [ ] Release: nothing here is tagged. The companion's changelog entry sits
+  under 1.0.6 and MTS has no changelog entry yet.

@@ -5,7 +5,9 @@
 //
 // Keyed by scope plus an optional name, so a private team's session and
 // the global one never meet, and "#iron" is one session for everyone in the
-// same scope.
+// same scope. What this file calls a scope is the question's pool
+// (agent.go): its scope key, with private pools kept apart from public ones
+// even when a provider hands both the same key.
 
 package agent
 
@@ -86,15 +88,25 @@ type SessionInfo struct {
 type sessions struct {
 	mu    sync.Mutex
 	caps  SessionCaps
-	byKey map[string]*session
+	byKey map[sessionID]*session
+}
+
+// sessionID is what the live sessions are keyed by: the pool and the name as
+// two fields, never joined. A provider's key is opaque and may itself hold
+// "#ops", so a joined "guild" + "#ops" and a bare "guild#ops" would be one
+// session, and each channel would read the other's private exchanges.
+type sessionID struct {
+	scope string
+	name  string
 }
 
 func newSessions(caps SessionCaps) *sessions {
-	return &sessions{caps: caps.withDefaults(), byKey: map[string]*session{}}
+	return &sessions{caps: caps.withDefaults(), byKey: map[sessionID]*session{}}
 }
 
 // sessionKey joins a scope and a name the way the spec writes them:
-// "global", "global#iron", "team-3#iron".
+// "global", "global#iron", "team-3#iron". It names a session to a reader, in
+// the log and the ledger; it never finds one (sessionID).
 func sessionKey(scope, name string) string {
 	if name == "" {
 		return scope
@@ -132,7 +144,7 @@ func (s *sessions) open(scope, name string, now time.Time, fresh bool) ([]Exchan
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
-	key := sessionKey(scope, name)
+	key := sessionID{scope, name}
 	live := s.byKey[key]
 	if live != nil && !fresh {
 		wasAwaiting := live.awaitingReply
@@ -153,11 +165,11 @@ const maxLiveSessions = 200
 // trim drops the longest-idle sessions past the cap. Callers hold the lock.
 func (s *sessions) trim() {
 	for len(s.byKey) > maxLiveSessions {
-		var oldestKey string
-		var oldest time.Time
+		var oldestKey sessionID
+		var oldest *session
 		for key, live := range s.byKey {
-			if oldestKey == "" || live.lastAt.Before(oldest) {
-				oldestKey, oldest = key, live.lastAt
+			if oldest == nil || live.lastAt.Before(oldest.lastAt) {
+				oldestKey, oldest = key, live
 			}
 		}
 		delete(s.byKey, oldestKey)
@@ -170,7 +182,7 @@ func (s *sessions) end(scope, name string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
-	key := sessionKey(scope, name)
+	key := sessionID{scope, name}
 	_, had := s.byKey[key]
 	delete(s.byKey, key)
 	return had
@@ -188,7 +200,7 @@ func (s *sessions) end(scope, name string, now time.Time) bool {
 func (s *sessions) record(scope, name string, e Exchange, awaitingReply bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key := sessionKey(scope, name)
+	key := sessionID{scope, name}
 	live := s.byKey[key]
 	if live == nil {
 		live = &session{scope: scope, name: name, startedAt: e.At}
@@ -234,6 +246,13 @@ func (s *sessions) list(scope string, now time.Time) []SessionInfo {
 		return out[i].Name < out[j].Name
 	})
 	return out
+}
+
+// clear drops every session: the map they were asked on is gone.
+func (s *sessions) clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.byKey = map[sessionID]*session{}
 }
 
 // sweep drops idled-out sessions. Callers hold the lock.

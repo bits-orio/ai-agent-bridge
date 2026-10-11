@@ -1270,6 +1270,13 @@ discovers it the way it discovers any other provider.
 
 ## 16. Voice
 
+> Superseded on 2026-10-11. Free text is now accepted, the setting travels with
+> each question, and an admin changes it in game with `/aab-personality`. The
+> current rules, the preset and the guard sentence live in
+> `service/internal/agent/voice.go`, and recipe-needs-spec.md, Part 4,
+> describes them. The text below is the design as it was written and is kept
+> for the record: do not read it as current behaviour.
+
 The owner cancelled the configurable-personality idea. What ships is one
 setting, `personality`, off by default, whose only other value turns on a
 light Factorio flavour. There is no free-text knob, no per-player voice,

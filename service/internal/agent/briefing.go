@@ -87,10 +87,16 @@ const chatLines = 5
 // backstop, not a routine path (task instruction 6).
 const briefingByteCap = 16384
 
-// ChatLine is one line of chat for BriefingPayload's ch key.
+// ChatLine is one line of chat for BriefingPayload's ch key: who said it,
+// their force, whether they said it in a private channel, and what they
+// said. A private line reaches a briefing only when the question was asked
+// in that same channel, so the flag tells the model it is the asker's own
+// channel talking, never anything it could not read.
 type ChatLine struct {
-	Who string
-	Msg string
+	Who     string
+	Force   string
+	Private bool
+	Msg     string
 }
 
 // ChatSource is the one thing this package needs from the service's own chat
@@ -231,10 +237,14 @@ type MarkerRow struct {
 	Txt string  `json:"txt"`
 }
 
-// ChatRow is one row of ch.
+// ChatRow is one row of ch: the speaker, their force as f, the line, and
+// private true on a line said in a private channel, left out on one said in
+// the open, so an ordinary line costs nothing more than its force.
 type ChatRow struct {
-	Who string `json:"who"`
-	Msg string `json:"msg"`
+	Who     string `json:"who"`
+	F       string `json:"f,omitempty"`
+	Msg     string `json:"msg"`
+	Private bool   `json:"private,omitempty"`
 }
 
 // PlayerRow is one row of pl: a connected player and the force they are on,
@@ -902,7 +912,7 @@ func chatRows(ctx context.Context, chat ChatSource) []ChatRow {
 	}
 	rows := make([]ChatRow, 0, len(lines))
 	for _, l := range lines {
-		rows = append(rows, ChatRow{Who: l.Who, Msg: l.Msg})
+		rows = append(rows, ChatRow{Who: l.Who, F: l.Force, Msg: l.Msg, Private: l.Private})
 	}
 	return rows
 }

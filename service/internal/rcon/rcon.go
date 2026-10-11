@@ -9,6 +9,8 @@
 //
 // The shape callers see is unchanged: New, Execute, Close, one reconnect on a
 // broken connection, and no reconnect when the command itself is the problem.
+// Beside it, every connection is numbered (Connection), and ExecuteOn holds one
+// command to the connection a caller already knows, never a new one.
 package rcon
 
 import (
@@ -17,6 +19,7 @@ import (
 	"math"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,6 +50,9 @@ var (
 	ErrCommandEmpty   = errors.New("rcon: command is empty")
 	ErrCommandTooLong = errors.New("rcon: command is longer than MaxCommandLen")
 	ErrAuthFailed     = errors.New("rcon: the server refused the password")
+	// ErrConnectionChanged is ExecuteOn refusing to send: the connection the
+	// command was held to has broken, and nothing was sent over another one.
+	ErrConnectionChanged = errors.New("rcon: the connection the command was held to is gone")
 )
 
 // Client is a reconnecting Factorio RCON connection. One command round trip at
@@ -59,6 +65,11 @@ type Client struct {
 	mu     sync.Mutex
 	conn   net.Conn
 	lastID int32
+
+	// conns counts the connections dial has opened, so it is the number of
+	// the one in use (Connection). Atomic, so a caller can read it without
+	// queueing behind a command in flight.
+	conns atomic.Uint64
 }
 
 func New(addr, password string) *Client {
@@ -113,6 +124,41 @@ func (c *Client) Execute(cmd string) (string, time.Duration, error) {
 	return resp, time.Since(started), err
 }
 
+// Connection is the number of the connection in use: 1 for the first one dial
+// opened, one more for every dial after. A reply under a number other than the
+// one before it came over a new connection, opened because the old one broke,
+// which is all a server restart between two commands looks like from here:
+// Execute dials again on its own and answers as if nothing happened. 0 means no
+// connection has been opened yet.
+func (c *Client) Connection() uint64 { return c.conns.Load() }
+
+// ExecuteOn runs one command on connection conn, as Connection numbered it,
+// and on no other. It never dials: when that connection has broken, the
+// command is refused with ErrConnectionChanged and nothing is sent. A round
+// trip that fails is not tried again on a new connection either. A command
+// meant for the server one connection reached must never land on whatever
+// answers after a restart.
+func (c *Client) ExecuteOn(conn uint64, cmd string) (string, time.Duration, error) {
+	if cmd == "" {
+		return "", 0, ErrCommandEmpty
+	}
+	if len(cmd) > MaxCommandLen {
+		return "", 0, fmt.Errorf("%w: %d bytes, limit %d", ErrCommandTooLong, len(cmd), MaxCommandLen)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	started := time.Now()
+	if c.conn == nil || c.conns.Load() != conn {
+		return "", 0, ErrConnectionChanged
+	}
+	resp, err := c.exec(cmd)
+	if err != nil {
+		c.drop()
+	}
+	return resp, time.Since(started), err
+}
+
 // Close drops the connection. Execute dials again if it is called afterwards.
 func (c *Client) Close() {
 	c.mu.Lock()
@@ -156,6 +202,7 @@ func (c *Client) dial() error {
 		c.drop()
 		return err
 	}
+	c.conns.Add(1)
 	return nil
 }
 

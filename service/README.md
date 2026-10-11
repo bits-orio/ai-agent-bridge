@@ -166,7 +166,7 @@ from environment variables, which is what hosting panels want:
 | `agent.session_idle` | `AAB_SESSION_IDLE` | `3m` |
 | `agent.named_session_idle` | `AAB_NAMED_SESSION_IDLE` | `30m` |
 | `agent.clarify_idle` | `AAB_CLARIFY_IDLE` | `10m` |
-| `agent.personality` | `AAB_PERSONALITY` | `off` |
+| `agent.personality` | `AAB_PERSONALITY` | `off`; or `factorio`, or your own words (see Voice) |
 | `agent.session_max_exchanges` | `AAB_SESSION_MAX_EXCHANGES` | `10` |
 | `agent.session_max_bytes` | `AAB_SESSION_MAX_BYTES` | `8000` |
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
@@ -185,6 +185,78 @@ Secrets keep their own names in both modes and never sit in the YAML:
 `SFTP_PASSWORD`, `AAB_CONTROL_TOKEN`. A `.env` file next to `aab.yaml` is
 loaded at startup; a real environment variable wins over a line in it.
 
+### Voice
+
+`agent.personality` sets the voice answers are written in. `off` is plain,
+and so are `false`, `no`, `none`, `disabled`, `0` and `n`, in any case.
+`factorio` is a fixed preset: a dry engineer on the factory floor, on the
+summary line only. Anything else is your own words, for instance
+`"Talk like a ship's captain: brief and salty."` They are kept to one line of
+at most 500 characters, any rich-text tag is taken out, and they are always
+followed by the sentence the preset ends with: "Flavour never changes a
+number, a unit, an item name or a table cell." A voice changes how an
+answer sounds, never what it says.
+
+An admin can set the same thing in game: Bot personality
+(`aab-personality`) in Mod settings on the Map tab, or `/aab-personality`.
+A value set there wins over the config, so you can change the voice without
+a restart; `off` there turns it off, and blank leaves it to the config. The
+companion holds that setting to 500 bytes, so the service never cuts what it
+sends. The ledger records which voice each question ran in: `off`, the
+preset's name, or `custom`. The log says it too: once at startup, and once
+each time the in-game setting starts or stops overriding the config. The
+voice is the last part of the system prompt and one value for the server at
+a time, so changing it costs one cache write, not one per question.
+
+### History
+
+The service keeps the event log in `history.path`, one SQLite file, and the
+history tools read it. One file outlives the map it started on, so every row
+records its map epoch, and every read covers the current map only: the
+epoch of the newest row. An earlier map's rows, chat included, are never
+read again, even when a force or a player has the same name. When the
+companion names its map in a `session` line at the start of every game
+session, another map starts a new epoch, and the same map keeps its epoch
+even after a save loaded far back. Without that line, the tick decides:
+a drop into a new map's first five minutes, or a drop of more than thirty
+minutes, is a new map; a smaller drop is an autosave loaded after a crash,
+the same map.
+
+Two maps made from one fixed seed carry the same id, so the same id is not
+always the same map. Two rules tell them apart. A drop into the map's first
+five minutes is a new map. And a status counting fewer questions issued than
+the epoch has logged is a new map, as is a `session` line once the companion
+writes that count into it: the count never goes back while one map goes on.
+The second rule cannot tell a same-seed map from a save loaded from before
+some of the logged questions, so it treats that save as a new map too, and
+the rows before it are no longer read: it errs on the private side. One case
+still gets through: a same-seed map the service first reaches after its
+fifth minute, by when it has issued as many questions as the map before it
+logged, none at all when nobody asked one there.
+
+The companion's status names its map too, and the service reads it at
+startup, every 30 polls, and first thing whenever the companion answers
+again after it could not be reached. A `session` line can go unseen: the
+server changed maps while the service was down, so the line sits before the
+end of the file the service starts reading at, or `aab-events-enabled` is
+off and the file is never written. Either way, when the status shows a new
+map by the same rules, the service records a `session` row of its own, with
+`"source":"status"`, and reads move to the new map's epoch from then on.
+When the real `session` line turns up after it, it joins that epoch. A
+status is judged against history as it stood before the status call went
+out, so a line the service stored while the call was out never makes the
+status look like a drop.
+
+A file from an older service is migrated on the first start, in place: every
+row gets its epoch and who may read it. The 21,554 rows of a
+live server's month took about 0.4 seconds. A chat line logged before lines
+carried a scope stays private to its force, unless its map only ever had
+one force and no private row, where everyone heard it and it becomes
+public. An answer row is as private as its question in the same epoch, and
+unreadable when that question is not there. No tool reply carries a row id
+or a question id: both count up across every channel, so their gaps would
+count another channel's private rows.
+
 ## What the log says
 
 ```
@@ -199,14 +271,64 @@ answer reaches the game with what it cost. `cached=read/write` is the cache
 at work; `reasoning`, `thinking` and `text` are output no player sees, the
 lines to look at when a question cost more than expected.
 
-- `poll failed: ...` once per failure streak, and `poll recovered` when the
-  server is back.
+- `question 7 round 1: submit_answer refused (over_cap): Not sent, ... Line
+  2 is 410 characters, the cap is 320: ...` when the model's answer went
+  back to it, one line per refused answer with the reason it read: an
+  answer over a cap (`over_cap`), one that is not an answer shape
+  (`invalid`), one sent beside lookups (`beside_reads`), a second one in
+  the same round (`second_submit`), or one in a round over the lookup cap
+  (`lookup_cap`). The round's ledger record carries the same list as
+  `submit_refusals`.
+- `question 7: the answer was over the caps and went out cut: ...` when the
+  model had been sent back twice already, or no round was left to rewrite
+  it in. The question's ledger record says `clipped: true`.
+- `question 7: no rewrite came back, sending the answer refused for its
+  length instead of ...` when the question ended, or the model wrote prose,
+  before a rewrite arrived; `question 7 round 3: the model failed before a
+  rewrite came back` when the model failed instead.
+
+- `poll failed: ...` once per failure streak, and `poll recovered` when a
+  streak of refused polls ends.
+- `poll: the companion answers again after an outage (map
+  2894571-0-1804289383, tick 600, 2 question(s) asked): a restart may have
+  loaded another map or an older save, so polling starts from the first
+  question again, with no answer held and no session kept` the first time
+  the companion answers after an outage: a poll, a status read or a
+  delivery that got no reply at all, or a reply that came over a new RCON
+  connection. A restart is the only way a headless server loads a save, so
+  the service treats every outage as one: it forgets the answers it held
+  and every session, and answers whatever is still waiting from the first
+  question. A network blip costs the same, a question answered twice and a
+  follow-up that starts fresh, and so does a save that holds the game for
+  longer than the 30-second RCON timeout.
+- `answer 7: dropped unsent, no reply or a new connection since the poll:
+  after a restart this id may name another question` when a delivery got no
+  reply, or the RCON connection the question was polled on broke before the
+  answer was ready. An answer is only ever sent over the connection its
+  question was polled on.
+- `poll: the game went back (tick 600, last question id 2, poll cursor 41): a
+  new map or an older save, polling from the start` when the companion's
+  tick or its question ids went back, or its map id changed, read from its
+  status every 30 polls with no outage in between. A map change adds `, map
+  2894571-0-1804289383, was 2894571-0-77` inside the brackets. The service
+  forgets the answers it held and every session, and answers the new map's
+  questions from the first.
+- `history: a new map from the companion's status (map 2894571-0-1804289383,
+  tick 600), ahead of any session line: history reads start again from
+  here` when the status named a new map before any `session` line did, at
+  startup or at a later look. History reads stop reaching the earlier map
+  from that moment.
+- `voice: custom, from the map's personality setting, which overrides
+  agent.personality` and `voice: off, from agent.personality: the map's
+  personality setting is blank` when the in-game setting takes over or lets
+  go; `voice: off, from agent.personality` at startup.
 - `tool mts-v1.team_clocks took 310ms, about 190ms of it on the game thread;
   players felt that` when a lookup held the game for longer than a tenth of a
   second. The RCON round trip is taken off first, so a server across the
   internet is not mistaken for a slow tool.
-- `answer 7: could not deliver it, trying again next tick` when the answer
-  did not land; it is offered again with no second model run, three times.
+- `answer 7: could not deliver it, trying again next tick` when the companion
+  replied but the answer did not land; it is offered again with no second
+  model run, three times.
 - `answer 7: the companion refused the artifact, sending a notice instead`
   when the game cannot render that shape.
 - `question 7: no catalog available, leaving it pending` while the tool list
@@ -271,7 +393,13 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
 ## How a question is answered
 
 1. The poll loop picks up a question with its force, its scope and the
-   surface the asker is looking at, and reads the force labels.
+   surface the asker is looking at, and reads the force labels. Every 30
+   polls it reads the companion's status; when the tick or the question ids
+   went back, or the map id changed, a new map or an older save, it polls
+   from the first question again. When a call got no reply, or a reply came
+   over a new RCON connection, the next tick reads the status first and
+   starts again before answering anything: no held answer, no session, the
+   cursor back at the first question.
 2. The catalog is rebuilt if it is older than ten minutes or a tool call
    named an unknown provider: the providers list, then one manifest per
    provider.
@@ -283,16 +411,34 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
    (docs/design/phase4-spec.md section 3). It rides in the user turn beside
    the question, so a good share of questions ("who's online", "what time is
    it") never need a tool call at all. A slow or failed attempt is best
-   effort: the question answers exactly as it would without one.
+   effort: the question answers exactly as it would without one. Chat, here
+   and in every history tool, is only what the question's scope may read: a
+   private channel's lines reach a question asked in that same channel and
+   no other ([SECURITY.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/SECURITY.md), Chat privacy).
+   Every chat line carries its speaker's force and says whether it was said
+   in a private channel, so a force's own chat reads as its own.
 5. The model gets the rules, every tool the server exposes plus
    `submit_answer`, the session so far, the briefing and the question. It
    calls tools; a round's calls run at once. A tool that fails becomes a
-   failed tool result, never a failed question. A round whose results
+   failed tool result, never a failed question. A call to a name that is no
+   tool runs the one tool it can only mean: a prefix invented, doubled,
+   dropped or wrong, or a name within two typed characters of exactly one
+   tool. The ledger keeps the name asked for as `corrected_from`. A round whose results
    together would pass `max_round_tool_result_bytes` refuses whichever
    result would push it over, not the round: the results that already fit
    are kept exactly as their tools returned them.
-6. `submit_answer` ends the loop. The artifact is validated and clipped,
-   then sent over RCON for the companion to render, which turns force names
+6. `submit_answer` ends the loop. The artifact is checked against the
+   caps: a summary of 3 lines, a list of 10 items, a table of 5 columns by
+   8 rows, a comparison of 5 rows, 320 characters a cell and 12,000 bytes
+   in all. An answer over a cap goes back to the model, naming what is
+   over, at most twice and only while it has a round left to rewrite it
+   in. After that it is cut with an ellipsis: between words when the
+   nearest break keeps at least half the cap, at the character otherwise,
+   so one long word cannot take a whole line with it. If the question
+   ends, or the model writes prose or fails, before a rewrite comes back,
+   the refused answer goes out cut rather than a notice. The artifact is
+   then sent
+   over RCON for the companion to render, which turns force names
    back into labels and bare names into icons. An answer that is itself a
    clarifying notice (asking which surface, which force) marks the session
    awaiting the player's reply: its idle window widens to `clarify_idle`
@@ -300,7 +446,9 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
    talking to a session that already closed.
 7. Anything else that can end a question ends it with an artifact too: a
    round cap, a token budget, a tool-call cap, a quota, a model that stops
-   talking. A refusal prints to the asker alone.
+   talking or fails. A refusal prints to the asker alone. A model that
+   fails with no answer in hand gives the asker's hourly slot back, but the
+   rounds it already ran still count toward `max_cost_per_day`.
 8. The rendered answer is what the session keeps for the next question.
 
 ## Building and testing
@@ -332,6 +480,7 @@ internal/tools/        the one shape every tool takes
 internal/catalog/      manifests turned into tools: name mangling, the parameter
                        grammar, the injected force
 internal/history/      the SQLite event store and the tools that read it
+internal/chatscope/    a question's scope, carried to every history read
 internal/model/        the neutral model boundary: blocks, messages, usage
 internal/model/openrouter/  chat completions over OpenRouter
 internal/model/anthropic/   the Anthropic Messages API directly

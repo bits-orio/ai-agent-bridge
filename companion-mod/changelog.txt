@@ -1,6 +1,18 @@
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.6
 Date: 2026-09-16
+  Features:
+    - recipe_needs: what it takes to make something, worked out from the force's own unlocked
+      recipes. Every crafted item per minute with its machine and machine count, the raw inputs,
+      and belts of each, for several targets in one call. An unknown name comes back with
+      did_you_mean, up to five real names: red-science-pack is answered with
+      automation-science-pack. Ore, coal, stone, water and crude oil stay raw once Space Age
+      recipes can make them: a raw row says raw = "mined" and names asteroid crushing, ice
+      melting, coal synthesis or scrap recycling as alternatives.
+    - The bot's voice is a setting, aab-personality: blank leaves it to the operator's config, off
+      turns it off, anything else describes how the bot should sound. Each question carries the
+      value it was asked with. Admins change it in game with /aab-personality, and reset hands it
+      back to the operator's config.
   Changes:
     - Tables line up. Every row of a table answer is set in a monospace font the mod now declares
       (aab-mono, the game's own mono face at the chat size), each column padded to its widest
@@ -10,12 +22,68 @@ Date: 2026-09-16
       character, nearest first, with the distance and a gps each, so "what is Bob standing next
       to" is one read of one small circle, never a walk over the surface. all=true answers for
       every connected player in one call.
+    - Answers may run twice as long, 320 characters a cell, and every cap matches the service's.
+      A line the renderer has to cut ends with an ellipsis instead of stopping mid-word.
+    - on_answer carries the question's scope and private, so a mod relaying answers elsewhere can
+      keep a private one inside its channel.
+    - Every chat line in events.jsonl says who heard it, as scope and private: a chat privacy
+      mod's answer when one gives it, the game's own rule when none does. A plain line reaches the
+      speaker's force alone, so it is private to that force once a second force has players.
+      Update the service with the companion: an older service ignores these fields.
+    - The game's rule keeps a private line under its force name only on a server with no chat
+      privacy mod. Where one is installed, a force may have passed from one group to another, so
+      a line no such mod answers for, or one a failing mod may have kept private, still reaches
+      the speaker's force alone but is kept under global, where nobody reads it back. A question
+      asked with the chat prefix on it reads public history alone.
+    - The first line of every session in events.jsonl is a session event with a map id. The id is
+      made once per map, from the map seed, the tick and a random number, and kept in the save, so
+      the service can tell a new map from an older save of the same one.
+    - The status reply carries the same map id, so the service knows the map before any event is
+      written. On a save from before map ids, a status that comes first makes the id.
+    - An artifact that would print nothing, its title and every line, item or cell blank, is
+      refused as bad_artifact, so a question is never closed with a blank chat line.
   Bugfixes:
     - A sprite tag naming something the game has no sprite for printed raw, brackets and all: the
       model wrote [img=entity.biter] for a kind of enemy that has no prototype of that name, and
-      planet.* is not a sprite path at all, so every planet icon asked for printed raw too. A tag
-      whose sprite the game cannot draw is dropped, a planet path is read as the space location it
-      is, and a clickable tag for an unknown prototype prints its plain name.
+      planet.* is not a sprite path at all. Every such tag is now repaired: a planet path is read
+      as its space location, a name in the wrong class finds its own (item.crude-oil is a fluid),
+      a plural or a capital is respelled, and a name players give a science pack, circuit or belt
+      finds the item they mean, so [img=item.red-transport-belt] shows the fast-transport-belt
+      icon. Failing all of that the tag prints as its plain words, so "[img=entity.biter] attacks"
+      reads "biter attacks" instead of losing its subject. A clickable tag ends at its plain name.
+    - A question asked with the chat prefix went to everyone while its chat line reached the
+      speaker's force alone: with two populated forces and no chat privacy mod, its text was
+      public in history and its answer printed to the whole server. It now takes its line's scope
+      and stays inside that force. Questions asked with /ask are unchanged.
+    - With aab-answer-audience set to asker, an answer whose asker had left printed to the whole
+      server. It now prints to nobody, and the log says so.
+    - A chat scope provider's tag or label, or a force label, past its length cap was cut by bytes
+      and could end inside a character. Each is now cut on a character boundary.
+    - A chat scope provider's key past 64 bytes was cut, so two keys sharing their first 64 bytes
+      became one audience and read each other's private history. A longer key is now refused, and
+      its answer is kept private under a key no question reads with.
+    - A chat line was logged public when one chat scope provider failed and another answered
+      global, though the one that failed may have kept it private. The line now falls to the
+      game's own force rule unless a provider answered private, and a question asked with the
+      chat prefix follows its line. Questions asked with /ask are unchanged.
+    - A chat scope provider answering private = 1 or "true" was read as public. Anything but false
+      or nil now reads as private, the way the service reads it.
+    - The question event in events.jsonl logged the whole question text while the question kept
+      its first 400 bytes. The event now logs the same 400 bytes.
+    - A chat scope provider's tag past 200 bytes could be cut inside a rich-text tag, and the
+      answer's first line printed raw. The cut now drops a torn tag and closes an open colour or
+      font, all within the 200 bytes.
+  Modding:
+    - chat_scope_v1 is asked about every chat line the events file records as well as every
+      question. Return nil when you do not know, and the game's force rule applies: a line it makes
+      private is kept where no question reads it back. Return global only when the text really
+      reached everyone. A private key is read back for as long as the service keeps history, so
+      it must name one audience: add a generation if names are reused.
+    - chat_scope_v1: a key is opaque, compared whole, at most 64 bytes. A longer key is refused,
+      not cut, and its answer read as private under global.
+    - chat_scope_v1: private is read as private unless it is false or nil. A provider that errors
+      no longer counts as nil for a chat line: another provider's global answer then gives way to
+      the game's force rule. A scope handed to ai-agent-bridge-v1.ask is read the same way.
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.5
 Date: 2026-09-16

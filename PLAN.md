@@ -13,6 +13,13 @@ platform ownership in `list_surfaces` and the briefing. The companion stays at
 is written and waiting. The design and the decisions behind it are in
 [docs/design/phase5-sweep.md](docs/design/phase5-sweep.md).
 
+Status, 2026-10-11: built and verified on a live-save copy, uncommitted and
+unreleased, on top of 1.0.5: `recipe_needs`, the MTS records tools, team chat
+privacy with map epochs, bigger answer caps with refuse-and-rewrite, the icon
+repair chain and a server-wide personality. The designs are in
+[docs/design/recipe-needs-spec.md](docs/design/recipe-needs-spec.md), which
+carries Parts 1 to 4. No version is bumped until the owner asks.
+
 AAB is two halves. A Factorio companion mod exposes a tiny protocol over a
 console command. A Go service, one per server, drives that protocol over RCON:
 it picks up questions players ask in chat, runs an AI agent whose tools are
@@ -29,8 +36,10 @@ Each decision has a fuller record in `docs/adr/`.
   console command the service invokes, on an already-slow RCON round trip.
 - The service is the only party that polls: the questions still unanswered, a
   page at a time, at a short interval, against a pure-read operation. The
-  companion decides what is still pending, so the service keeps no cursor and a
-  restart resumes instead of replaying.
+  companion decides what is still pending, so a restart resumes instead of
+  replaying. The one exception is an outage: after a call gets no reply the
+  service starts again from the first question before it answers anything,
+  because a restart may have loaded another map (decision 4).
 - Works against a hosted server with no shell on the box, because RCON is the
   only path in and out that every host exposes.
 - Removes the whole `on_load` and registry problem: nothing is discovered or
@@ -56,8 +65,16 @@ Each decision has a fuller record in `docs/adr/`.
 **4. History lives in the service.**
 - The companion appends deaths, alerts, chat, joins, research and rockets to
   `events.jsonl`, server-side only, exactly as the Discord bridge does.
-- The service tails that file, locally or over SFTP, into SQLite and keeps the
-  whole history of a save. "Production since I last died" is a tool.
+- The service tails that file, locally or over SFTP, into SQLite. One file
+  keeps every map's rows, and every read covers the current map epoch only: a
+  `session` line (and the status `map_id`) names the map, and another map starts
+  a new epoch, so a recycled force or channel name never reads an earlier map's
+  rows. "Production since I last died" is a tool.
+- Every row records the scope it was said in. A private row, a chat line or a
+  question said privately, reaches only a question asked privately in the same
+  scope key. A question asked in the open reads public rows only. The store
+  applies this in SQL on every read, and a row it cannot place reads as private
+  to nobody. See docs/design/recipe-needs-spec.md, Part 3.
 - Production history itself comes from the engine's flow statistics, read live.
 
 **5. The operator brings the key and picks the model.**
@@ -102,10 +119,16 @@ Each decision has a fuller record in `docs/adr/`.
   per-network read.
 - A round becomes one RCON trip: a new `calls` op carries a whole round's
   tool calls in one command, replacing N serialized round trips with one.
-- Voice is deliberately small: one setting, `personality`, off by default,
-  whose only other value turns on a short fixed flavour string the service
-  owns. A configurable, free-text or per-player personality system was
-  proposed and cancelled.
+- Voice is one server-wide setting, `personality`, off by default. The map's
+  runtime-global setting `aab-personality` rides on every question and wins
+  over the operator's `agent.personality`; an admin changes it with
+  `/aab-personality`. Its value is `off`, a preset the service owns (`factorio`)
+  or one short line of free text, sanitised and always followed by a guard
+  sentence so flavour never changes a number, a unit, an item name or a table
+  cell. It sits last in the system prompt. A per-player voice and any system
+  that rewords an answer after the fact stay cancelled. (This reverses the
+  earlier "fixed string, no free text" ruling; docs/design/phase4-spec.md
+  section 16 is superseded by `service/internal/agent/voice.go`.)
 
 ## The protocol, aab-rpc-v1
 
@@ -115,15 +138,15 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 
 | op | request | reply `r` | writes storage |
 |---|---|---|---|
-| `status` | `{}` | protocol version, mod version, tick, player count, pending question count, highest question id issued (`last_id`) | no |
+| `status` | `{}` | protocol version, mod version, tick, player count, pending question count, highest question id issued (`last_id`), and `map_id`, the id the `session` event names (optional: an older companion sends none) | only the map id, once, on a save that has none yet |
 | `tools` | `{}` | sorted list of `{iface, v, tools}` per provider, manifests verbatim | no |
 | `providers` | `{}` | sorted list of `{iface, v, tools: [names]}`, one small row per provider | no |
 | `manifest` | `{i}` | one provider's manifest verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope`, `private`, the asker's `surface` (the one they look at) and `physical_surface` when it differs (Phase 3) | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope`, `private`, the asker's `surface` (the one they look at) and `physical_surface` when it differs (Phase 3), and `personality`, the map's `aab-personality` setting as it was when the question was asked | no |
 | `labels` | `{}` | sorted `{name, label}` rows for every force a labels provider names (Phase 3) | no |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
-| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer` |
+| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer`. An artifact that would print nothing is refused as `bad_artifact` |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
 `provider_error`, `bad_result`, `too_large`, `no_question`, `bad_artifact`.
@@ -258,8 +281,9 @@ Permissioned acting tools. Sub-agents on a cheaper model.
     per-round timing data yet. The observability ledger
     (docs/design/phase4-observability-spec.md) is built to settle it, and
     which side wins changes the priority order of the Phase 4 work.
-11. **MTS needs a records tool for tech records and milestones.** Current
-    plan: a cross-repo follow-up, not an AAB change. MTS milestone and record
+11. **MTS needs a records tool for tech records and milestones.** Built
+    2026-10-11, unreleased (docs/design/recipe-needs-spec.md, Part 2): `records`,
+    `record_chase` and `player_teams` on the `mts-v1` manifest. The plan was: a cross-repo follow-up, not an AAB change. MTS milestone and record
     announcements go through a per-player broadcast helper that calls
     `player.print`, not `game.print`, so `on_console_chat` never fires and
     `recent_chat` cannot see them and never could. The fix is an `mts-v1`

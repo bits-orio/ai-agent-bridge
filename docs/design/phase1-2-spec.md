@@ -14,7 +14,7 @@ again when rendering.
 
 | shape | fields | caps |
 |---|---|---|
-| `summary` | `title?`, `lines: string[]` | 3 lines, 160 chars each |
+| `summary` | `title?`, `lines: string[]` | 3 lines, 320 chars each |
 | `notice` | `text`, `level?: "warning" or "confirmation"` | 1 line |
 | `list` | `title?`, `items: string[]` | 10 items |
 | `table` | `title?`, `columns: string[]`, `rows: string[][]` | 5 columns, 8 rows |
@@ -216,9 +216,12 @@ command limit and the 4 KB packet limit were gorcon's, not the game's.
    server tests. `rcon.MaxCommandLen` becomes 262144 with a comment citing
    the measurement. Empty commands are still refused locally.
 2. **Answer budget.** `agent.validate` enforces a total marshalled artifact
-   size of at most 6000 bytes by dropping trailing rows or items and then
-   shortening cells, after the shape caps. Cells are capped at 160 runes in
-   Go; the companion clips at 640 bytes on a UTF-8 boundary as a safety net.
+   size of at most 12000 bytes by dropping trailing rows or items and then
+   shortening cells, after the shape caps. Cells are capped at 320 runes in
+   Go; the companion clips at 1280 bytes on a UTF-8 boundary as a safety net.
+   Both were 160 runes, 6000 bytes and 640 bytes until 2026-10-11, when two live
+   answers ran past the cell cap. An answer over a cap goes back to the model to
+   rewrite, at most twice, before it is cut (recipe-needs-spec.md, Part 4).
 3. **poll.** Request `{after?, limit?}`: oldest unanswered questions with id
    greater than `after` (default 0), at most `limit` (default 16, max 64).
    Rows gain `player_name`. The service always polls with `after` 0, keeps an

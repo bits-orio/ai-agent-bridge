@@ -9,19 +9,43 @@
 -- answered with `answer`. Bounded at RING_SIZE so a server nobody polls for a
 -- while can't grow storage without limit.
 
-local events        = require("scripts.events")
-local player_lookup = require("scripts.player_lookup")
-local scope         = require("scripts.scope")
-local audience      = require("scripts.audience")
-local ask_rate      = require("scripts.ask_rate")
+local events          = require("scripts.events")
+local player_lookup   = require("scripts.player_lookup")
+local scope           = require("scripts.scope")
+local chat_visibility = require("scripts.chat_visibility")
+local audience        = require("scripts.audience")
+local ask_rate        = require("scripts.ask_rate")
+local personality     = require("scripts.personality")
+local text_clip       = require("scripts.text_clip")
 
 local RING_SIZE = 64
+
+-- Longest question text kept, in bytes. Sixteen questions of this size, each
+-- with a personality at its own cap, still fit one poll reply under the rpc
+-- reply cap; anything longer is cut on a UTF-8 boundary rather than refused,
+-- so a long-winded asker still gets an answer to the start of what they typed.
+local MAX_TEXT_BYTES = 400
 
 local M = {}
 
 function M.ensure_storage()
   storage.aab = storage.aab or {}
   storage.aab.q = storage.aab.q or { next_id = 1, ring = {} }
+end
+
+--- The chat scope, fixed when the question is made (docs/design/phase3-spec.md
+--- part 2). A caller may hand one in, a mod asking for a channel of its own.
+--- A question made from a chat line takes that line's scope: with no provider
+--- answering, a line on a server with two populated forces reached only the
+--- speaker's force, so its question and answer stay there too. Any other
+--- question from a player is resolved from the providers, and the rest are
+--- global.
+local function scope_of(spec, player, player_index, text)
+  if type(spec.scope) == "table" then return spec.scope end
+  local line = type(spec.line) == "string" and spec.line or nil
+  if line and player then return chat_visibility.scope_of_line(player, line) end
+  if player_index then return scope.resolve(player_index, line or text) end
+  return { key = scope.GLOBAL_KEY, private = false }
 end
 
 --- Creates a question. spec = { text, player_index?, force?, scope? }. Returns the
@@ -31,29 +55,12 @@ end
 --- should not crash that caller. force and player_index are kept only when
 --- they carry the right type, because a row that cannot be encoded to JSON
 --- would fail every later poll, not just this caller's own call.
--- Longest question text kept, in bytes. Sixteen questions of this size still
--- fit one poll reply under the rpc reply cap; anything longer is cut on a
--- UTF-8 boundary rather than refused, so a long-winded asker still gets an
--- answer to the start of what they typed.
-local MAX_TEXT_BYTES = 400
-
-local function clip_utf8(s, n)
-  if #s <= n then return s end
-  local cut = n
-  -- Step back over continuation bytes (10xxxxxx) so the cut never lands
-  -- inside a multi-byte character.
-  while cut > 1 and s:byte(cut + 1) and s:byte(cut + 1) >= 0x80 and s:byte(cut + 1) < 0xC0 do
-    cut = cut - 1
-  end
-  return s:sub(1, cut)
-end
-
 function M.ask(spec)
   if type(spec) ~= "table" or type(spec.text) ~= "string" or spec.text == "" then
     return nil
   end
   M.ensure_storage()
-  local text = clip_utf8(spec.text, MAX_TEXT_BYTES)
+  local text = text_clip.bytes(spec.text, MAX_TEXT_BYTES)
   local player_index = type(spec.player_index) == "number" and spec.player_index or nil
   local force = type(spec.force) == "string" and spec.force or nil
   -- Looked up once, here, and stored: the asker may have left by the time the
@@ -69,12 +76,11 @@ function M.ask(spec)
   local physical = player and player.physical_surface and player.physical_surface.valid
     and player.physical_surface.name or nil
   if physical == player_surface then physical = nil end
-  -- The chat scope, fixed here (docs/design/phase3-spec.md part 2). A caller
-  -- may hand one in (a mod asking for a channel of its own); a player's is
-  -- resolved from the providers; anything else is global.
-  local sc = type(spec.scope) == "table" and spec.scope or nil
-  if not sc and player_index then sc = scope.resolve(player_index, spec.line or text) end
-  sc = sc or { key = scope.GLOBAL_KEY, private = false }
+  local sc = scope_of(spec, player, player_index, text)
+  local key = type(sc.key) == "string" and sc.key or scope.GLOBAL_KEY
+  -- Read the way a provider's answer is: a mod handing in private = 1 asks
+  -- privately, it does not open the question to everyone.
+  local private = scope.is_private(sc.private)
 
   local q = storage.aab.q
   local qid = q.next_id
@@ -89,18 +95,23 @@ function M.ask(spec)
     force = force,
     tick = game.tick,
     answered = false,
-    scope = type(sc.key) == "string" and sc.key or scope.GLOBAL_KEY,
-    private = sc.private == true,
-    audience = sc.private == true and type(sc.audience) == "table" and sc.audience or nil,
+    scope = key,
+    private = private,
+    audience = private and type(sc.audience) == "table" and sc.audience or nil,
     tag = type(sc.tag) == "string" and sc.tag or nil,
+    -- The voice the answer is written in, as the setting stood when the
+    -- question was asked, so changing it never re-voices one in flight.
+    personality = personality.for_question(),
   }
   if #q.ring > RING_SIZE then
     table.remove(q.ring, 1)
   end
 
+  -- The text as kept, the same cut the poll row carries, so history holds
+  -- the question the service answered and never more of it.
   events.write("question", {
-    qid = qid, player = player_name, force = force, text = spec.text,
-    scope = sc.key, private = sc.private == true,
+    qid = qid, player = player_name, force = force, text = text,
+    scope = key, private = private,
   })
   return qid
 end

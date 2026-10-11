@@ -15,9 +15,9 @@ const (
 func (a *Agent) command(q Question, req Request, mark SessionMark, now time.Time) Result {
 	switch req.Command {
 	case CommandSessions:
-		return Result{Artifact: sessionsArtifact(a.sess.list(q.scope(), now)), Session: mark}
+		return Result{Artifact: sessionsArtifact(a.sess.list(q.pool(), now)), Session: mark}
 	case CommandNew:
-		a.sess.end(q.scope(), req.Name, now)
+		a.sess.end(q.pool(), req.Name, now)
 		mark.Fresh = true
 		label := "session"
 		if req.Name != "" {

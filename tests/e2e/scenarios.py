@@ -613,6 +613,237 @@ def scenario_production_since_start(ctx: Ctx) -> Tuple[Status, str]:
     return _ask_and_expect_field(ctx, "iron plate production since the start", '"produced":')
 
 
+RED_SCIENCE = "automation-science-pack"
+RED_RECIPE_LUA = 'game.forces.player.recipes["automation-science-pack"]'
+# Keys only a recipe_needs reply carries. The fake model echoes the first 300
+# characters of the result, and the engine's JSON writer picks the key order,
+# so the check is that one of these made it, not which one.
+RECIPE_NEEDS_KEYS = ('"productivity":', '"approx":', '"targets":', '"alternatives":',
+                     '"raw":', '"rows":', '"belt":', '"mode":')
+
+
+def _companion_iface(conn) -> Optional[str]:
+    """The interface carrying recipe_needs, found by its tool name the way
+    scenario_providers_and_manifest finds the companion's own provider,
+    without hardcoding companion-mod/scripts/tools/engine.lua's wiring."""
+    env = aab_rpc(conn, "providers")
+    if not env.get("ok"):
+        return None
+    for entry in as_list(env.get("r")):
+        if "recipe_needs" in (entry.get("tools") or []):
+            return entry.get("iface")
+    return None
+
+
+def _item_row(rows, item: str) -> Optional[dict]:
+    for row in as_list(rows):
+        if row.get("item") == item:
+            return row
+    return None
+
+
+def _figure(value) -> Optional[float]:
+    """A wire figure as a number: bounded.round sends whole numbers as
+    numbers and fractions as short decimal strings, "6.4"."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _recipe_needs_oracle_problem(r: dict) -> Optional[str]:
+    """None when one recipe_needs reply for 60 red science a minute on a
+    fresh freeplay force carries the oracle (2 iron plate and 1 copper plate a
+    pack) and the machines and belt that force can build at the start;
+    otherwise what is wrong. Ground truth is headless 2.0.77's own data:
+    recipe.lua enables the stone furnace and the yellow belt at the start and
+    no assembler, entities.lua gives the furnace speed 1 and iron plate 3.2 s."""
+    rows, raw = r.get("rows"), r.get("raw")
+    wants = [
+        ("iron-plate row per_min", _figure((_item_row(rows, "iron-plate") or {}).get("per_min")), 120.0),
+        ("copper-plate row per_min", _figure((_item_row(rows, "copper-plate") or {}).get("per_min")), 60.0),
+        ("iron-ore raw per_min", _figure((_item_row(raw, "iron-ore") or {}).get("per_min")), 120.0),
+        ("copper-ore raw per_min", _figure((_item_row(raw, "copper-ore") or {}).get("per_min")), 60.0),
+        ("stone furnaces for the iron plate", _figure((_item_row(rows, "iron-plate") or {}).get("machines")), 6.4),
+        ("belt per_sec", _figure((r.get("belt") or {}).get("per_sec")), 15.0),
+    ]
+    for what, got, want in wants:
+        if got is None or abs(got - want) > 1e-6:
+            return "%s is %r, want %r" % (what, got, want)
+    if (_item_row(rows, "iron-plate") or {}).get("machine") != "stone-furnace":
+        return "iron plate is not on the stone furnace, the only furnace a fresh force can build: %r" % (_item_row(rows, "iron-plate"),)
+    if (r.get("belt") or {}).get("name") != "transport-belt":
+        return "belt is not the yellow belt, the only one a fresh force can build: %r" % (r.get("belt"),)
+    pack = _item_row(rows, RED_SCIENCE) or {}
+    if pack.get("unlocked") is not False:
+        return "red science's assembler should be marked unlocked=false, a fresh force has none: %r" % (pack,)
+    return None
+
+
+def scenario_recipe_needs(ctx: Ctx) -> Tuple[Status, str]:
+    """recipe_needs (docs/design/recipe-needs-spec.md, part 1) on the live
+    engine: 60 red science a minute needs 120 iron plate and 60 copper plate
+    a minute.
+
+    A fresh 2.0 freeplay force cannot make red science yet: the
+    automation-science-pack recipe starts disabled and is unlocked by the
+    trigger technology of the same name (data/base/prototypes/recipe.lua and
+    technology.lua). So the scenario first checks that the tool says so, the
+    pack back as raw with recipe_locked, then enables that one recipe and
+    nothing else, checks the oracle by a direct call, asks the same question
+    through the service, and puts the recipe back however the checks went."""
+    conn = ctx.server_rcon
+    iface = _companion_iface(conn)
+    if iface is None:
+        return "FAIL", "no provider in the providers reply lists recipe_needs"
+    args = {"force": "player", "items": [RED_SCIENCE], "per_min": [60]}
+    was = sc(conn, "rcon.print(tostring(%s.enabled))" % RED_RECIPE_LUA).strip()
+    if was != "false":
+        return "FAIL", "expected red science locked on a fresh freeplay force, read enabled=%r" % was
+
+    locked = aab_rpc(conn, "call", i=iface, f="recipe_needs", a=args)
+    pack = _item_row(((locked.get("r") or {}).get("raw")), RED_SCIENCE) if locked.get("ok") else None
+    if not pack or pack.get("recipe_locked") is not True:
+        return "FAIL", "with its recipe locked, red science should come back raw with recipe_locked: %r" % (locked,)
+
+    sc(conn, "%s.enabled = true" % RED_RECIPE_LUA)
+    try:
+        env = aab_rpc(conn, "call", i=iface, f="recipe_needs", a=args)
+        if not env.get("ok"):
+            return "FAIL", "direct recipe_needs call failed: %r" % (env,)
+        problem = _recipe_needs_oracle_problem(env.get("r") or {})
+        if problem:
+            return "FAIL", "%s: %r" % (problem, env.get("r"))
+
+        qid = ask_via_remote(conn, "recipe needs: 60 red science a minute", force="player")
+        try:
+            entry = poll_for_answer(conn, qid, ctx.answer_timeout, ctx.poll_interval)
+        except (TimeoutError, RpcError) as e:
+            return "FAIL", str(e)
+    finally:
+        sc(conn, "%s.enabled = false" % RED_RECIPE_LUA)
+
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    lines = " | ".join(entry.get("lines") or [])
+    if not any(key in lines for key in RECIPE_NEEDS_KEYS):
+        return "FAIL", "qid=%d answer carried none of recipe_needs's own keys: %r" % (qid, entry)
+    return "PASS", "locked pack came back raw; with its recipe on, 60 red a minute needs 120 iron plate and 60 copper plate on 6.4 stone furnaces; qid=%d answered %r" % (
+        qid, entry.get("lines"))
+
+
+PIRION_PACKS = ["chemical-science-pack", "automation-science-pack", "logistic-science-pack"]
+# The asker: a synthetic, never-connected player of the player force, the way
+# scenario_quota asks (questions.lua stores any player_index). The quota is
+# keyed on it, so this question leaves alone the player force's own hourly
+# allowance of 20, which the questions ahead of scenario_quota already spend
+# 19 of when a client is connected.
+PIRION_INDEX = 900002
+PIRION_MACHINES = [48, 24, 24]
+PLATES = ("iron-plate", "copper-plate")
+ENABLED_RECIPES_LUA = ('local t = {} for name, r in pairs(game.forces.player.recipes) do '
+                       'if r.enabled then t[#t + 1] = name end end table.sort(t) '
+                       'rcon.print(helpers.table_to_json(t))')
+
+
+def _enabled_recipes(conn) -> List[str]:
+    """The player force's enabled recipe names, sorted. An empty list comes
+    back from the engine's JSON writer as {}, hence as_list."""
+    return as_list(json.loads(sc(conn, ENABLED_RECIPES_LUA)))
+
+
+def _restore_recipes(conn, before: List[str]) -> Optional[str]:
+    """Puts the player force's recipes back as `before` had them, after
+    enable_all_recipes, by setting every recipe's enabled flag to what it
+    was. LuaForce::reset_recipes does not undo enable_all_recipes on 2.0.77:
+    measured, every recipe stayed enabled after it. None when the enabled
+    set matches again, otherwise what differs."""
+    sc(conn, "local keep = {} for _, n in ipairs(helpers.json_to_table(%s)) do keep[n] = true end "
+             "for name, r in pairs(game.forces.player.recipes) do r.enabled = keep[name] == true end"
+       % lua_str(json.dumps(before)))
+    after = _enabled_recipes(conn)
+    if after != before:
+        return "enabled %r, disabled %r" % (sorted(set(after) - set(before)), sorted(set(before) - set(after)))
+    return None
+
+
+def _table_cells(line: str) -> List[str]:
+    """One rendered table line as its cells, as the model wrote them: the
+    companion sets a table in its monospace font, pads every column, and
+    turns a bare prototype name into its icon (sprites.decorate:
+    iron-plate becomes [img=item.iron-plate]), so the font tags and the
+    padding come off and an icon reads as its name again."""
+    text = re.sub(r"\[/?font[^\]]*\]", "", line)
+    text = re.sub(r"\[img=[a-z-]+\.([^\]]+)\]", r"\1", text)
+    return [cell.strip() for cell in text.split("|")]
+
+
+def _plate_problem(lines: List[str], rows) -> Optional[str]:
+    """None when the answer's table carries an iron plate and a copper plate
+    row, each with the figure a direct recipe_needs call gave for it."""
+    for item in PLATES:
+        want = _figure((_item_row(rows, item) or {}).get("per_min"))
+        cells = next((c for c in map(_table_cells, lines) if c and c[0] == item), None)
+        if cells is None:
+            return "no %s row in the answer" % item
+        got = _figure(cells[1]) if len(cells) > 1 else None
+        if want is None or got is None or abs(got - want) > 1e-6 * max(1.0, abs(want)):
+            return "%s is %r a minute in the answer, %r in a direct call" % (item, got, want)
+    return None
+
+
+def scenario_recipe_needs_science_belts(ctx: Ctx) -> Tuple[Status, str]:
+    """Pirion's question end to end (docs/design/recipe-needs-spec.md, stage
+    4): "I have 48 blue science, 24 red, 24 green; how much iron and copper?"
+    The fake model reads "science belts" as recipe_needs with the three packs
+    as machine counts, 48, 24, 24, on nauvis, and answers with a table of the
+    iron plate and copper plate rows the tool returned.
+
+    A fresh freeplay force cannot make those packs, so the scenario enables
+    every recipe for the player force (LuaForce::enable_all_recipes), checks
+    a direct call has both plate rows, asks the question through the service,
+    and requires the answer's rows to carry the direct call's figures. Then
+    LuaForce::reset_recipes, plus whatever research had enabled before, puts
+    the force back however the checks went, and the scenario fails if the
+    enabled set differs afterwards."""
+    conn = ctx.server_rcon
+    iface = _companion_iface(conn)
+    if iface is None:
+        return "FAIL", "no provider in the providers reply lists recipe_needs"
+    args = {"force": "player", "items": PIRION_PACKS, "machines": PIRION_MACHINES, "surface": "nauvis"}
+    before = _enabled_recipes(conn)
+    sc(conn, "game.forces.player.enable_all_recipes()")
+    entry, restored = None, None
+    try:
+        env = aab_rpc(conn, "call", i=iface, f="recipe_needs", a=args)
+        if not env.get("ok"):
+            return "FAIL", "direct recipe_needs call failed: %r" % (env,)
+        rows = (env.get("r") or {}).get("rows")
+        missing = [item for item in PLATES if _item_row(rows, item) is None]
+        if missing:
+            return "FAIL", "with every recipe enabled, a direct call has no %s row: %r" % (", ".join(missing), env.get("r"))
+        qid = ask_via_remote(conn, "science belts: I have 48 blue science, 24 red and 24 green. How much iron and copper?",
+                             player_index=PIRION_INDEX, force="player")
+        try:
+            entry = poll_for_answer(conn, qid, ctx.answer_timeout, ctx.poll_interval)
+        except (TimeoutError, RpcError) as e:
+            return "FAIL", str(e)
+    finally:
+        restored = _restore_recipes(conn, before)
+    if restored:
+        return "FAIL", "the player force's recipes were not put back: %s" % restored
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    lines = entry.get("lines") or []
+    plates = _plate_problem(lines, rows)
+    if plates:
+        return "FAIL", "qid=%d %s: %r" % (qid, plates, entry)
+    return "PASS", "Pirion's three packs by machine count, all recipes on: the answer's plate rows match a direct call; qid=%d answered %r" % (
+        qid, lines)
+
+
 def scenario_chat_prefix(ctx: Ctx) -> Tuple[Status, str]:
     if ctx.client_player_index is None:
         return "SKIP", "needs --client (a connected player)"
@@ -977,6 +1208,8 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask: pollution on nauvis", scenario_pollution),
     Scenario("ask: iron plate production since the start", scenario_production_since_start),
     Scenario("ask: where are the labs on nauvis", scenario_find_entities),
+    Scenario("recipe_needs: 60 red science a minute, oracle and ask", scenario_recipe_needs),
+    Scenario("recipe_needs: science belts, Pirion's three packs by machine count", scenario_recipe_needs_science_belts),
     Scenario("answer op: malformed artifact -> bad_artifact", scenario_answer_bad_artifact),
     Scenario("answer op: large table artifact accepted", scenario_answer_large_table),
     Scenario("chat prefix creates a question", scenario_chat_prefix, needs_client=True),

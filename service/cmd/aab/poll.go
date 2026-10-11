@@ -17,6 +17,13 @@ import (
 const pollLimit = 16
 
 func (r *runner) tick(ctx context.Context) {
+	r.ticks++
+	// The look comes before the poll, so a cursor the game went back under
+	// is reset before it is used, and after an outage it is the first
+	// contact: nothing is answered before the service has started again.
+	if (r.lost || r.ticks%statusEvery == 0) && !r.look(ctx) {
+		return
+	}
 	limit := r.pageSize()
 	questions, err := r.rpc.Poll(ctx, r.after, limit)
 	if err != nil {
@@ -24,8 +31,15 @@ func (r *runner) tick(ctx context.Context) {
 			r.shrinkPage(limit)
 			return
 		}
-		r.stats.SetConnected(false)
 		r.pollFailed(err)
+		return
+	}
+	if r.reconnected() {
+		// The page came over a new connection: the last one broke since the
+		// last reply, and the client dialed again on its own, so a restart
+		// between the two would go unseen. Nothing on the page is answered;
+		// the next tick looks first and starts again.
+		r.lost = true
 		return
 	}
 	r.growPage(limit)

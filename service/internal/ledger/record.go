@@ -21,6 +21,30 @@ const (
 	VoiceOff = "off"
 )
 
+// VoiceCustom is the voice a question records when it ran in the operator's
+// own free-text voice. A preset voice records its own name, "factorio".
+// The free text itself is never recorded: it is the operator's, and long.
+const VoiceCustom = "custom"
+
+// Why a round refused a submit_answer call: SubmitRefusal.Kind.
+const (
+	// RefusedOverCap: the answer was over a cap and the model had a round
+	// left to rewrite it in.
+	RefusedOverCap = "over_cap"
+	// RefusedInvalid: not an artifact the game can show, a bad shape or
+	// arguments that are not one.
+	RefusedInvalid = "invalid"
+	// RefusedBesideReads: sent in the same round as lookups, so written
+	// before their results came back.
+	RefusedBesideReads = "beside_reads"
+	// RefusedSecondSubmit: a later submit_answer in a round whose earlier
+	// one was already taken.
+	RefusedSecondSubmit = "second_submit"
+	// RefusedLookupCap: the round asked for more lookups than the question
+	// had left, so every call in it was refused, this one too.
+	RefusedLookupCap = "lookup_cap"
+)
+
 // QuestionRecord is the per-question line: one appended after every
 // question the service finishes with, whatever the ending (a real answer,
 // a refusal, an ask-back, or the model itself failing).
@@ -68,7 +92,16 @@ type QuestionRecord struct {
 	// in the write path the same way a ToolCall's Error is (clip.go).
 	ModelError *string `json:"model_error"`
 
+	// Voice is the voice the question ran in: "off", a preset's own name,
+	// or "custom" for the operator's free text. The question's in-game
+	// setting wins over the config when it has one.
 	Voice string `json:"voice"`
+
+	// Clipped is true when the answer the player got was over a cap and
+	// went out cut at a word boundary with an ellipsis: the model had no
+	// round left to rewrite it, the question ended before a rewrite came
+	// back, or the model answered in prose too long for a summary.
+	Clipped bool `json:"clipped"`
 }
 
 // NewQuestionRecord returns a QuestionRecord with every not-yet-shipped
@@ -108,6 +141,21 @@ type RoundRecord struct {
 
 	StopReason string     `json:"stop_reason"`
 	ToolCalls  []ToolCall `json:"tool_calls"`
+
+	// SubmitRefusals is every submit_answer call this round refused, in the
+	// order the model made them, with the text it was sent back. Omitted on
+	// a round that refused none, which is nearly every round. A question
+	// that loops on refused answers until its rounds run out says why here:
+	// one did exactly that on an upstream host, and neither the log nor the
+	// ledger could say why.
+	SubmitRefusals []SubmitRefusal `json:"submit_refusals,omitempty"`
+}
+
+// SubmitRefusal is one refused submit_answer call: one of the Refused* kinds,
+// and the reason, the text the model read back.
+type SubmitRefusal struct {
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
 }
 
 // ToolCall is one entry of a round's tool_calls array.

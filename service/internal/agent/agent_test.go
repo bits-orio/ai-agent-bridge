@@ -213,7 +213,9 @@ func TestAnswerEnforcesQuota(t *testing.T) {
 	}
 }
 
-// An oversized artifact is clipped to the caps rather than refused.
+// An oversized artifact is sent back while the model has a round left, and
+// clipped to the caps only on the last: a model that keeps sending the same
+// five long lines gets three, each cut with the ellipsis inside the cap.
 func TestAnswerClipsTheArtifact(t *testing.T) {
 	long := strings.Repeat("x", 400)
 	m := &scriptedModel{steps: []model.Step{submitStep("t1", map[string]any{
@@ -226,12 +228,15 @@ func TestAnswerClipsTheArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("answer: %v", err)
 	}
+	if want := maxOverCapRefusals + 1; res.Rounds != want || m.calls != want {
+		t.Fatalf("rounds = %d and model calls = %d, want %d: refused twice, then cut", res.Rounds, m.calls, want)
+	}
 	if len(res.Artifact.Lines) != MaxSummaryLines {
 		t.Fatalf("lines = %d, want %d", len(res.Artifact.Lines), MaxSummaryLines)
 	}
 	for i, line := range res.Artifact.Lines {
-		if len([]rune(line)) != MaxCellChars {
-			t.Errorf("line %d is %d characters, want %d", i, len([]rune(line)), MaxCellChars)
+		if len([]rune(line)) != MaxCellChars || !strings.HasSuffix(line, ellipsis) {
+			t.Errorf("line %d is %d characters, want %d ending with the ellipsis", i, len([]rune(line)), MaxCellChars)
 		}
 	}
 }
@@ -725,5 +730,101 @@ func TestReadDoesNotGuessBetweenTwoProviders(t *testing.T) {
 	}
 	if rec.CorrectedFrom != "" || rec.OK {
 		t.Errorf("ledger record = %+v, want an uncorrected failed call", rec)
+	}
+}
+
+// The rig's slips on 2026-10: a prefix on top of a prefix,
+// "ai-agent-bridge-tools__mts-v1__records", and a typo,
+// "mts-v1__player_teems", each a round. Each slip is corrected when exactly
+// one tool fits it, and only then.
+func TestDidYouMeanCorrectsDoubledAndWrongPrefixesAndTypos(t *testing.T) {
+	byName := map[string]tools.Tool{}
+	for _, name := range []string{
+		"catch_up", "recent_chat", "recent_events",
+		"mts-v1__records", "mts-v1__player_teams", "mts-v1__team", "mts-v1__teams",
+		"mts-v1__standings", "other-mod__standings",
+		"ai-agent-bridge-tools__rockets",
+	} {
+		byName[name] = tools.Tool{Name: name}
+	}
+	for _, tc := range []struct{ asked, want, why string }{
+		{"ai-agent-bridge-tools__mts-v1__records", "mts-v1__records", "a prefix on top of the right one, the live case"},
+		{"ai-agent-bridge-tools__mts-v1__standings", "mts-v1__standings", "the same, where another provider offers the function too"},
+		{"mts-v1__mts-v1__records", "mts-v1__records", "the right prefix twice"},
+		{"ai-agent-bridge-tools__mts-v1__catch_up", "catch_up", "two prefixes on a bare tool"},
+		{"ai-agent-bridge-tools__records", "mts-v1__records", "another provider's prefix"},
+		{"mts_v1__records", "mts-v1__records", "a prefix misspelt"},
+		{"ai-agent-bridge-tools__standings", "", "a wrong prefix on a function two providers offer"},
+		{"mts-v1__player_teems", "mts-v1__player_teams", "a typo, the live case"},
+		{"mts-v1__recrods", "mts-v1__records", "two letters swapped"},
+		{"recent_chats", "recent_chat", "a letter too many"},
+		{"recent_event", "recent_events", "a letter too few"},
+		{"mts-v1__teamz", "", "a typo two tools fit"},
+		{"rec_chat", "", "three edits is no slip"},
+		{"player_teems", "", "a dropped prefix and a typo at once"},
+	} {
+		if got := didYouMean(tc.asked, byName); got != tc.want {
+			t.Errorf("didYouMean(%q) = %q, want %q (%s)", tc.asked, got, tc.want, tc.why)
+		}
+	}
+}
+
+// editsApart counts single-byte insertions, deletions and substitutions,
+// and stops counting past its limit.
+func TestEditsApart(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want int
+	}{
+		{"teams", "teams", 0},
+		{"teems", "teams", 1},
+		{"team", "teams", 1},
+		{"teams", "team", 1},
+		{"recrods", "records", 2},
+		{"", "ab", 2},
+		{"abc", "", 3},
+		{"kitten", "sitting", 3},
+	} {
+		if got := editsApart(tc.a, tc.b, 10); got != tc.want {
+			t.Errorf("editsApart(%q, %q) = %d, want %d", tc.a, tc.b, got, tc.want)
+		}
+		if got := editsApart(tc.a, tc.b, 1); got != min(tc.want, 2) {
+			t.Errorf("editsApart(%q, %q, limit 1) = %d, want %d", tc.a, tc.b, got, min(tc.want, 2))
+		}
+	}
+}
+
+// A corrected slip runs the tool it was corrected to, once, and the ledger
+// keeps the name the model asked for beside the one that ran.
+func TestReadRunsTheToolASlipWasCorrectedTo(t *testing.T) {
+	ran := map[string]int{}
+	tool := func(name string) tools.Tool {
+		return tools.Tool{Name: name, Description: "x", Schema: tools.ObjectSchema(map[string]any{}),
+			Call: func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+				ran[name]++
+				return json.RawMessage(`{"ok":true}`), nil
+			}}
+	}
+	byName := map[string]tools.Tool{}
+	for _, name := range []string{"mts-v1__records", "mts-v1__player_teams", "mts-v1__team", "mts-v1__teams"} {
+		byName[name] = tool(name)
+	}
+	for asked, want := range map[string]string{
+		"ai-agent-bridge-tools__mts-v1__records": "mts-v1__records",
+		"mts-v1__player_teems":                   "mts-v1__player_teams",
+	} {
+		call := model.Block{Type: model.BlockToolUse, ID: "t1", Name: asked, Input: json.RawMessage(`{}`)}
+		block, rec := read(context.Background(), call, byName, "team-1", 4096, func() time.Duration { return 0 }, true)
+		if block.IsError || ran[want] != 1 {
+			t.Errorf("%s: block %+v, %s ran %d time(s), want once", asked, block, want, ran[want])
+		}
+		if rec.Name != want || rec.CorrectedFrom != asked || !rec.OK {
+			t.Errorf("%s: ledger record = name %q corrected_from %q ok %v, want %q corrected from %q", asked, rec.Name, rec.CorrectedFrom, rec.OK, want, asked)
+		}
+	}
+	call := model.Block{Type: model.BlockToolUse, ID: "t2", Name: "mts-v1__teamz", Input: json.RawMessage(`{}`)}
+	block, rec := read(context.Background(), call, byName, "team-1", 4096, func() time.Duration { return 0 }, true)
+	if !block.IsError || !strings.Contains(block.Content, "there is no tool named") || rec.CorrectedFrom != "" || ran["mts-v1__team"]+ran["mts-v1__teams"] != 0 {
+		t.Errorf("a typo two tools fit ran %v and recorded %+v; want an error and no call", ran, rec)
 	}
 }

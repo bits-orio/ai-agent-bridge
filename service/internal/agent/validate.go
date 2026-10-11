@@ -1,6 +1,14 @@
-// Validation and clipping of a submitted artifact. An error here is handed
-// straight back to the model as a failed tool result, so every message is
-// written to tell it what to send instead.
+// Validation and cutting of a submitted artifact. A shape the game cannot show
+// is an error handed straight back to the model as a failed tool result, so
+// every message is written to tell it what to send instead.
+//
+// Length is a different matter. validate never refuses an answer for being
+// long: it cuts it to the caps with an ellipsis, between words wherever that
+// keeps at least half the cap (clipRichText). Whether the cut copy goes out at
+// all is the loop's call (agent.go): while the model has a round left, an
+// answer over a cap is sent back to be rewritten, at most twice, with
+// overCaps saying what is over (overcaps.go), and only after that does the
+// cut copy reach the player.
 
 package agent
 
@@ -9,9 +17,20 @@ import (
 	"strings"
 )
 
-// validate clips an artifact to the caps and to the byte budget, and returns
-// the clipped copy or an error the model can act on.
+// validate checks an artifact's shape and returns the copy that goes to the
+// game: every cell on one line, every count and cell cut to its cap, and the
+// whole inside the byte budget.
 func validate(a Artifact) (Artifact, error) {
+	out, err := clipToCaps(a)
+	if err != nil {
+		return Artifact{}, err
+	}
+	return fit(out), nil
+}
+
+// clipToCaps is validate without the byte budget: the shape checked, every
+// cell flattened to one line, and every count and cell cut to its cap.
+func clipToCaps(a Artifact) (Artifact, error) {
 	out := Artifact{Shape: a.Shape, Title: cell(a.Title), ToAsker: a.ToAsker}
 	switch a.Shape {
 	case ShapeSummary:
@@ -62,10 +81,10 @@ func validate(a Artifact) (Artifact, error) {
 	default:
 		return Artifact{}, fmt.Errorf("shape %q is not a shape, use summary, notice, list, table or comparison", a.Shape)
 	}
-	return fit(out), nil
+	return out, nil
 }
 
-// tableRows clips to the row cap and squares every row off against the
+// tableRows cuts to the row cap and squares every row off against the
 // columns, padding short rows so the companion never indexes past the end.
 func tableRows(rows [][]string, columns int) [][]string {
 	if len(rows) > MaxTableRows {
@@ -106,10 +125,16 @@ func cells(in []string, max int) []string {
 	return out
 }
 
-// cell trims one string to the per-cell cap, counted in runes so a clip never
-// splits a character, and flattens any newline a model wrote into a space. The
-// companion clips again at 640 bytes on a UTF-8 boundary, which is the same
-// 160 cells' worth at four bytes a rune.
+// cell is one string on one line, cut to the per-cell cap (clipRichText).
+// Runes are counted, not bytes, so a cut never splits a character. The
+// companion cuts again at 1280 bytes on a UTF-8 boundary, which is the same
+// 320 runes' worth at four bytes a rune.
 func cell(s string) string {
-	return clipRichText(strings.Join(strings.Fields(strings.ReplaceAll(s, "\n", " ")), " "), MaxCellChars)
+	return clipRichText(flat(s), MaxCellChars)
+}
+
+// flat is a cell as the player reads it: every newline and run of spaces one
+// space, so a row a model wrote across two lines stays one chat line.
+func flat(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

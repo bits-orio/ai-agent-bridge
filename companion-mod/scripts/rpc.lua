@@ -10,9 +10,10 @@
 --
 -- Invariant (CONTEXT.md): this command never writes storage except the
 -- `answer` op (via questions.record_answer, and only once rendering has
--- succeeded) and the Phase 0 `write` op. `answers` reads back what `answer`
--- stored. The three catalog ops live in scripts/rpc_catalog.lua and are merged
--- into the same dispatch table below.
+-- succeeded), the Phase 0 `write` op, and `status` making the map id on a
+-- save that has none yet (scripts/map_id.lua), once. `answers` reads back
+-- what `answer` stored. The three catalog ops live in scripts/rpc_catalog.lua
+-- and are merged into the same dispatch table below.
 
 local probe          = require("scripts.probe")
 local questions      = require("scripts.questions")
@@ -23,6 +24,7 @@ local remote_iface   = require("scripts.remote")
 local render         = require("scripts.render")
 local labels         = require("scripts.labels")
 local events         = require("scripts.events")
+local map_id         = require("scripts.map_id")
 local selftest       = require("scripts.rpc_selftest")
 local catalog        = require("scripts.rpc_catalog")
 
@@ -48,6 +50,11 @@ local function err_reply(e, m) return { ok = false, e = e, m = m } end
 
 local OPS = {}
 
+-- map_id is the id the session event names, so the service knows which map
+-- it is talking to before any event is written. A save from before map ids
+-- has none until something makes it, and status may be first: an RCON
+-- command runs on every peer at the same tick, so every peer makes the same
+-- id, the way every peer does when an event handler makes it.
 function OPS.status(_req, _cmd)
   return ok_reply({
     protocol     = PROTOCOL_VERSION,
@@ -57,6 +64,7 @@ function OPS.status(_req, _cmd)
     pending      = questions.pending_count(),
     last_id      = questions.last_id(),
     ask_command  = ask_command.active_name(),
+    map_id       = map_id.ensure(),
   })
 end
 
@@ -109,9 +117,13 @@ function OPS.answer(req, _cmd)
 
   questions.record_answer(question, rendered)
   events.write("answer", { qid = req.qid, shape = rendered.shape })
+  -- scope and private are the question's, fixed when it was asked, so a
+  -- subscriber that relays answers elsewhere can keep a private one inside
+  -- its channel. Additive: older subscribers never read them.
   remote_iface.raise_answer({
     qid = req.qid, question = question.text, artifact = req.artifact,
     shape = rendered.shape, lines = rendered.lines,
+    scope = question.scope or "global", private = question.private == true,
   })
   return ok_reply(true)
 end

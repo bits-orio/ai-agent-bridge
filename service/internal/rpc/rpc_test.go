@@ -154,6 +154,31 @@ func TestStatusParsesReply(t *testing.T) {
 	}
 }
 
+// The map id is optional: an older companion sends none. A number reads as
+// its JSON text, the way history reads a session line's, and a value of any
+// other type reads as none rather than failing the status read the cursor
+// check and history both depend on.
+func TestStatusReadsTheMapID(t *testing.T) {
+	for field, want := range map[string]MapID{
+		``:                                 "",
+		`,"map_id":"2894571-0-1804289383"`: "2894571-0-1804289383",
+		`,"map_id":12345`:                  "12345",
+		`,"map_id":null`:                   "",
+		`,"map_id":true`:                   "",
+		`,"map_id":{"seed":1}`:             "",
+	} {
+		fake := &fakeRCON{resp: `{"ok":true,"r":{"tick":7,"last_id":2` + field + `}}`}
+		got, err := New(fake).Status(context.Background())
+		if err != nil {
+			t.Errorf("Status with %q: %v", field, err)
+			continue
+		}
+		if got.MapID != want || got.Tick != 7 || got.LastID != 2 {
+			t.Errorf("Status with %q = %+v, want map id %q, tick 7, last id 2", field, got, want)
+		}
+	}
+}
+
 func TestToolsParsesCatalog(t *testing.T) {
 	fake := &fakeRCON{resp: `{"ok":true,"r":[{"iface":"ai-agent-bridge-v1","v":1,"tools":{"list_forces":{"desc":"Every force."}}}]}`}
 	c := New(fake)
@@ -182,6 +207,20 @@ func TestPollParsesQuestions(t *testing.T) {
 		got[0].PlayerName != want[0].PlayerName ||
 		got[0].Force != want[0].Force || got[0].Tick != want[0].Tick {
 		t.Errorf("Poll() = %+v, want %+v", got, want)
+	}
+}
+
+// A question carries the map's voice setting as it stood when it was asked,
+// and one without it, from an older companion or an empty setting, reads as
+// none.
+func TestPollParsesTheQuestionsPersonality(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":true,"r":[{"id":5,"text":"status","tick":1,"personality":"Talk like a ship's captain"},{"id":6,"text":"status","tick":2}]}`}
+	got, err := New(fake).Poll(context.Background(), 4, 16)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(got) != 2 || got[0].Personality != "Talk like a ship's captain" || got[1].Personality != "" {
+		t.Errorf("Poll() = %+v, want the first question's personality and none on the second", got)
 	}
 }
 
@@ -308,5 +347,96 @@ func TestEmptyObjectDecodesAsEmptyList(t *testing.T) {
 	ps, err := c.Tools(context.Background())
 	if err != nil || len(ps) != 0 {
 		t.Fatalf("Tools() = %v, %v; want empty, nil", ps, err)
+	}
+}
+
+// Only a call that got no reply at all is Unreachable: a refusal, a reply in
+// a shape this client cannot read, or text from a server without the mod all
+// came from a server that was up for the whole round trip.
+func TestUnreachableIsOnlyACallWithNoReply(t *testing.T) {
+	down := errors.New("dial tcp 127.0.0.1:27015: connection refused")
+	_, err := New(&fakeRCON{err: down}).Status(context.Background())
+	if !Unreachable(err) {
+		t.Errorf("Unreachable(%v) = false for a failed round trip", err)
+	}
+	if !errors.Is(err, down) || err.Error() != "aab-rpc: status: "+down.Error() {
+		t.Errorf("err = %q, want the transport error wrapped as before", err)
+	}
+	for name, resp := range map[string]string{
+		"a refusal":                `{"ok":false,"e":"bad_op","m":"unknown op"}`,
+		"a reply it cannot read":   `{"ok":true,"r":"nope"}`,
+		"a server without the mod": `Unknown command "aab-rpc".`,
+	} {
+		_, err := New(&fakeRCON{resp: resp}).Status(context.Background())
+		if err == nil {
+			t.Fatalf("%s: no error", name)
+		}
+		if Unreachable(err) {
+			t.Errorf("%s: Unreachable(%v) = true, want false: the server replied", name, err)
+		}
+	}
+	if Unreachable(nil) {
+		t.Error("Unreachable(nil) = true")
+	}
+}
+
+// pinnedFake numbers its connections the way rcon.Client does and records
+// which way each command went out.
+type pinnedFake struct {
+	fakeRCON
+	conn  uint64
+	on    []uint64 // the connection each ExecuteOn call named
+	plain int      // Execute calls
+}
+
+func (p *pinnedFake) Connection() uint64 { return p.conn }
+
+func (p *pinnedFake) Execute(cmd string) (string, time.Duration, error) {
+	p.plain++
+	return p.fakeRCON.Execute(cmd)
+}
+
+func (p *pinnedFake) ExecuteOn(conn uint64, cmd string) (string, time.Duration, error) {
+	p.on = append(p.on, conn)
+	if conn != p.conn {
+		return "", 0, rcon.ErrConnectionChanged
+	}
+	return p.fakeRCON.Execute(cmd)
+}
+
+// An answer goes over the connection its question was polled on, or not at
+// all: after a restart the same qid may be someone else's question. conn 0,
+// and an executor that does not number connections, send it as Answer does.
+func TestAnswerOnHoldsTheAnswerToItsConnection(t *testing.T) {
+	p := &pinnedFake{fakeRCON: fakeRCON{resp: `{"ok":true,"r":true}`}, conn: 2}
+	c := New(p)
+	if got := c.Connection(); got != 2 {
+		t.Fatalf("Connection() = %d, want the executor's 2", got)
+	}
+
+	if ok, err := c.AnswerOn(context.Background(), 2, 5, map[string]string{"shape": "summary"}); err != nil || !ok {
+		t.Fatalf("AnswerOn on the live connection = %v, %v", ok, err)
+	}
+	ok, err := c.AnswerOn(context.Background(), 1, 6, map[string]string{"shape": "summary"})
+	if ok || !Unreachable(err) || !errors.Is(err, rcon.ErrConnectionChanged) {
+		t.Errorf("AnswerOn on a broken connection = %v, %v; want unreachable, connection changed", ok, err)
+	}
+	if p.plain != 0 || len(p.on) != 2 || p.on[0] != 2 || p.on[1] != 1 {
+		t.Errorf("Execute calls %d, ExecuteOn calls %v: want every held answer through ExecuteOn and none around it", p.plain, p.on)
+	}
+
+	if _, err := c.AnswerOn(context.Background(), 0, 7, map[string]string{}); err != nil || p.plain != 1 {
+		t.Errorf("AnswerOn with no connection named: err %v, Execute calls %d, want it sent as Answer sends", err, p.plain)
+	}
+	if _, err := c.Answer(context.Background(), 8, map[string]string{}); err != nil || p.plain != 2 {
+		t.Errorf("Answer: err %v, Execute calls %d, want it unpinned", err, p.plain)
+	}
+
+	plain := &fakeRCON{resp: `{"ok":true,"r":true}`}
+	if ok, err := New(plain).AnswerOn(context.Background(), 3, 9, map[string]string{}); err != nil || !ok || plain.calls != 1 {
+		t.Errorf("AnswerOn over an executor without connections = %v, %v after %d call(s)", ok, err, plain.calls)
+	}
+	if got := New(plain).Connection(); got != 0 {
+		t.Errorf("Connection() over an executor without connections = %d, want 0", got)
 	}
 }

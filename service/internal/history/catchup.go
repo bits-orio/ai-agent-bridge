@@ -34,16 +34,16 @@ const catchUpRowBudget = 15
 // enough that a busy 24-hour window still has plenty to rank from.
 const catchUpRawFetchLimit = 200
 
-const catchUpHeader = "tick\tevent\tplayer\tdetail"
+const catchUpHeader = "tick\tevent\tplayer\tforce\tprivate\tdetail"
 
 // catchUp is the catch_up tool. Pure SQLite, no RCON: docs/design/phase4-spec.md
 // section 15 asks for the window to run from the player's engine-side
 // `last_online`, a LuaPlayer field this package cannot read without a live
 // call. The service-side equivalent that keeps catch_up free is used
 // instead: the tick of that player's own newest recorded player_left row.
-// Likewise "now" has no live tick to read here; the tick of the newest row
-// this store has seen of any kind stands in for it, the same kind of
-// local substitution.
+// Likewise "now" has no live tick to read here; the highest tick of the
+// current map epoch stands in for it (maxTick), the same kind of local
+// substitution. An earlier map's ticks, often far higher, never move it.
 func (s *Store) catchUp(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
 		Player    string `json:"player"`
@@ -62,7 +62,7 @@ func (s *Store) catchUp(ctx context.Context, args json.RawMessage) (json.RawMess
 			return nil, fmt.Errorf("catch_up: %w", err)
 		}
 		if !seen {
-			row := tsvRow("", "none", in.Player, "no record of this player")
+			row := tsvRow("", "none", in.Player, "", "", "no record of this player")
 			return json.RawMessage(columnar(catchUpHeader, []string{row})), nil
 		}
 	}
@@ -109,17 +109,19 @@ func (s *Store) catchUp(ctx context.Context, args json.RawMessage) (json.RawMess
 	}
 	rows := make([]string, len(merged))
 	for i, m := range merged {
-		rows[i] = tsvRow(strconv.FormatInt(m.tick, 10), m.event, m.player, m.detail)
+		rows[i] = tsvRow(strconv.FormatInt(m.tick, 10), m.event, m.player, m.force, yesNo(m.private), m.detail)
 	}
 	return json.RawMessage(columnar(catchUpHeader, rows)), nil
 }
 
 type catchUpRow struct {
-	tick   int64
-	order  int // stable tie-break for equal ticks: events first, then chat, each in its own newest-first order
-	event  string
-	player string
-	detail string
+	tick    int64
+	order   int // stable tie-break for equal ticks: events first, then chat, each in its own newest-first order
+	event   string
+	player  string
+	force   string
+	private bool
+	detail  string
 }
 
 // mergeCatchUp folds the five event kinds and the filtered chat lines into
@@ -130,13 +132,13 @@ func mergeCatchUp(eventRows []eventRow, chatLines []ChatLine) []catchUpRow {
 	merged := make([]catchUpRow, 0, len(eventRows)+len(chatLines))
 	for i, r := range eventRows {
 		merged = append(merged, catchUpRow{
-			tick: r.Tick, order: i, event: r.Event, player: r.Player, detail: detailOf(r.Event, r.Data),
+			tick: r.Tick, order: i, event: r.Event, player: r.Player, force: r.Force, private: r.Private, detail: detailOf(r.Event, r.Data),
 		})
 	}
 	base := len(eventRows)
 	for i, c := range chatLines {
 		merged = append(merged, catchUpRow{
-			tick: c.Tick, order: base + i, event: "console_chat", player: c.Player, detail: c.Message,
+			tick: c.Tick, order: base + i, event: "console_chat", player: c.Player, force: c.Force, private: c.Private, detail: c.Message,
 		})
 	}
 	sort.SliceStable(merged, func(i, j int) bool {
@@ -150,8 +152,9 @@ func mergeCatchUp(eventRows []eventRow, chatLines []ChatLine) []catchUpRow {
 
 // detailOf builds catch_up's own "detail" column from one event's own data
 // payload (companion-mod/scripts/events.lua): the one extra fact a player
-// catching up would want beside who and when. player_joined and
-// player_left need nothing more than that, so they fall to the default.
+// catching up would want beside who, when and which force, which have
+// columns of their own. player_joined and player_left need nothing more
+// than those, so they fall to the default.
 func detailOf(event string, data json.RawMessage) string {
 	switch event {
 	case "player_died":
@@ -162,50 +165,57 @@ func detailOf(event string, data json.RawMessage) string {
 		return d.Cause
 	case "research_finished":
 		var d struct {
-			Force string `json:"force"`
 			Tech  string `json:"tech"`
 			Level int    `json:"level"`
 		}
 		_ = json.Unmarshal(data, &d)
-		return fmt.Sprintf("%s (force %s, level %d)", d.Tech, d.Force, d.Level)
+		return fmt.Sprintf("%s (level %d)", d.Tech, d.Level)
 	case "rocket_launched":
 		var d struct {
-			Force   string `json:"force"`
 			Surface string `json:"surface"`
 		}
 		_ = json.Unmarshal(data, &d)
-		return fmt.Sprintf("force %s, surface %s", d.Force, d.Surface)
+		return fmt.Sprintf("surface %s", d.Surface)
 	default:
 		return ""
 	}
 }
 
+// everSeen says whether the question on ctx may see any row for player. A
+// player known only from another force's private chat reads as never seen,
+// the same as everything else catch_up would show them.
 func (s *Store) everSeen(ctx context.Context, player string) (bool, error) {
-	var n int
-	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE player = ?", player).Scan(&n); err != nil {
+	visible, params := visibleTo(ctx)
+	var seen bool
+	query := "SELECT EXISTS (SELECT 1 FROM events WHERE " + visible + " AND player = ?)"
+	if err := s.db.QueryRowContext(ctx, query, append(params, player)...).Scan(&seen); err != nil {
 		return false, fmt.Errorf("look up %q: %w", player, err)
 	}
-	return n > 0, nil
+	return seen, nil
 }
 
-// maxTick is the tick of the newest row this store has seen, of any kind:
-// the local stand-in for "now" (this function's own doc comment on
-// catchUp explains why). 0 on a store with no rows yet.
+// maxTick is the highest tick among the rows the question on ctx may see, of
+// any kind, in the current map epoch: the local stand-in for "now" (catchUp
+// explains why). 0 on a store with no rows yet. It returns no content, only a
+// tick, and still reads through visibleTo: otherwise where the window starts
+// would move with a private channel's latest line, or with an earlier map's.
 func (s *Store) maxTick(ctx context.Context) (int64, error) {
 	var t sql.NullInt64
-	if err := s.db.QueryRowContext(ctx, "SELECT MAX(tick) FROM events").Scan(&t); err != nil {
+	visible, params := visibleTo(ctx)
+	if err := s.db.QueryRowContext(ctx, "SELECT MAX(tick) FROM events WHERE "+visible, params...).Scan(&t); err != nil {
 		return 0, fmt.Errorf("max tick: %w", err)
 	}
 	return t.Int64, nil
 }
 
 // lastPlayerLeftTick is the tick of player's own newest player_left row, 0
-// if it has none.
+// if it has none. player_left rows are public, so visibleTo changes nothing
+// here today; it stays so that every read a tool makes passes through it.
 func (s *Store) lastPlayerLeftTick(ctx context.Context, player string) (int64, error) {
 	var t sql.NullInt64
-	err := s.db.QueryRowContext(ctx,
-		"SELECT MAX(tick) FROM events WHERE event = 'player_left' AND player = ?", player,
-	).Scan(&t)
+	visible, params := visibleTo(ctx)
+	query := "SELECT MAX(tick) FROM events WHERE " + visible + " AND event = 'player_left' AND player = ?"
+	err := s.db.QueryRowContext(ctx, query, append(params, player)...).Scan(&t)
 	if err != nil {
 		return 0, fmt.Errorf("last player_left for %q: %w", player, err)
 	}

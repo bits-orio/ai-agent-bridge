@@ -157,3 +157,25 @@ func TestSessionsListIsPerScope(t *testing.T) {
 		t.Errorf("team listing = %+v", private)
 	}
 }
+
+// The live sessions are found by scope and name as two fields: a scope that
+// itself holds "#iron" is not the scope before it with the name iron.
+func TestASessionNameNeverJoinsTheScopeKey(t *testing.T) {
+	s := newSessions(SessionCaps{})
+	s.open("guild", "iron", t0, false)
+	s.record("guild", "iron", ex("Alice", "q", "guild's iron answer", t0), false)
+	if got, fresh, _ := s.open("guild#iron", "", t0.Add(time.Minute), false); !fresh || len(got) != 0 {
+		t.Errorf("scope guild#iron opened guild's #iron session: fresh=%v got=%+v", fresh, got)
+	}
+	s.record("guild#iron", "", ex("Bob", "q", "the other channel's answer", t0.Add(time.Minute)), false)
+	got, fresh, _ := s.open("guild", "iron", t0.Add(2*time.Minute), false)
+	if fresh || len(got) != 1 || got[0].Answer != "guild's iron answer" {
+		t.Errorf("guild's #iron session = fresh %v %+v, want its own one exchange", fresh, got)
+	}
+	if !s.end("guild#iron", "", t0.Add(2*time.Minute)) || s.end("guild#iron", "", t0.Add(2*time.Minute)) {
+		t.Error("ending scope guild#iron must end exactly its own session")
+	}
+	if got, fresh, _ := s.open("guild", "iron", t0.Add(3*time.Minute), false); fresh || len(got) != 1 {
+		t.Errorf("ending the other channel's session ended guild's #iron: fresh=%v got=%+v", fresh, got)
+	}
+}

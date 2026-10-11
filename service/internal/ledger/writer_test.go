@@ -190,6 +190,50 @@ func TestWriteRoundClipsToolCallError(t *testing.T) {
 	}
 }
 
+// TestWriteRoundClipsSubmitRefusalReasons: a refusal's reason may quote a
+// parse error about the model's own input, so the write path bounds it the
+// way it bounds a tool call's Error, and leaves the caller's slice alone.
+func TestWriteRoundClipsSubmitRefusalReasons(t *testing.T) {
+	dir := t.TempDir()
+	w := Open(dir, true)
+	w.now = func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) }
+
+	long := strings.Repeat("z", maxClipBytes+500)
+	refusals := []SubmitRefusal{{Kind: RefusedInvalid, Reason: long}, {Kind: RefusedOverCap, Reason: "Line 2 is 410 characters"}}
+	w.WriteRound(RoundRecord{QuestionID: 1, Round: 1, SubmitRefusals: refusals})
+	w.WriteRound(RoundRecord{QuestionID: 1, Round: 2})
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	got, err := Read(dir)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(got.Rounds) != 2 || len(got.Rounds[0].SubmitRefusals) != 2 {
+		t.Fatalf("got %+v, want two rounds, the first with two refusals", got.Rounds)
+	}
+	first := got.Rounds[0].SubmitRefusals[0]
+	if first.Kind != RefusedInvalid || len(first.Reason) >= len(long) || !strings.HasSuffix(first.Reason, clipNote) {
+		t.Errorf("first refusal = kind %q, %d bytes, want invalid clipped below %d with the clip note", first.Kind, len(first.Reason), len(long))
+	}
+	if second := got.Rounds[0].SubmitRefusals[1]; second.Reason != "Line 2 is 410 characters" {
+		t.Errorf("a short reason changed: %q", second.Reason)
+	}
+	if refusals[0].Reason != long {
+		t.Error("the write clipped the caller's own refusal")
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, "ledger-2026-01-01.jsonl"))
+	if err != nil {
+		t.Fatalf("read ledger file: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(lines) != 2 || strings.Contains(lines[1], "submit_refusals") {
+		t.Errorf("a round that refused nothing must omit submit_refusals: %s", b)
+	}
+}
+
 // TestWriteQuestionClipsModelError: ModelError is a provider's own error
 // text, unbounded by anything upstream, so the write path clips it the
 // same way a ToolCall's Error is (F3, F8).

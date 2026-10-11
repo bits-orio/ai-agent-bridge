@@ -249,6 +249,30 @@ before = #S.printed
 rpc({ op = "answer", qid = qid4, artifact = { shape = "table", columns = { "a" }, rows = { { "b" } } } })
 check("audience asker prints to the asker alone", #S.printed == before + 1 and S.printed[#S.printed].who == "Bob",
       S.printed[#S.printed].who)
+-- An asker who has left gets nothing in asker mode, and nobody else does
+-- either: printing to the server instead hands everyone an answer the
+-- operator chose to keep between one player and the bot. Mutation-tested:
+-- falling back to game.print turns the first check red.
+do
+  local gone_qid = remote.call("ai-agent-bridge-v1", "ask", { text = "where is my base", force = "player", player_index = 2 })
+  local printed_before, logs_before = #S.printed, #S.logs
+  local gone_reply = rpc({ op = "answer", qid = gone_qid, artifact = { shape = "notice", text = "at 300,40" } })
+  check("audience asker: an asker who has left gets nothing, and nobody else does",
+        gone_reply.ok and #S.printed == printed_before, F.encode(S.printed[#S.printed]))
+  local said = false
+  for i = logs_before + 1, #S.logs do
+    if tostring(S.logs[i]):find("printed to nobody", 1, true) then said = true end
+  end
+  check("and the log says the answer went to nobody", said, S.log)
+  local done = rpc({ op = "answers", after = gone_qid - 1, limit = 1 }).r[1]
+  check("the question is answered all the same", done and done.id == gone_qid and done.lines[1] == "at 300,40", F.encode(done))
+  -- A mod's question carries no player: there is no asker to keep it for.
+  local mod_qid = remote.call("ai-agent-bridge-v1", "ask", { text = "from a mod", force = "player" })
+  printed_before = #S.printed
+  rpc({ op = "answer", qid = mod_qid, artifact = { shape = "notice", text = "for the server" } })
+  check("audience asker: a mod's question with no player still prints to the server",
+        #S.printed == printed_before + 1 and S.printed[#S.printed].who == "*", F.encode(S.printed[#S.printed]))
+end
 S.settings["aab-answer-audience"].value = "server"
 
 -- ── the session marker ────────────────────────────────────────────────
@@ -350,19 +374,71 @@ S.interfaces["test-scope-global"] = nil
 -- "biters" (no such prototype, only small-biter and its kin) on the live
 -- server, and [img=planet.nauvis] as the prompt once asked, and planet/
 -- nauvis is not a sprite path: space-location/nauvis is, measured on the
--- live engine. Mutation-tested: skipping prune in line() prints both raw.
+-- live engine. Dropping such a tag left a sentence with a hole in it ("A
+-- [img=item.red-transport-belt] carries 30/s" became "A  carries 30/s"), so
+-- each one now goes down a repair chain and ends, at worst, as its words.
+-- Mutation-tested: skipping repair in line() prints both raw.
 local qid_prune = ask_cmd("biters")
 rpc({ op = "answer", qid = qid_prune, artifact = { shape = "summary", lines = {
   "[img=entity.biter] Most biters killed: team-3 leads",
   "[img=planet.nauvis] is home; [item=no-such-thing] is not a thing; [img=item.iron-plate] is; [gps=1,2,nauvis] stays",
+  "A [img=item.red-transport-belt] carries 30/s",
 } } })
 local pruned = S.printed[#S.printed].text
-check("a sprite the game has no prototype for is dropped and the line starts clean",
-      pruned:find(": Most biters killed:", 1, true) ~= nil and pruned:find("[img=entity.biter]", 1, true) == nil, pruned)
+check("a sprite the game has no prototype for prints as its plain word, never raw",
+      pruned:find(": biter Most biters killed:", 1, true) ~= nil and pruned:find("[img=entity.biter]", 1, true) == nil, pruned)
 check("a planet sprite is read as the space location it is",
       pruned:find("[img=space-location.nauvis] is home", 1, true) ~= nil, pruned)
 check("a clickable tag for an unknown prototype prints its plain name; a known sprite and a gps stay",
       pruned:find("no-such-thing is not a thing; [img=item.iron-plate] is; [gps=1,2,nauvis] stays", 1, true) ~= nil, pruned)
+check("a belt this game has no item for reads as a sentence: the words stand where the icon could not",
+      pruned:find("\nA red transport belt carries 30/s", 1, true) ~= nil, pruned)
+
+-- Each step of the chain on its own, first match wins. Run straight
+-- through scripts/sprites.lua: the answer path above already proves line()
+-- calls it. Mutation-tested one step at a time: without step 2 the misfiled
+-- classes fall to their words, without step 3 the plurals and capitals do,
+-- without step 5's words the belt leaves a hole. Step 4, the names players
+-- give vanilla items, has its own file, aab_sprites_test.lua. This game has
+-- no fast-transport-belt, so the red belt below still ends in words: the
+-- nickname step finds nothing the game has and hands on.
+do
+local sprites = require("scripts.sprites")
+local repair_cases = {
+  { "kept as written", "[img=item.iron-plate] and [technology=logistics-2]", "[img=item.iron-plate] and [technology=logistics-2]" },
+  { "a slash path kept, written with a dot", "[img=item/iron-plate]", "[img=item.iron-plate]" },
+  { "a sprite prototype's bare name kept", "[img=quality_info] tiers", "[img=quality_info] tiers" },
+  { "a utility sprite kept", "[img=utility/warning_icon] careful", "[img=utility.warning_icon] careful" },
+  { "step 1: planet is a space location", "[img=planet.nauvis]", "[img=space-location.nauvis]" },
+  { "step 2: an item that is a fluid", "[img=item.crude-oil]", "[img=fluid.crude-oil]" },
+  { "step 2: an entity that is an item", "[img=entity.iron-plate]", "[img=item.iron-plate]" },
+  { "step 2: a tile", "[img=item.water]", "[img=tile.water]" },
+  { "step 2: a virtual signal", "[img=item.signal-A]", "[img=virtual-signal.signal-A]" },
+  { "step 2: a bare name finds its class", "[img=iron-plate]", "[img=item.iron-plate]" },
+  { "step 3: a plural", "[img=item.iron-plates]", "[img=item.iron-plate]" },
+  { "step 3: capitals and spaces", "[img=item.Iron Plate]", "[img=item.iron-plate]" },
+  { "step 3: underscores", "[img=item.iron_gear_wheel]", "[img=item.iron-gear-wheel]" },
+  { "step 3 then 2: a plural in the wrong class", "[img=entity.iron-plates]", "[img=item.iron-plate]" },
+  { "step 5: the red belt in a game with no fast belt", "A [img=item.red-transport-belt] carries 30/s", "A red transport belt carries 30/s" },
+  { "step 5: the biter case", "[img=entity.biter] Most biters", "biter Most biters" },
+  { "step 5: underscores read as spaces", "[img=entity.big_worm] hides", "big worm hides" },
+  { "an empty tag closes up", "a [img=] b", "a b" },
+  { "clickable kept as written", "[item=iron-plate]", "[item=iron-plate]" },
+  { "clickable step 2: an item that is a fluid", "[item=crude-oil]", "[fluid=crude-oil]" },
+  { "clickable step 2: an entity that is an item", "[entity=iron-plate]", "[item=iron-plate]" },
+  { "clickable step 3: a plural", "[item=iron-plates]", "[item=iron-plate]" },
+  { "clickable step 5: its plain name", "[item=no-such-thing] here", "no-such-thing here" },
+  { "clickable with a quality the game has stays whole", "[item=iron-plate,quality=uncommon]", "[item=iron-plate,quality=uncommon]" },
+  { "clickable with a quality the game lacks loses it", "[item=iron-plate,quality=mythic]", "[item=iron-plate]" },
+  { "a repaired clickable keeps its quality", "[item=iron-plates,quality=uncommon]", "[item=iron-plate,quality=uncommon]" },
+  { "other tags pass untouched", "[color=red]x[/color] [gps=1,2,nauvis] [font=default-bold]y[/font]",
+    "[color=red]x[/color] [gps=1,2,nauvis] [font=default-bold]y[/font]" },
+}
+for _, case in ipairs(repair_cases) do
+  local got = sprites.repair(case[2])
+  check("sprite repair, " .. case[1], got == case[3], got)
+end
+end
 
 -- ── the question echo, sprites for bare names, force labels ───────────
 before = #S.printed
@@ -433,6 +509,22 @@ check("a label longer than the clip prints clipped and plain, never a torn colou
       long_line:find(long_words:sub(1, 64) .. " is long", 1, true) ~= nil
       and long_line:find("[color=1,0,0]", 1, true) == nil, long_line)
 S.interfaces["aab-a-long-label"] = nil
+-- And it is cut on a character boundary: a cut inside a two-byte character
+-- left a broken byte after every mention of the force. 81 bytes cut to 64
+-- keep the first 63, the last whole character.
+do
+  local E_ACUTE = "\u{E9}"
+  remote.add_interface("aab-a-wide-label", {
+    force_labels_v1 = function() return { ["team-3"] = "a" .. string.rep(E_ACUTE, 40) } end,
+  })
+  local wide
+  for _, row in ipairs(rpc({ op = "labels" }).r or {}) do
+    if row.name == "team-3" then wide = row.label end
+  end
+  check("a label past 64 bytes is cut to its last whole character", wide == "a" .. string.rep(E_ACUTE, 31),
+        wide and #wide)
+  S.interfaces["aab-a-wide-label"] = nil
+end
 
 -- ── where things are ──────────────────────────────────────────────────
 local labs = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", name = "lab" } })
@@ -454,6 +546,27 @@ check("find_entities by type works and reports scanned", furnaces.ok and furnace
 local no_recipe = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "repair-kit" } })
 check("an unknown recipe is found=false with close names suggested", no_recipe.ok and no_recipe.r.found == false
       and no_recipe.r.suggestions[1] == "repair-pack", F.encode(no_recipe))
+-- The close-name helper moved to scripts/close_names.lua, which recipe_needs
+-- shares, with find_entities' behaviour unchanged: a short list sorted, and
+-- once five are found, those five in the order the table was walked. A table
+-- walked in a fixed order makes both visible.
+do
+  local close_names = require("scripts.close_names")
+  local function walked_in_order(names)
+    return setmetatable({}, { __pairs = function()
+      local i = 0
+      return function() i = i + 1; if names[i] then return names[i], true end end
+    end })
+  end
+  local three = close_names.sharing_fragment(walked_in_order({ "repair-c", "repair-a", "repair-b" }), "repair-kit")
+  check("fewer than five close names come back sorted", table.concat(three, ",") == "repair-a,repair-b,repair-c",
+        table.concat(three, ","))
+  local seven = close_names.sharing_fragment(walked_in_order({ "pack-g", "pack-f", "pack-e", "pack-d", "pack-c", "pack-b", "pack-a" }), "pack")
+  check("the first five found come back in the order found, unsorted, and no more",
+        table.concat(seven, ",") == "pack-g,pack-f,pack-e,pack-d,pack-c", table.concat(seven, ","))
+  local short = close_names.sharing_fragment(walked_in_order({ "ab-cd", "abc-d" }), "ab-cd")
+  check("a fragment under three letters matches nothing", #short == 0, table.concat(short, ","))
+end
 local by_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "iron-gear-wheel" } })
 check("find_entities by product finds the machine whose recipe makes it", by_product.ok and by_product.r.total == 1
       and by_product.r.entities[1].recipe == "iron-gear-wheel" and by_product.r.entities[1].x == -24, F.encode(by_product))
@@ -600,17 +713,31 @@ local rendered = rpc({ op = "answers", after = qid8 - 1 }).r[1]
 check("summary clips to three lines", #rendered.lines == 3, F.encode(rendered.lines))
 check("a newline inside a value cannot forge a line", rendered.lines[1] == "a Someone: forged", rendered.lines[1])
 
+-- The per-line net is 1280 bytes, the service's 320-character cell at four
+-- bytes a character, and a line it cuts ends with an ellipsis inside those
+-- 1280, so a reader can tell it was cut (aab_answer_test.lua holds the
+-- caps against the service's own source).
+local ELLIPSIS = "\u{2026}"
 local qid9 = remote.call("ai-agent-bridge-v1", "ask", { text = "y", force = "player", player_index = 1 })
-rpc({ op = "answer", qid = qid9, artifact = { shape = "summary", lines = { string.rep("na", 500) } } })
+rpc({ op = "answer", qid = qid9, artifact = { shape = "summary", lines = { string.rep("na", 1000) } } })
 local long = rpc({ op = "answers", after = qid9 - 1 }).r[1]
-check("a long line is clipped to 640 bytes", #long.lines[1] == 640, #long.lines[1])
+check("a long line is clipped to 1280 bytes, ellipsis included", #long.lines[1] == 1280
+      and long.lines[1]:sub(-3) == ELLIPSIS and long.lines[1]:sub(1, 4) == "nana", #long.lines[1])
+do
+  local short_enough = remote.call("ai-agent-bridge-v1", "ask", { text = "y1", force = "player", player_index = 1 })
+  rpc({ op = "answer", qid = short_enough, artifact = { shape = "summary", lines = { string.rep("na", 640) } } })
+  local whole = rpc({ op = "answers", after = short_enough - 1 }).r[1].lines[1]
+  check("a line of exactly 1280 bytes is left whole, no ellipsis", #whole == 1280 and whole:find(ELLIPSIS, 1, true) == nil, #whole)
+end
 
--- 640 is not a multiple of three, so a line of three-byte characters has to
--- stop one character short rather than leave half a sequence behind.
+-- 1277, what is left beside the ellipsis, is not a multiple of three, so a
+-- line of three-byte characters has to stop one character short rather than
+-- leave half a sequence behind.
 local qid9b = remote.call("ai-agent-bridge-v1", "ask", { text = "y2", force = "player", player_index = 1 })
-rpc({ op = "answer", qid = qid9b, artifact = { shape = "summary", lines = { string.rep("\u{20AC}", 300) } } })
+rpc({ op = "answer", qid = qid9b, artifact = { shape = "summary", lines = { string.rep("\u{20AC}", 500) } } })
 local utf8_line = rpc({ op = "answers", after = qid9b - 1 }).r[1].lines[1]
-check("a clip never splits a UTF-8 sequence", #utf8_line == 639 and #utf8_line % 3 == 0, #utf8_line)
+check("a clip never splits a UTF-8 sequence", #utf8_line == 1278 and utf8_line:sub(-3) == ELLIPSIS
+      and (#utf8_line - 3) % 3 == 0 and utf8_line:sub(1, -4) == string.rep("\u{20AC}", 425), #utf8_line)
 
 local qid10 = remote.call("ai-agent-bridge-v1", "ask", { text = "z", force = "player", player_index = 1 })
 local helper = rpc({ op = "answer", qid = qid10, artifact = { shape = "grid" } })
@@ -691,15 +818,16 @@ for _, case in ipairs(tag_cases) do
 end
 local many = {}
 -- Question 91's exact shape: the model wrapped every team name in its own
--- colour tags. Forty of them is 1200 bytes before the labeller even turns
--- team-3 into Team Losers inside each tag, so the 640-byte cut lands inside
+-- colour tags. Sixty of them is 1800 bytes before the labeller even turns
+-- team-3 into Team Losers inside each tag, so the 1280-byte cut lands inside
 -- a tag, deterministically, and the whole line would render raw.
-for i = 1, 40 do many[#many + 1] = "[color=yellow]team-3[/color]" end
+for i = 1, 60 do many[#many + 1] = "[color=yellow]team-3[/color]" end
 local long_line = "slots: " .. table.concat(many, ", ")
 local torn_qid = remote.call("ai-agent-bridge-v1", "ask", { text = "a question that gets a long answer", force = "player", player_index = 1 })
 rpc({ op = "answer", qid = torn_qid, artifact = { shape = "summary", lines = { long_line } } })
-local printed = S.printed[#S.printed].text
-check("a line of forty decorated labels reached the 640-byte cut", #printed >= 600 and #printed <= 720, #printed)
+local printed = rpc({ op = "answers", after = torn_qid - 1 }).r[1].lines[1]
+check("a line of sixty decorated labels reached the 1280-byte cut, and the cut stays inside it",
+      #printed >= 1240 and #printed <= 1280 and printed:find(ELLIPSIS, 1, true) ~= nil, #printed)
 local last_open = printed:match("^.*()%[")
 local last_close = printed:match("^.*()%]")
 check("the renderer's cut left no torn tag", not last_open or (last_close and last_close > last_open), printed:sub(-80))
@@ -707,6 +835,16 @@ local opens, closes = 0, 0
 for _ in printed:gmatch("%[color=") do opens = opens + 1 end
 for _ in printed:gmatch("%[/color%]") do closes = closes + 1 end
 check("every colour span the renderer kept is closed", opens == closes, opens .. " opened, " .. closes .. " closed")
+-- A span the cut leaves open is closed after the ellipsis, the service's own
+-- order, and inside the 1280 bytes.
+do
+  local open_qid = remote.call("ai-agent-bridge-v1", "ask", { text = "an open span", force = "player", player_index = 1 })
+  rpc({ op = "answer", qid = open_qid, artifact = { shape = "summary", lines = { "[color=red]" .. string.rep("w", 1400) .. "[/color]" } } })
+  local open_line = rpc({ op = "answers", after = open_qid - 1 }).r[1].lines[1]
+  check("a cut inside an open colour closes it after the ellipsis, all within 1280 bytes",
+        #open_line <= 1280 and open_line:sub(-(#ELLIPSIS + 8)) == ELLIPSIS .. "[/color]"
+        and open_line:sub(1, 12) == "[color=red]w", open_line:sub(-20))
+end
 
 check("a blank comparison column falls back to a letter", n == 1 and text:find("A  vs  [color=0.5,0.8,1]Team Losers[/color]", 1, true) ~= nil, text)
 n, text = answer_as_bob({ shape = "list", items = { "a", "b", "c", "d" } })
@@ -754,6 +892,49 @@ rejects("notice with a table for text", { shape = "notice", text = { a = 1 } })
 rejects("shapeless", { title = "no shape here" })
 rejects("list-with-an-object", { shape = "list", items = { named = "not an array" } })
 
+-- Well formed and says nothing: accepted, it would close the question with a
+-- blank chat line. Counted is what the renderer prints of the artifact's own
+-- text, within its caps; a comparison's A and B and a list's dash are the
+-- renderer's, not the answer. Mutation-tested: without the check every one
+-- of these is accepted and prints a blank answer.
+local blank = rejects("summary with no lines", { shape = "summary", lines = {} })
+check("the refusal says the artifact would print nothing",
+      tostring(blank.m):find("would print nothing", 1, true) ~= nil, F.encode(blank))
+rejects("summary of blank lines", { shape = "summary", lines = { "", "  ", "\n" } })
+rejects("notice with blank text", { shape = "notice", text = "" })
+rejects("list with no items", { shape = "list", items = {} })
+rejects("list of blank items", { shape = "list", items = { " ", "" } })
+rejects("table with no columns", { shape = "table", columns = {}, rows = { { "x" } } })
+rejects("table of blank cells", { shape = "table", columns = { "" }, rows = { { "" } } })
+rejects("comparison of blanks", { shape = "comparison", columns = { "", "" }, rows = { { label = "", a = " ", b = "" } } })
+rejects("summary of empty colour and font spans", { shape = "summary", lines = { "[color=red][/color] [font=default-bold][/font]" } })
+rejects("summary of tags naming nothing", { shape = "summary", lines = { "[img=] [item= ]" } })
+rejects("summary whose only text is past the line cap", { shape = "summary", lines = { "", "", "", "the fourth line" } })
+rejects("table whose only text is past the column cap",
+        { shape = "table", columns = { "", "", "", "", "", "sixth" }, rows = { { "", "", "", "", "", "x" } } })
+rejects("blank title over blank lines", { shape = "summary", title = "  ", lines = { "" } })
+
+local function accepts(what, artifact)
+  local reply = rpc({ op = "answer", qid = ask_bob(what), artifact = artifact })
+  check("a " .. what .. " artifact is accepted", reply.ok, F.encode(reply))
+end
+accepts("title over blank lines", { shape = "summary", title = "Iron", lines = { "" } })
+accepts("lone icon", { shape = "summary", lines = { "[img=item.iron-plate]" } })
+accepts("zero", { shape = "notice", text = 0 })
+accepts("columns-only table", { shape = "table", columns = { "force" }, rows = {} })
+accepts("one-value comparison", { shape = "comparison", columns = { "", "" }, rows = { { label = "", a = "3", b = "" } } })
+accepts("one item among blanks", { shape = "list", items = { "", "x" } })
+-- Control characters print as spaces, so a line of them alone is blank. The
+-- fake JSON reader has no \u escapes, so this goes to the check directly.
+do
+  local artifact_check = require("scripts.artifact_check")
+  local controls = artifact_check.problem({ shape = "summary", lines = { "\1\2\127" } })
+  check("a line of control characters alone would print nothing",
+        tostring(controls):find("would print nothing", 1, true) ~= nil, controls)
+  check("and one visible character beside them is enough",
+        artifact_check.problem({ shape = "summary", lines = { "\1x" } }) == nil)
+end
+
 -- A question the service gives up on has to be able to end visibly: it refuses
 -- the artifact, then delivers a notice to the same qid, which the companion
 -- renders and marks answered so the question leaves the poll page (second
@@ -797,6 +978,43 @@ for _, row in ipairs(rpc({ op = "poll", after = named - 1 }).r) do
   if row.id == named then named_row = row end
 end
 check("poll carries the asker's name", named_row and named_row.player_name == "Bob", F.encode(named_row or {}))
+
+-- Question text is cut to 400 bytes, on a character boundary, so a full page
+-- of questions stays under the reply cap. Mutation-tested: without the cut
+-- both questions poll whole. The question event logs the same cut text, so
+-- history never holds more of a question than the service was sent;
+-- mutation-tested by logging spec.text again.
+do
+  local function polled_text(text)
+    local id = remote.call("ai-agent-bridge-v1", "ask", { text = text, force = "player", player_index = 1 })
+    local row = rpc({ op = "poll", after = id - 1, limit = 1 }).r[1]
+    return row and row.id == id and row.text or nil, id
+  end
+  --- The text the question event for question `wanted` logged, nil when none did.
+  local function logged_text(wanted)
+    local found
+    for line in (S.files["ai-agent-bridge/events.jsonl"] or ""):gmatch("[^\n]+") do
+      local row = F.decode(line)
+      if row and row.event == "question" and row.data and row.data.qid == wanted then found = row.data.text end
+    end
+    return found
+  end
+  -- The events section above leaves the file off; these checks read it.
+  local events_were = S.settings["aab-events-enabled"].value
+  S.settings["aab-events-enabled"].value = true
+  local cut, cut_id = polled_text(string.rep("a", 500))
+  check("a 500-byte question polls as its first 400 bytes", cut == string.rep("a", 400), cut and #cut)
+  local logged = logged_text(cut_id)
+  check("and its question event logs the same 400 bytes", logged == cut, logged and #logged)
+  local E_ACUTE = "\u{E9}"
+  local wide, wide_id = polled_text("a" .. string.rep(E_ACUTE, 250))
+  check("a cut inside a two-byte character keeps the last whole one, 399 bytes",
+        wide == "a" .. string.rep(E_ACUTE, 199), wide and #wide)
+  logged = logged_text(wide_id)
+  check("and its question event logs the same 399 bytes", logged == wide, logged and #logged)
+  S.settings["aab-events-enabled"].value = events_were
+  check("a question of exactly 400 bytes polls whole", polled_text(string.rep("b", 400)) == string.rep("b", 400))
+end
 check("poll still carries the index and the force",
       named_row and named_row.player_index == 1 and named_row.force == "player")
 
