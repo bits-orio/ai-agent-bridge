@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.8
+Date: 2026-10-11
+  Features:
+    - watching_force_v1: a mod that lets players watch another force's base can name the force
+      being watched. A question asked while watching is told whose base "here" is, and checks both
+      the asker's force and the watched one.
+    - item_rate says when an item was last made: with nothing made in the asked window, it adds
+      the next longer window that saw any.
+  Bugfixes:
+    - Asked "are we making repair packs here?" while watching another team's surface, the bot
+      searched only the asker's machines and said nothing on that surface made any.
+    - A machine that made 48 repair packs in the hour and stalled a minute ago was reported as not
+      making any.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.7
 Date: 2026-10-11
   Features:
