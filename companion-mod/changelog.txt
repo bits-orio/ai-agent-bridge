@@ -1,4 +1,15 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.9
+Date: 2026-10-11
+  Features:
+    - A new answer shape, art: ASCII art, diagrams and layout sketches print exactly as drawn,
+      spaces kept, in the monospace font, on lines of their own. Up to 12 lines of 60 characters.
+  Bugfixes:
+    - Asked for ASCII art, the bot sent a bulleted list in the chat font with every run of spaces
+      flattened, so nothing lined up.
+    - Table columns after an icon sat a character and a half to the right: an icon is about two
+      and a half characters wide in the monospace font, and was counted as one.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.8
 Date: 2026-10-11
   Features:
