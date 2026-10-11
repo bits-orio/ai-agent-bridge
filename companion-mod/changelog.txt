@@ -1,4 +1,18 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.0.7
+Date: 2026-10-11
+  Features:
+    - home_force_v1: a mod that moves players onto another force for a while, a spectator force
+      or a lobby, can name the force they belong to. A question is then about that force, and the
+      model is told the force the player is watching from.
+    - list_forces takes names=true, adding what players call each force, so a question about the
+      team names themselves is answered from the real names.
+  Bugfixes:
+    - A member spectating another team who asked "how about our team?" was answered for the
+      spectator force.
+    - Asked about the teams' names, the model judged force names and said a named team had no
+      name.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.6
 Date: 2026-10-11
   Features:
