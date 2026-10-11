@@ -16,6 +16,7 @@ local chat_visibility = require("scripts.chat_visibility")
 local audience        = require("scripts.audience")
 local ask_rate        = require("scripts.ask_rate")
 local personality     = require("scripts.personality")
+local home_force      = require("scripts.home_force")
 local text_clip       = require("scripts.text_clip")
 
 local RING_SIZE = 64
@@ -48,7 +49,7 @@ local function scope_of(spec, player, player_index, text)
   return { key = scope.GLOBAL_KEY, private = false }
 end
 
---- Creates a question. spec = { text, player_index?, force?, scope? }. Returns the
+--- Creates a question. spec = { text, player_index?, force?, viewing_force?, scope? }. Returns the
 --- new question id, or nil if spec.text is missing. This is also reachable
 --- from the ai-agent-bridge-v1 remote interface by any other mod, so bad
 --- input returns nil rather than error()s: a mistake in a caller's spec
@@ -63,6 +64,10 @@ function M.ask(spec)
   local text = text_clip.bytes(spec.text, MAX_TEXT_BYTES)
   local player_index = type(spec.player_index) == "number" and spec.player_index or nil
   local force = type(spec.force) == "string" and spec.force or nil
+  -- The force the asker is on right now when it is not the force the
+  -- question is about: a member watching from a spectator force, say.
+  local viewing = type(spec.viewing_force) == "string" and spec.viewing_force ~= force
+    and spec.viewing_force or nil
   -- Looked up once, here, and stored: the asker may have left by the time the
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
@@ -93,6 +98,7 @@ function M.ask(spec)
     surface = player_surface,
     physical_surface = physical,
     force = force,
+    viewing_force = viewing,
     tick = game.tick,
     answered = false,
     scope = key,
@@ -163,7 +169,10 @@ function M.ask_as_player(player, text, line)
     player.print("[AI Agent Bridge] " .. refused)
     return nil
   end
-  local qid = M.ask({ text = text, player_index = player.index, force = player.force.name, line = line })
+  -- The force a home force provider names, when one does: a member who
+  -- spectates sits on another force, and "our team" still means theirs.
+  local force, viewing = home_force.resolve(player)
+  local qid = M.ask({ text = text, player_index = player.index, force = force, viewing_force = viewing, line = line })
   if qid and not line then
     -- A /ask command is not a chat line, so nobody else saw it. Echo it to
     -- the same audience the answer will reach, or a session others may

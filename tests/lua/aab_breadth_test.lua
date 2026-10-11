@@ -45,6 +45,24 @@ check("the companion still has a manifest", manifest ~= nil, F.encode(mine))
 -- longer a reason to trim descriptions the model needs.
 check("the companion's own manifest fits one reply with room to spare",
       #F.encode(mine.r) < 16384, #F.encode(mine.r))
+-- Every param opens with a type word the service's catalog knows, ended by a
+-- space (service/internal/catalog/params.go typeWord). Anything else becomes
+-- a plain string in the schema: list_forces once declared names as
+-- "boolean: ...", the catalog read the word "boolean:", and DeepSeek sent
+-- names = "true", a string the tool never took for true.
+do
+  local SCALARS = { string = true, integer = true, number = true, boolean = true }
+  local bad = {}
+  for tool, entry in pairs(manifest or {}) do
+    for param, spec in pairs(entry.params or {}) do
+      local word = spec:match("^(%a+)!? ") or spec:match("^((%a+)%b<>)!? ")
+      local ok = word and (SCALARS[word] or word:match("^list%b<>$") or word:match("^enum%b<>$"))
+      if not ok then bad[#bad + 1] = tool .. "." .. param .. ": " .. spec:sub(1, 30) end
+    end
+  end
+  table.sort(bad)
+  check("every param opens with a type word the catalog knows", #bad == 0, table.concat(bad, " | "))
+end
 local NEW = { "research_queue", "tech_status", "logistics_summary", "entity_count",
               "evolution", "rockets", "game_time", "pollution" }
 for _, name in ipairs(NEW) do

@@ -368,6 +368,35 @@ S.interfaces["test-scope"] = nil
 S.interfaces["test-scope-broken"] = nil
 S.interfaces["test-scope-global"] = nil
 
+-- ── home force: a spectating member's question is about their own force ──
+-- A team mod moves a member who spectates onto a spectator force. The live
+-- server answered "how about our team?" for the spectator force, so a
+-- provider now names the force the player belongs to. Mutation-tested:
+-- ignoring the provider polls force "player" in the first check.
+do
+local home = "team-3"
+remote.add_interface("test-home", { home_force_v1 = function(player_index)
+  if player_index == 1 then return home end
+end })
+local qid_home = ask_cmd("how about our team?")
+local poll_home = rpc({ op = "poll", after = qid_home - 1, limit = 1 })
+check("a home force provider names the question's force, and the force the asker watches from rides along",
+      poll_home.r[1].force == "team-3" and poll_home.r[1].viewing_force == "player", F.encode(poll_home))
+home = "player"
+local qid_same = ask_cmd("and now?")
+local poll_same = rpc({ op = "poll", after = qid_same - 1, limit = 1 })
+check("a home force that is the asker's own force carries no viewing force",
+      poll_same.r[1].force == "player" and poll_same.r[1].viewing_force == nil, F.encode(poll_same))
+home = "no-such-force"
+remote.add_interface("test-home-broken", { home_force_v1 = function() error("home boom") end })
+local qid_bad = ask_cmd("and now?")
+local poll_bad = rpc({ op = "poll", after = qid_bad - 1, limit = 1 })
+check("a force the game does not have, or a provider that fails, leaves the asker's own force",
+      poll_bad.r[1].force == "player" and poll_bad.r[1].viewing_force == nil, F.encode(poll_bad))
+S.interfaces["test-home"] = nil
+S.interfaces["test-home-broken"] = nil
+end
+
 -- ── tags the game cannot draw never print raw ────────────────────────
 -- Factorio prints a chat line raw, brackets and all, when a sprite tag
 -- names a sprite it does not have. The model wrote [img=entity.biter] for
@@ -1106,6 +1135,26 @@ for _, row in ipairs(own.ok and own.r.forces or {}) do own_names[row.name] = tru
 check("list_forces never hides the asking force, even one nobody has joined",
       own.ok and own_names["team-3"] == true and own.r.total == 2 and own.r.empty == 0,
       F.encode(own))
+-- names=true: what players call each force. The model reads labels
+-- nowhere else, and judged "each team's name" from force names on the live
+-- server, telling Team Robot Abuse's own player it had no custom name.
+-- Mutation-tested: dropping the called field fails the first check.
+do
+local others = {}
+for name, fns in pairs(S.interfaces) do
+  if fns.force_labels_v1 then others[name] = fns; S.interfaces[name] = nil end
+end
+remote.add_interface("test-names", { force_labels_v1 = function()
+  return { player = "[color=1,0,0]Team Robot Abuse[/color]" }
+end })
+local named = call("ai-agent-bridge-tools", "list_forces", { force = "player", names = true })
+check("list_forces names=true adds what players call each force, as plain text",
+      named.ok and named.r.forces[1].name == "player" and named.r.forces[1].called == "Team Robot Abuse", F.encode(named))
+local unnamed = call("ai-agent-bridge-tools", "list_forces", { force = "player" })
+check("and without it no name rides along", unnamed.ok and unnamed.r.forces[1].called == nil, F.encode(unnamed))
+S.interfaces["test-names"] = nil
+for name, fns in pairs(others) do S.interfaces[name] = fns end
+end
 -- enemy and neutral are the engine's, never a team: not a row, not an
 -- empty slot, unless every force is asked for.
 local all_forces = call("ai-agent-bridge-tools", "list_forces", { force = "player", include_empty = true })

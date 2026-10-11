@@ -8,6 +8,7 @@
 
 local force_lookup = require("scripts.tools.force_lookup")
 local bounded      = require("scripts.tools.bounded")
+local labels       = require("scripts.labels")
 
 local DEFAULT_PLAYERS = 20
 local MAX_PLAYERS = 50
@@ -21,6 +22,7 @@ M.manifest = {
     desc = "Forces on the server: name, players, connected players, by name. Forces that have never had a player are left out as empty team slots unless include_empty=true; empty is the count of those slots either way, and it never counts the engine's own enemy, neutral and player forces, which carry engine=true when listed and are not teams. total beside shown says if there are more.",
     params = {
       include_empty = "boolean default false: also list forces that never had a player, the team slots a scenario mod made in advance and the engine's own",
+      names         = "boolean add called, each force's chosen name; answers still write the force name",
       limit         = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
     },
   },
@@ -58,6 +60,13 @@ local function list_forces(a)
   -- them including the one asking: the e2e rig answered "what forces are
   -- there" with forces {} and empty 3 from the moment 1.0.3 shipped the rule.
   local mine = a.force
+  -- What players call each force. The model never reads a label anywhere
+  -- else: the service swaps labels out of the question and the renderer
+  -- swaps them back in, which keeps them off every question's tokens. So
+  -- asked "what do you think of each team's name?", the model judged
+  -- force names, and told a player whose team was Team Robot Abuse that it
+  -- had no custom name. Read only when asked for.
+  local called = a.names == true and labels.map() or nil
   local rows, empty = {}, 0
   for _, force in pairs(game.forces) do
     local ever = #force.players
@@ -81,6 +90,7 @@ local function list_forces(a)
         player_count = ever,
         connected_player_count = #force.connected_players,
         engine = engine or nil,
+        called = called and called[force.name] or nil,
       }
       if ever == 0 and not engine and force.name ~= mine then empty = empty + 1 end
     else

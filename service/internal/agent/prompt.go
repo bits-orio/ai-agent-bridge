@@ -31,6 +31,7 @@ func systemPrompt(voice string) string {
 	b.WriteString("sf is surfaces, mk is map markers, ch is recent chat, what players said rather than something the game reports, each line with its speaker's force as f and private true when it was said in a private channel, pl is connected players with their force, and ses is the session. ")
 	b.WriteString("A key missing from the briefing means it was not available this time, never that the thing itself is absent or zero. ")
 	b.WriteString("fs is not the team list: it leaves out every force nobody has joined, it counts them only in fse, and a spectator or engine force sits in it looking like any other row. How many teams exist, whether a particular team exists, and anything about an empty slot are list_forces questions, not briefing questions. ")
+	b.WriteString("You never see the names players gave their teams: force names reach you instead, and print as those names. Any question about the names themselves needs list_forces with names=true first; never say a team has no name without it. ")
 	b.WriteString("When the briefing already answers the question, answer from it and call no tool: uptime and what each team is researching are briefing answers, so is who is online when pl is there, and so is what has been said recently when ch is there. ")
 	b.WriteString("Anything about production rates, item locations, logistics or history still needs a lookup.\n\n")
 
@@ -118,6 +119,9 @@ func systemPrompt(voice string) string {
 func askerContext(q Question) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The question comes from %s, whose force is %q", q.AskerLabel(), q.force())
+	if q.ViewingForce != "" {
+		fmt.Fprintf(&b, " (watching from force %q for now; \"we\" and \"our\" still mean %q)", q.ViewingForce, q.force())
+	}
 	switch {
 	case q.Surface != "" && q.PhysicalSurface != "":
 		fmt.Fprintf(&b, ", standing on surface %q and looking at surface %q", q.PhysicalSurface, q.Surface)

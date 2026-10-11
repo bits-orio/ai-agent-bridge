@@ -408,6 +408,20 @@ a force name is expected, resolving it through the labels map, the MTS
 clock tool accepts a display name or a spaced slot, and the prompt says
 the argument is always the force name. A slip costs nothing.
 
+## Team names on request (2026-10-11)
+
+"What do you think about each team's names?" was answered on the live
+server from force names alone: the model never reads a label, so it called
+every team a plain numbered slot and told a player on Team Robot Abuse that
+the team had no custom name, while the renderer printed the real names
+around its words. `list_forces` now takes `names`, which adds `called`, the
+plain label, to each row, and one system prompt sentence says names reach
+the model only that way. The label map still costs no tokens on any other
+question. The first try declared the param as "boolean: ...", which the
+catalog read as an unknown type word and offered as a string, so DeepSeek
+sent "true" and the tool ignored it; a breadth test now holds every param
+to a type word the catalog knows.
+
 ## Reasoning: low by default (2026-09-11)
 
 With reasoning off, the model titled a comparison "Team 01 ahead" over

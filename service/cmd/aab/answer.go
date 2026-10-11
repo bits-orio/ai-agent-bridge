@@ -190,6 +190,7 @@ func agentQuestion(q rpc.Question) agent.Question {
 		PlayerIndex:     q.PlayerIndex,
 		PlayerName:      q.PlayerName,
 		Force:           q.Force,
+		ViewingForce:    q.ViewingForce,
 		Scope:           q.Scope,
 		Private:         q.Private,
 		Surface:         q.Surface,

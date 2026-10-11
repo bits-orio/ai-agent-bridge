@@ -144,7 +144,11 @@ type Question struct {
 	// it "when did I last die" cannot be scoped to the person who asked.
 	PlayerName string `json:"player_name,omitempty"`
 	Force      string `json:"force,omitempty"`
-	Tick       uint64 `json:"tick"`
+	// ViewingForce is the force the asker was on when they asked, when a
+	// home force provider named another one as Force: a member watching
+	// from a spectator force. Empty otherwise, and from an older companion.
+	ViewingForce string `json:"viewing_force,omitempty"`
+	Tick         uint64 `json:"tick"`
 	// Scope and Private come from the companion's chat scope probe (Phase 3):
 	// the session pool this question belongs to, and whether its answer stays
 	// inside an audience. An older companion sends neither, which reads as

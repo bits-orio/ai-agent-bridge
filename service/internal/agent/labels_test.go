@@ -52,9 +52,24 @@ func TestSystemPromptRules(t *testing.T) {
 	if without := prompt(Question{Text: "x", Force: "team-1"}, nil); strings.Contains(without, "standing on surface") {
 		t.Errorf("a question without a surface must not claim one:\n%s", without)
 	}
-	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time", "Never answer a total with a rate", "divided by its own online hours", "production_since with no surface, which counts every surface", "Numbers alone are not an answer", "always write the force name", "nobody online is still a force", "never had a player is an empty slot", "Zero online does not make a force empty", "write the leader it names"} {
+	for _, want := range []string{"[img=item.iron-ore]/min, never Iron ore/min", "[recipe=repair-pack]", "[gps=x,y,surface]", "ask which surface in a notice", "compare forces by that, never by game time", "Never answer a total with a rate", "divided by its own online hours", "production_since with no surface, which counts every surface", "Numbers alone are not an answer", "always write the force name", "nobody online is still a force", "never had a player is an empty slot", "Zero online does not make a force empty", "write the leader it names", "list_forces with names=true first"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+// A member watching from a spectator force asked "how about our team?" on
+// the live server and was answered for the spectator force. A home force
+// provider now names their own force; the prompt says both, and which one
+// "our" means.
+func TestAskerContextViewingForce(t *testing.T) {
+	got := askerContext(Question{Text: "x", PlayerName: "bits-orio", Force: "team-4", ViewingForce: "spectator"})
+	want := `whose force is "team-4" (watching from force "spectator" for now; "we" and "our" still mean "team-4")`
+	if !strings.Contains(got, want) {
+		t.Errorf("asker line lacks %q:\n%s", want, got)
+	}
+	if plain := askerContext(Question{Text: "x", Force: "team-4"}); strings.Contains(plain, "watching from") {
+		t.Errorf("a question with no viewing force must not mention one:\n%s", plain)
 	}
 }

@@ -144,6 +144,11 @@ messages and the portal page use them the same way.
   `force_labels_v1`. Swapped at the edges: labels become force names in the
   question before the model reads it, force names become labels when the
   companion renders. The model only ever sees force names.
+- **Home force**: the force a player's question is about, from any mod exposing
+  `home_force_v1(player_index)`; the player's own force when none names one.
+  A member spectating from another force still asks about their own. The
+  question carries the force they sit on as its viewing force. It never
+  changes who hears the answer.
 - **Tag**: the channel badge a scope provider hands back, printed verbatim, up
   to 200 bytes, after the companion's name on the first answer line. A longer
   tag is cut without tearing a rich-text tag inside it.

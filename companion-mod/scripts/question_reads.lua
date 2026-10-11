@@ -52,7 +52,7 @@ function M.poll(after, limit)
     function(q)
       return {
         id = q.id, text = q.text, player_index = q.player_index,
-        player_name = q.player_name, force = q.force, tick = q.tick,
+        player_name = q.player_name, force = q.force, viewing_force = q.viewing_force, tick = q.tick,
         scope = q.scope, private = q.private or nil, surface = q.surface,
         physical_surface = q.physical_surface, personality = q.personality,
       }
