@@ -1,6 +1,6 @@
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.6
-Date: 2026-09-16
+Date: 2026-10-11
   Features:
     - recipe_needs: what it takes to make something, worked out from the force's own unlocked
       recipes. Every crafted item per minute with its machine and machine count, the raw inputs,
