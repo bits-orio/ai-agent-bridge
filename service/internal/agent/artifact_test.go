@@ -210,3 +210,42 @@ func TestArtifactLine(t *testing.T) {
 		}
 	}
 }
+
+// Art keeps its spaces: a player asked for ASCII art, every other shape
+// flattened its runs of spaces, and the drawing fell apart.
+func TestValidateArtKeepsSpaces(t *testing.T) {
+	got, err := validate(Artifact{Shape: ShapeArt, Title: "Bot", Lines: []string{
+		"", "    [o_x]   ", "   /|_|_|\\\n  / |   | \\\t", "",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"    [o_x]", "   /|_|_|\\", "  / |   | \\"}
+	if len(got.Lines) != len(want) {
+		t.Fatalf("lines %q, want %q", got.Lines, want)
+	}
+	for i := range want {
+		if got.Lines[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got.Lines[i], want[i])
+		}
+	}
+	if _, err := validate(Artifact{Shape: ShapeArt, Lines: []string{"  ", ""}}); err == nil {
+		t.Error("art with nothing drawn must be refused")
+	}
+	wide := strings.Repeat("#", MaxArtWidth+5)
+	tall := make([]string, MaxArtLines+3)
+	for i := range tall {
+		tall[i] = "x"
+	}
+	cut, _ := validate(Artifact{Shape: ShapeArt, Lines: append([]string{wide}, tall...)})
+	if len(cut.Lines) != MaxArtLines || len([]rune(cut.Lines[0])) != MaxArtWidth {
+		t.Errorf("art is cut to %d lines of %d characters, got %d lines, first %d wide", MaxArtLines, MaxArtWidth, len(cut.Lines), len([]rune(cut.Lines[0])))
+	}
+	over := strings.Join(overCaps(Artifact{Shape: ShapeArt, Lines: append([]string{wide}, tall...)}), " ")
+	if !strings.Contains(over, "cap is 12: draw it smaller") || !strings.Contains(over, "Art line 1 is 65 characters wide") {
+		t.Errorf("over caps should name the height and the wide line: %s", over)
+	}
+	if over := overCaps(Artifact{Shape: ShapeArt, Lines: []string{" /\\", "/  \\"}}); len(over) != 0 {
+		t.Errorf("small art is within caps: %v", over)
+	}
+}

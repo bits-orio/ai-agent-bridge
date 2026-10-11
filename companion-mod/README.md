@@ -201,6 +201,7 @@ The model fills one of five shapes; the mod renders it. Every shape but
 | `list` | `items: string[]` | 10 items |
 | `table` | `columns: string[]`, `rows: string[][]` | 5 columns, 8 rows |
 | `comparison` | `columns: [a, b]`, `rows: {label, a, b}[]` | 5 rows |
+| `art` | `lines: string[]`, printed as written in a monospace font, spaces kept | 12 lines of 60 characters |
 
 Two optional fields on any shape: `session: {name, fresh}` renders a
 `(new session)` marker when `fresh` is true, and `to_asker: true` prints the

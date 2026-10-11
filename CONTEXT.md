@@ -36,7 +36,7 @@ messages and the portal page use them the same way.
   question's audience, and raised as the `on_answer` event for any mod that
   subscribes.
 - **Artifact**: a typed, small answer shape (summary, comparison, list, table,
-  notice) that the model fills and the companion renders. The model never
+  notice, art) that the model fills and the companion renders. The model never
   formats text; the companion does. A line or cell holds 320 characters and the
   whole artifact 12,000 bytes; a line the companion prints is cut at 1,280
   bytes as a safety net. An answer over a cap goes back to the model to

@@ -18,10 +18,10 @@
 local shapes   = require("scripts.render_shapes")
 local audience = require("scripts.audience")
 
--- The five v1 shapes, by name. An explicit set, not "does render_shapes have a
+-- The shapes, by name: the five v1 shapes and art. An explicit set, not "does render_shapes have a
 -- function of that name": the module also exports helpers, and an artifact
 -- naming one of those must not reach it.
-local SHAPES = { summary = true, notice = true, list = true, table = true, comparison = true }
+local SHAPES = { summary = true, notice = true, list = true, table = true, comparison = true, art = true }
 
 local M = {}
 
@@ -40,6 +40,10 @@ local function compose(artifact)
   local title = shapes.title_of(artifact)
   local lines = {}
   if title then lines[1] = title end
+  -- Art starts on a line of its own: with no title its first row would
+  -- follow the companion's name on the chat line and sit a name's width to
+  -- the right of the rows under it, as it did on the rig.
+  if not title and shape == "art" then lines[1] = "" end
   for _, text in ipairs(body) do lines[#lines + 1] = text end
   return { shape = shape, title = title, body = body, lines = lines }
 end

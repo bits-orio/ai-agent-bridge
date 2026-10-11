@@ -176,6 +176,9 @@ Player-facing: `/ask <question>`. A chat prefix is a setting, off by default.
 - `list`: up to ten rows, one line each.
 - `table`: up to five columns, up to eight rows.
 - `notice`: one line, a warning or confirmation.
+- `art` (companion 1.0.9): up to twelve lines of sixty characters, printed as
+  written in the monospace font, spaces kept, on lines of their own. The
+  service sends it to an older companion as a list.
 - Every shape may carry `session: {name, fresh}` (Phase 3), rendered as a
   `(new session)` marker; older companions ignore it.
 

@@ -441,6 +441,22 @@ check("a force the game does not have is no watching force", poll_no.r[1].watchi
 S.interfaces["test-watch"] = nil
 end
 
+-- ── art prints on lines of its own ─────────────────────────────────────
+-- With no title, the rig printed art's first row after the companion's
+-- name, a name's width right of the rows under it. Mutation-tested:
+-- without the blank first line the first check fails.
+do
+local qid_art = ask_cmd("draw a robot")
+rpc({ op = "answer", qid = qid_art, artifact = { shape = "art", lines = { "  [o_x]", " /|_|\\" } } })
+local art_text = S.printed[#S.printed].text
+check("art with no title starts on the line under the companion's name",
+      art_text:find(": \n[font=aab-mono]  [o_x][/font]\n[font=aab-mono] /|_|\\[/font]", 1, true) ~= nil, art_text)
+local qid_titled = ask_cmd("draw a robot")
+rpc({ op = "answer", qid = qid_titled, artifact = { shape = "art", title = "Bot", lines = { "  [o_x]" } } })
+local titled = S.printed[#S.printed].text
+check("art with a title puts the title there instead", titled:find(": Bot\n[font=aab-mono]  [o_x][/font]", 1, true) ~= nil, titled)
+end
+
 -- ── tags the game cannot draw never print raw ────────────────────────
 -- Factorio prints a chat line raw, brackets and all, when a sprite tag
 -- names a sprite it does not have. The model wrote [img=entity.biter] for

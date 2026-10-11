@@ -54,6 +54,7 @@ local CAPS = {
   MaxTableColumns   = go_const("artifact.go", "MaxTableColumns"),
   MaxTableRows      = go_const("artifact.go", "MaxTableRows"),
   MaxComparisonRows = go_const("artifact.go", "MaxComparisonRows"),
+  MaxArtLines       = go_const("artifact.go", "MaxArtLines"),
   MaxArtifactBytes  = go_const("budget.go", "MaxArtifactBytes"),
 }
 for name, value in pairs(CAPS) do
@@ -83,6 +84,31 @@ check("a list keeps MaxListItems items",
 check("a comparison keeps MaxComparisonRows rows under its heading",
       #shapes.comparison({ columns = { "a", "b" }, rows = many(CAPS.MaxComparisonRows + 1, function(i)
         return { label = "r" .. i, a = "1", b = "2" } end) }) == 1 + CAPS.MaxComparisonRows)
+-- An icon takes about two and a half characters in the monospace font, so
+-- a column of icons is padded to that, not to one. Mutation-tested: counting
+-- an icon as one cell fails it.
+do
+  local t = shapes.table({ columns = { "Team", "Research", "Pct" },
+    rows = { { "a", "[img=item.iron-plate]", "1%" }, { "b", "[img=item.iron-plate] x", "2%" } } })
+  check("a cell with one icon is padded as three characters wide",
+        t[3] == "[font=aab-mono]a    | [img=item.iron-plate]      |  1%[/font]", t[3])
+end
+check("art keeps MaxArtLines lines",
+      #shapes.art({ lines = many(CAPS.MaxArtLines + 1, tostring) }) == CAPS.MaxArtLines)
+
+-- ── art: spaces kept, monospace, nothing decorated ────────────────────
+-- A player asked for ASCII art; the list shape bulleted it in the chat
+-- font and the service flattened its spaces. Mutation-tested: decorating
+-- art lines turns "team-6" into its label, and dropping the font wrap
+-- fails the first check.
+do
+  local drawn = shapes.art({ lines = { "    [o_x]   ", "   /|_|_|\\", "", "  team-6 [img=entity.biter] [font=default-bold]x[/font]" } })
+  check("art is set in the monospace font with its leading spaces kept and no bullet",
+        drawn[1] == "[font=aab-mono]    [o_x][/font]" and drawn[2] == "[font=aab-mono]   /|_|_|\\[/font]", F.encode(drawn))
+  check("a blank art line keeps its row", drawn[3] == "[font=aab-mono] [/font]", F.encode(drawn))
+  check("art is never decorated, a bad sprite is repaired and font tags go",
+        drawn[4] == "[font=aab-mono]  team-6 biter x[/font]", drawn[4])
+end
 local wide = { columns = many(CAPS.MaxTableColumns + 1, function(i) return "c" .. i end),
                rows = many(CAPS.MaxTableRows + 1, function(i)
                  return many(CAPS.MaxTableColumns + 1, function(j) return i .. "." .. j end) end) }

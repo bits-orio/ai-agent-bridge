@@ -282,8 +282,8 @@ func TestSystemPromptForbidsCopyingALabelIntoAnAnswer(t *testing.T) {
 func TestSystemPromptPrintsTheCapsFromTheConstants(t *testing.T) {
 	pa := systemPrompt("")
 	for _, want := range []string{
-		fmt.Sprintf("Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows.",
-			MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows),
+		fmt.Sprintf("Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows, art %d lines of %d characters.",
+			MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows, MaxArtLines, MaxArtWidth),
 		fmt.Sprintf("Every title, summary line, column name, list item, table or comparison cell and notice is at most %d characters, and the whole answer at most %d bytes.",
 			MaxCellChars, MaxArtifactBytes),
 		// As the model reads it: the cell cap is not only for summary lines.

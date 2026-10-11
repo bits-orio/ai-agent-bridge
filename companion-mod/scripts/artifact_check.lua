@@ -61,6 +61,9 @@ local SHAPES = {
   summary = function(a)
     if not array_of_scalars(a.lines) then return "summary needs lines, an array of strings" end
   end,
+  art = function(a)
+    if not array_of_scalars(a.lines) then return "art needs lines, an array of strings" end
+  end,
   notice = function(a)
     if not is_scalar(a.text) then return "notice needs text, a string" end
     if a.level ~= nil and type(a.level) ~= "string" then return "notice level must be a string" end
@@ -108,6 +111,7 @@ end
 -- are not the answer and do not count.
 local SHOWN = {
   summary = function(a) return first(a.lines, CAPS.summary) end,
+  art = function(a) return first(a.lines, CAPS.art) end,
   notice = function(a) return { a.text } end,
   list = function(a) return first(a.items, CAPS.list) end,
   table = function(a)
@@ -148,7 +152,7 @@ function M.problem(a)
   if not check then
     -- Clipped: the shape name came from a caller, and the reply it lands in
     -- has a byte cap of its own.
-    return "unknown shape: " .. a.shape:sub(1, 40) .. " (use summary, notice, list, table or comparison)"
+    return "unknown shape: " .. a.shape:sub(1, 40) .. " (use summary, notice, list, table, comparison or art)"
   end
   if a.title ~= nil and type(a.title) ~= "string" then return "title must be a string" end
   if a.session ~= nil and type(a.session) ~= "table" then return "session must be an object" end

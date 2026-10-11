@@ -141,6 +141,9 @@ func (r *runner) reconnected() bool {
 // send one says nothing about which map the game is on.
 func (r *runner) see(st rpc.StatusReply) {
 	r.lastID, r.lastTick = st.LastID, st.Tick
+	if st.ModVersion != "" {
+		r.modVersion = st.ModVersion
+	}
 	if st.MapID != "" {
 		r.lastMap = st.MapID
 	}

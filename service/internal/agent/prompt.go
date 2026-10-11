@@ -47,8 +47,8 @@ func systemPrompt(voice string) string {
 	b.WriteString(SubmitTool)
 	b.WriteString("; prose outside a tool call never reaches the player. ")
 	b.WriteString("Read what the question needs in one round, as few tools as possible, then submit. ")
-	fmt.Fprintf(&b, "Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows. ",
-		MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows)
+	fmt.Fprintf(&b, "Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows, art %d lines of %d characters. ",
+		MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows, MaxArtLines, MaxArtWidth)
 	fmt.Fprintf(&b, "Every title, summary line, column name, list item, table or comparison cell and notice is at most %d characters, and the whole answer at most %d bytes. ",
 		MaxCellChars, MaxArtifactBytes)
 	b.WriteString("Each tool says whether it is cheap or costly. ")

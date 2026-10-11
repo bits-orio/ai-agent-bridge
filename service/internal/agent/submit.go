@@ -15,7 +15,8 @@ const SubmitTool = "submit_answer"
 
 const submitDescription = "Send the answer and end your turn; call it once, last, alone. Shapes: summary (prose), " +
 	"notice (one warning or confirmation), list (one line per thing), table (rows of values), " +
-	"comparison (two forces or items side by side). Fill only that shape's fields. Plain values, no formatting."
+	"comparison (two forces or items side by side), art (a drawing a player asked for: ASCII art, a diagram, a layout). " +
+	"Fill only that shape's fields. Plain values, no formatting."
 
 // submitDef is the tool definition the model sees. Rows carries two different
 // shapes, so it is described rather than typed: an array of arrays of strings
@@ -24,7 +25,7 @@ func submitDef() model.ToolDef {
 	props := map[string]any{
 		"shape": map[string]any{
 			"type":        "string",
-			"enum":        []string{ShapeSummary, ShapeNotice, ShapeList, ShapeTable, ShapeComparison},
+			"enum":        []string{ShapeSummary, ShapeNotice, ShapeList, ShapeTable, ShapeComparison, ShapeArt},
 			"description": "Which answer shape to render.",
 		},
 		"title": map[string]any{
@@ -32,9 +33,11 @@ func submitDef() model.ToolDef {
 			"description": "Optional heading.",
 		},
 		"lines": map[string]any{
-			"type":        "array",
-			"items":       map[string]any{"type": "string"},
-			"description": fmt.Sprintf("summary: up to %d lines of at most %d characters.", MaxSummaryLines, MaxCellChars),
+			"type":  "array",
+			"items": map[string]any{"type": "string"},
+			"description": fmt.Sprintf("summary: up to %d lines of at most %d characters. art: up to %d lines of at most %d characters, "+
+				"printed exactly as written in a monospace font, spaces kept: draw with spaces, never dots, and plain characters only, no tags.",
+				MaxSummaryLines, MaxCellChars, MaxArtLines, MaxArtWidth),
 		},
 		"text": map[string]any{
 			"type":        "string",

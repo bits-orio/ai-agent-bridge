@@ -60,6 +60,8 @@ func overCaps(a Artifact) []string {
 					i+1, n, MaxCellChars, MaxListItems)
 			}
 		}
+	case ShapeArt:
+		over = append(over, artOver(a)...)
 	case ShapeTable:
 		over = append(over, tableOver(a)...)
 	case ShapeComparison:
@@ -175,4 +177,24 @@ func listOver(over []string) string {
 func overCapsRefusal(over []string) string {
 	return "Not sent, nothing reached the player: the answer is over the caps. " + listOver(over) +
 		" Rewrite it within the caps and call " + SubmitTool + " again."
+}
+
+// artOver is overCaps for art: the line count after splitting, and each line
+// wider than MaxArtWidth, measured before artLines cuts it.
+func artOver(a Artifact) []string {
+	var over []string
+	var raw []string
+	for _, entry := range a.Lines {
+		raw = append(raw, strings.Split(strings.ReplaceAll(entry, "\r\n", "\n"), "\n")...)
+	}
+	if n := len(artLines(a.Lines, len(raw)+1)); n > MaxArtLines {
+		over = append(over, fmt.Sprintf("This art has %d lines, the cap is %d: draw it smaller.", n, MaxArtLines))
+	}
+	for i, l := range raw {
+		l = strings.TrimRight(strings.ReplaceAll(l, "\t", "    "), " ")
+		if n := len([]rune(l)); n > MaxArtWidth {
+			over = append(over, fmt.Sprintf("Art line %d is %d characters wide, the cap is %d: draw it narrower.", i+1, n, MaxArtWidth))
+		}
+	}
+	return over
 }

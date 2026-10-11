@@ -62,7 +62,7 @@ func within(a Artifact) bool {
 // one.
 func droppable(a Artifact) bool {
 	switch a.Shape {
-	case ShapeSummary:
+	case ShapeSummary, ShapeArt:
 		return len(a.Lines) > 1
 	case ShapeList:
 		return len(a.Items) > 1
@@ -76,7 +76,7 @@ func droppable(a Artifact) bool {
 
 func dropLast(a Artifact) Artifact {
 	switch a.Shape {
-	case ShapeSummary:
+	case ShapeSummary, ShapeArt:
 		a.Lines = a.Lines[:len(a.Lines)-1]
 	case ShapeList:
 		a.Items = a.Items[:len(a.Items)-1]

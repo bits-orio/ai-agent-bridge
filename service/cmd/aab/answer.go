@@ -116,6 +116,7 @@ func (r *runner) run(ctx context.Context, q rpc.Question, game []tools.Tool) age
 // reply starts the service again with nothing held (startAgain).
 func (r *runner) deliver(ctx context.Context, q rpc.Question, state *delivery) {
 	state.attempts++
+	state.result.Artifact = artFor(r.modVersion, state.result.Artifact)
 	delivered, err := r.rpc.AnswerOn(ctx, r.conn, q.ID, state.result.Artifact)
 	if err == nil && !delivered {
 		// The companion replied without confirming. Treated as a failed

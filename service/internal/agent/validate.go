@@ -78,8 +78,13 @@ func clipToCaps(a Artifact) (Artifact, error) {
 		if len(out.Pairs) == 0 {
 			return Artifact{}, fmt.Errorf("a comparison needs at least one row of {label, a, b}")
 		}
+	case ShapeArt:
+		out.Lines = artLines(a.Lines, MaxArtLines)
+		if len(out.Lines) == 0 {
+			return Artifact{}, fmt.Errorf("art needs at least one line with something on it in lines")
+		}
 	default:
-		return Artifact{}, fmt.Errorf("shape %q is not a shape, use summary, notice, list, table or comparison", a.Shape)
+		return Artifact{}, fmt.Errorf("shape %q is not a shape, use summary, notice, list, table, comparison or art", a.Shape)
 	}
 	return out, nil
 }
@@ -131,6 +136,46 @@ func cells(in []string, max int) []string {
 // 320 runes' worth at four bytes a rune.
 func cell(s string) string {
 	return clipRichText(flat(s), MaxCellChars)
+}
+
+// artLines is art as the player sees it: an entry holding newlines split
+// into its lines, a tab four spaces, other control characters dropped,
+// trailing spaces and blank lines at either end gone, every line cut to
+// MaxArtWidth characters and the count to max. Leading and inner spaces are
+// the drawing, so they stay.
+func artLines(in []string, max int) []string {
+	var all []string
+	for _, entry := range in {
+		for _, l := range strings.Split(strings.ReplaceAll(entry, "\r\n", "\n"), "\n") {
+			all = append(all, artLine(l))
+		}
+	}
+	for len(all) > 0 && strings.TrimSpace(all[0]) == "" {
+		all = all[1:]
+	}
+	for len(all) > 0 && strings.TrimSpace(all[len(all)-1]) == "" {
+		all = all[:len(all)-1]
+	}
+	if len(all) > max {
+		all = all[:max]
+	}
+	return all
+}
+
+// artLine cleans one art line and cuts it to MaxArtWidth characters.
+func artLine(s string) string {
+	s = strings.ReplaceAll(s, "\t", "    ")
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimRight(s, " ")
+	if r := []rune(s); len(r) > MaxArtWidth {
+		s = strings.TrimRight(string(r[:MaxArtWidth]), " ")
+	}
+	return s
 }
 
 // flat is a cell as the player reads it: every newline and run of spaces one

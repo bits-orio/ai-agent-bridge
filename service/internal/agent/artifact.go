@@ -22,6 +22,12 @@ const (
 	ShapeList       = "list"
 	ShapeTable      = "table"
 	ShapeComparison = "comparison"
+	// ShapeArt is lines printed exactly as written, spaces kept, in a
+	// monospace font: ASCII art, a diagram, a layout sketch. Every other
+	// shape flattens runs of spaces, and the chat font is proportional, so a
+	// drawing a player asked for came out as a bulleted list with its
+	// columns wandering.
+	ShapeArt = "art"
 )
 
 // Notice levels.
@@ -40,6 +46,8 @@ const (
 	MaxTableColumns   = 5
 	MaxTableRows      = 8
 	MaxComparisonRows = 5
+	MaxArtLines       = 12
+	MaxArtWidth       = 60 // characters per art line, spaces included
 )
 
 // Pair is one row of a comparison: a label and the value in each column.
@@ -56,7 +64,7 @@ type Pair struct {
 type Artifact struct {
 	Shape   string
 	Title   string
-	Lines   []string // summary
+	Lines   []string // summary, art
 	Text    string   // notice
 	Level   string   // notice
 	Items   []string // list

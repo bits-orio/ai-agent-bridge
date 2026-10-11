@@ -50,6 +50,10 @@ type runner struct {
 	// (cursor.go).
 	after int64
 
+	// modVersion is the companion's version from its last status, which says
+	// which answer shapes it can render (artFor).
+	modVersion string
+
 	answered     int
 	lastActivity time.Time
 	pollFailing  bool

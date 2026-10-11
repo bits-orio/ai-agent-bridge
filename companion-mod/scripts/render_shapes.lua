@@ -40,6 +40,7 @@ local LIST_ITEMS      = 10 -- MaxListItems
 local TABLE_COLUMNS   = 5  -- MaxTableColumns
 local TABLE_ROWS      = 8  -- MaxTableRows
 local COMPARISON_ROWS = 5  -- MaxComparisonRows
+local ART_LINES       = 12 -- MaxArtLines
 
 --- `text` within MAX_BYTES. Over it, the text is cut on a character
 --- boundary, a tag the cut tore is dropped, open colour and font spans are
@@ -79,7 +80,7 @@ local M = {}
 --- The count caps by shape. The artifact check reads them so it judges an
 --- artifact by what the renderer would show of it.
 M.CAPS = {
-  summary = SUMMARY_LINES, list = LIST_ITEMS, comparison = COMPARISON_ROWS,
+  summary = SUMMARY_LINES, list = LIST_ITEMS, comparison = COMPARISON_ROWS, art = ART_LINES,
   table_columns = TABLE_COLUMNS, table_rows = TABLE_ROWS,
 }
 
@@ -137,7 +138,11 @@ end
 -- boundaries wandering from row to row. Each column is padded to its widest
 -- cell, numbers sit right-aligned under a right-aligned heading, and a rule
 -- runs under the header. Widths are measured on what is visible: a colour
--- or font tag is nothing, any other tag draws an icon about one cell wide.
+-- or font tag is nothing, any other tag draws an icon. An icon is about two
+-- and a half characters wide at the chat size, measured on a client: counted
+-- as one, every row with a technology icon pushed its next column a
+-- character and a half right of the header's. Rounded per cell, a column is
+-- now off by half a character at most.
 local MONO_FONT = "aab-mono"
 local MAX_COLUMN_WIDTH = 40
 
@@ -154,7 +159,7 @@ local function visible_width(s)
   -- Characters, not bytes: every UTF-8 sequence has exactly one lead byte,
   -- and the game's Lua has no utf8 library to count them with.
   local _, chars = text:gsub("[^\128-\191]", "")
-  return chars + icons
+  return chars + math.floor(icons * 2.5 + 0.5)
 end
 
 local function is_numeric(s)
@@ -202,6 +207,28 @@ function M.table(a)
     local cells = {}
     for i = 1, #grid.columns do cells[i] = pad(row[i], i) end
     out[#out + 1] = mono(cells)
+  end
+  return out
+end
+
+-- { shape="art", lines={...} }: up to twelve lines drawn exactly as
+-- written, in the monospace font, spaces kept. A player asked for ASCII art
+-- and got a bulleted list in the proportional chat font, its columns
+-- wandering and its spaces flattened. Nothing is decorated here, a "team-6"
+-- or an "iron-plate" in a drawing is part of the drawing, but a sprite tag
+-- the game cannot draw is still repaired, since one such tag prints the
+-- whole message raw, and font tags go, so no line leaves the monospace face.
+function M.art(a)
+  local mono_ok = mono_font_exists()
+  local out = {}
+  for _, l in ipairs(clip(a.lines or {}, ART_LINES)) do
+    local kind = type(l)
+    local text = (kind == "string" or kind == "number") and tostring(l) or ""
+    text = text:gsub("\t", "    "):gsub("%c", "")
+    text = sprites.repair(text):gsub("%[/?font[^%]]*%]", "")
+    text = fit_line((text:gsub("%s+$", "")))
+    if text == "" then text = " " end
+    out[#out + 1] = mono_ok and ("[font=" .. MONO_FONT .. "]" .. text .. "[/font]") or text
   end
   return out
 end
