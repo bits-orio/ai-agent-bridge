@@ -3,9 +3,9 @@
   "version": "1.0.9",
   "title": "AI Agent Bridge",
   "author": "bits-orio",
-  "factorio_version": "2.0",
+  "factorio_version": "2.1",
   "dependencies": [
-    "base >= 2.0"
+    "base >= 2.1"
   ],
   "description": "AI chatbot and chat assistant for your Factorio server: ask a question in game chat and the AI answers in chat from your live save. Where things are, production rates, research, what changed since you died. Multiplayer, every team and force, follow-up questions. Bring your own key: Claude, GPT, DeepSeek, Gemini or any LLM on OpenRouter. Runs with a small agent program beside the server."
 }

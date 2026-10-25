@@ -38,18 +38,20 @@ DEFAULT_RCON_PASSWORD = "rig"
 # Proven-working companion mod-list (TESTING.md 1.7): every mod bundled with
 # a Space-Age-capable install, enabled regardless of whether the harness
 # actually uses it, plus whatever this run links in.
-BASE_MOD_LIST = ["base", "elevated-rails", "quality", "space-age"]
+# 2.1 split recycling out of quality into its own built-in mod, recycler, which
+# quality and space-age both depend on, so it is listed with them.
+BASE_MOD_LIST = ["base", "elevated-rails", "quality", "recycler", "space-age"]
 
 
 def default_headless_bin() -> str:
     return os.environ.get(
         "FACTORIO_HEADLESS",
-        str(Path.home() / "factorio-dev/headless-2.0.77/factorio/bin/x64/factorio"),
+        str(Path.home() / "factorio-dev/headless-2.1.23/factorio/bin/x64/factorio"),
     )
 
 
 def default_client_bin() -> str:
-    return os.environ.get("FACTORIO_CLIENT", str(Path.home() / "factorio/bin/x64/factorio"))
+    return os.environ.get("FACTORIO_CLIENT", str(Path.home() / "factorio-2.1/bin/x64/factorio"))
 
 
 class ModLink(NamedTuple):
