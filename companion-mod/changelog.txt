@@ -1,4 +1,10 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.1.0
+Date: 2026-10-25
+  Info:
+    - Runs on Factorio 2.1, nothing else changed in the mod. Servers still on Factorio 2.0 keep
+      1.0.9, which stays on the mod portal.
+---------------------------------------------------------------------------------------------------
 Version: 1.0.9
 Date: 2026-10-11
   Features:

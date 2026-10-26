@@ -16,7 +16,7 @@ Ask a follow-up and it remembers what was just said. Anyone on the server can jo
 
 ## Status
 
-In use on 2.0 dedicated servers, vanilla and with Multi-Team Support, with and without Space Age.
+In use on dedicated servers, vanilla and with Multi-Team Support, with and without Space Age. From 1.1.0 it runs on Factorio 2.1; servers still on 2.0 keep 1.0.9.
 
 ## Quick start
 
@@ -42,7 +42,7 @@ This mod is the game side. It takes the questions, publishes the lookups the AI 
 
 ## Compatibility
 
-Factorio 2.0, Space Age or not. Works on a plain vanilla server. Needs RCON on the server and the agent program running beside it.
+Factorio 2.1, Space Age or not. On Factorio 2.0, use 1.0.9. Works on a plain vanilla server. Needs RCON on the server and the agent program running beside it.
 
 ## Works with
 
