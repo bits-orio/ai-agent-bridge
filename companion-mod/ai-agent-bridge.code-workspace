@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../RateCalculator"
+		},
+		{
+			"path": "../../multi-team-support"
+		}
+	],
+	"settings": {}
+}
