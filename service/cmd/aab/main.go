@@ -25,6 +25,7 @@ func main() {
 	ledgerDir := flag.String("ledger-dir", "", "ledger directory to read (stats only; default: resolved from config)")
 	flag.Usage = usage
 	flag.Parse()
+	log.SetOutput(logTerminal())
 
 	args := flag.Args()
 	if len(args) == 0 {

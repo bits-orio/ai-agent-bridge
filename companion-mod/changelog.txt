@@ -5,6 +5,9 @@ Date: 2026-11-13
     - Local models through Ollama: the service can answer with a model on your own hardware, no
       API key and no cost per question. Set model.provider to ollama and name a model you have
       pulled. Small models answer simple questions and often miss hard ones.
+    - The service log on a terminal is coloured: each question opens a block, the answer follows
+      as it printed in game, one line per printed line. The log file stays plain, and NO_COLOR
+      turns the colour off.
   Info:
     - Nothing changed in the mod itself. Server operators who want Ollama take the new service
       binary from the GitHub release.

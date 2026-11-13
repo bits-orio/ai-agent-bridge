@@ -225,7 +225,9 @@ func (r *runner) labelsFor(ctx context.Context) []agent.ForceLabel {
 }
 
 // logRendered reads back what the companion actually printed for one
-// answered question and logs it, joined with " | ". A failure here is logged
+// answered question and logs it, one printed line per log line, indented
+// under the header (a table's own cells are split by " | ", so the lines
+// cannot share that separator and stay readable). A failure here is logged
 // and changes nothing: the answer is already delivered.
 func (r *runner) logRendered(ctx context.Context, qid int64, sent agent.Artifact) {
 	raw, err := r.rpc.Call(ctx, "answers", map[string]any{"after": qid - 1, "limit": 1})
@@ -245,7 +247,7 @@ func (r *runner) logRendered(ctx context.Context, qid int64, sent agent.Artifact
 		if e.ID != qid {
 			continue
 		}
-		log.Printf("answer %d rendered: %s", qid, strings.Join(e.Lines, " | "))
+		log.Printf("answer %d rendered:\n    %s", qid, strings.Join(e.Lines, "\n    "))
 		// The companion says yes to an answer for a question already answered
 		// and prints nothing, so a retry after a lost reply is free. The same
 		// yes hides a second service answering the same server: on the rig,

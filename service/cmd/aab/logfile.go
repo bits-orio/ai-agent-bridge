@@ -1,6 +1,7 @@
 // Copied from open-discord-bridge/bridge/cmd/bridge/logfile.go, unchanged beyond this
 // header, the import path, and the "bridge"/"ODB_LOG_FILE"/"bridge.log" wording below
-// (now "service"/"AAB_LOG_FILE"/"aab.log").
+// (now "service"/"AAB_LOG_FILE"/"aab.log"), and stderr taken from logTerminal so a
+// terminal gets the coloured copy (logcolor.go) while the file stays plain.
 
 package main
 
@@ -33,7 +34,7 @@ func setupLogFile(cfg *config.Config) {
 		return
 	}
 	// f intentionally stays open for the lifetime of the process.
-	log.SetOutput(io.MultiWriter(os.Stderr, f))
+	log.SetOutput(io.MultiWriter(logTerminal(), f))
 	log.Printf("log: also writing to %s", path)
 }
 
