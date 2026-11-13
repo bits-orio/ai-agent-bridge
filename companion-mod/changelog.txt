@@ -1,4 +1,14 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.1.1
+Date: 2026-11-13
+  Features:
+    - Local models through Ollama: the service can answer with a model on your own hardware, no
+      API key and no cost per question. Set model.provider to ollama and name a model you have
+      pulled. Small models answer simple questions and often miss hard ones.
+  Info:
+    - Nothing changed in the mod itself. Server operators who want Ollama take the new service
+      binary from the GitHub release.
+---------------------------------------------------------------------------------------------------
 Version: 1.1.0
 Date: 2026-10-25
   Info:
