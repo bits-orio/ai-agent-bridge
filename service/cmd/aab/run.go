@@ -39,7 +39,15 @@ func runService(cfg *config.Config, client *rpc.Client) {
 	if err != nil {
 		log.Fatalf("run: %v", err)
 	}
-	if cfg.Model.Provider != "fake" && cfg.Model.Provider != "anthropic" {
+	if cfg.Model.Provider == "ollama" {
+		// Never fatal, like the balance below: a model pulled or a server
+		// started while the service runs works from the next question.
+		if v := checkOllama(ctx, cfg); v.level == "ok" {
+			log.Printf("run: %s", v.text)
+		} else {
+			log.Printf("run: WARNING %s", v.text)
+		}
+	} else if cfg.Model.Provider != "fake" && cfg.Model.Provider != "anthropic" {
 		// Said once here and never fatal: credits added while the service
 		// runs take effect on the next question without a restart.
 		if v := checkBalance(ctx, cfg); v.level == "ok" {
@@ -115,8 +123,14 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		}()
 	}
 
-	log.Printf("run: model %s via %s (reasoning %s, cache %s, data collection %s), %d rounds and %d tokens per question, polling every %s",
-		mdl.Name(), cfg.Model.Provider, cfg.Model.Reasoning, cfg.Model.CacheTTL, cfg.Model.DataCollection,
+	route := fmt.Sprintf("reasoning %s, cache %s, data collection %s", cfg.Model.Reasoning, cfg.Model.CacheTTL, cfg.Model.DataCollection)
+	if cfg.Model.Provider == "ollama" {
+		// The cache lifetime and data collection are a hosted route's; a
+		// local model has neither.
+		route = fmt.Sprintf("reasoning %s, context %d tokens", cfg.Model.Reasoning, cfg.Ollama.NumCtx)
+	}
+	log.Printf("run: model %s via %s (%s), %d rounds and %d tokens per question, polling every %s",
+		mdl.Name(), cfg.Model.Provider, route,
 		cfg.Agent.MaxRounds, cfg.Agent.MaxTokensPerQuestion, cfg.Interval())
 	r.greet(ctx)
 	r.loop(ctx)
@@ -175,6 +189,8 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 		return anthropic.New(cfg.Anthropic.APIKey, anthropic.Options{
 			Model: m.ID, MaxOutput: cfg.Agent.MaxOutputTokens, Thinking: thinking, Effort: effort, CacheTTL: m.CacheTTL,
 		}), nil
+	case "ollama":
+		return newOllama(cfg)
 	default:
 		if cfg.OpenRouter.APIKey == "" {
 			return nil, fmt.Errorf("no OpenRouter API key: set env var %q, or set model.provider to fake", cfg.OpenRouter.APIKeyEnv)

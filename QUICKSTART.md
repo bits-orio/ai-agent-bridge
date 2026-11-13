@@ -62,6 +62,11 @@ The default model is DeepSeek V4 Pro; `model.id` in `aab.yaml` picks any
 other model OpenRouter lists that supports tool calling, and the example
 file names a few with their prices.
 
+No key and a spare graphics card? Set `model.provider: ollama` and run a
+model on your own machine through [Ollama](https://ollama.com).
+[service/README.md](service/README.md#local-models-with-ollama) has the
+three lines and what to expect.
+
 ## 5. Check, then run it
 
 ```sh

@@ -134,6 +134,10 @@ func secretLines(c *Config) []string {
 		secretLine(c.Anthropic.APIKeyEnv, "anthropic.api_key_env", c.Anthropic.APIKey),
 		secretLine(c.ControlAPI.TokenEnv, "control_api.token_env", c.ControlAPI.Token),
 	}
+	if c.Model.Provider == "ollama" {
+		// Optional: a local Ollama takes no key, so MISSING is the usual line.
+		lines = append(lines, secretLine(c.Ollama.APIKeyEnv, "ollama.api_key_env", c.Ollama.APIKey)+" (only needed for a server that wants a key)")
+	}
 	if c.Transport == "sftp" {
 		lines = append(lines, secretLine(c.Factorio.SFTP.PasswordEnv, "factorio.sftp.password_env", c.Factorio.SFTP.Password))
 	}

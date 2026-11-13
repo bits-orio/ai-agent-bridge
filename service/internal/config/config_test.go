@@ -7,6 +7,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -619,5 +620,45 @@ func TestLoadFromEnvInvalidBriefingEnabled(t *testing.T) {
 
 	if _, err := Load("/no/such/aab.yaml"); err == nil {
 		t.Fatal("expected an error for an unparsable AAB_BRIEFING_ENABLED")
+	}
+}
+
+// Provider ollama has no default model: the OpenRouter ids mean nothing to a
+// local server, so the id has to be named.
+func TestOllamaProvider(t *testing.T) {
+	t.Setenv("FACTORIO_RCON_PASSWORD", "pw")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aab.yaml")
+	base := "factorio:\n  rcon:\n    address: 127.0.0.1:27015\n    password_env: FACTORIO_RCON_PASSWORD\n  events_file: " + filepath.Join(dir, "events.jsonl") + "\n"
+
+	if err := os.WriteFile(path, []byte(base+"model:\n  provider: ollama\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "model.id") {
+		t.Fatalf("no id: err %v, want one naming model.id", err)
+	}
+
+	if err := os.WriteFile(path, []byte(base+"model:\n  provider: ollama\n  id: qwen3:8b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Ollama.BaseURL != "http://localhost:11434" || c.Ollama.NumCtx != 16384 || c.Ollama.KeepAlive != "30m" {
+		t.Errorf("ollama defaults %+v", c.Ollama)
+	}
+	if c.Model.Timeout != "5m" || c.Model.Small != "" {
+		t.Errorf("timeout %q small %q, want 5m and none", c.Model.Timeout, c.Model.Small)
+	}
+
+	if err := os.WriteFile(path, []byte(base+"model:\n  provider: ollama\n  id: qwen3:8b\n  timeout: 90s\nollama:\n  base_url: http://gpu-box:11434\n  num_ctx: 32768\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = Load(path); err != nil {
+		t.Fatal(err)
+	}
+	if c.Ollama.BaseURL != "http://gpu-box:11434" || c.Ollama.NumCtx != 32768 || c.Model.Timeout != "90s" {
+		t.Errorf("ollama overrides %+v, timeout %q", c.Ollama, c.Model.Timeout)
 	}
 }

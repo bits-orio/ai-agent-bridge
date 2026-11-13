@@ -36,6 +36,7 @@ poll_interval: 1s       # every 30th poll also reads the companion's status, to 
 model:
   # openrouter (default): any model OpenRouter lists that supports tool calling, one
   # key for all of them. anthropic: the Anthropic API directly, with an Anthropic key.
+  # ollama: a model on your own hardware, no key; see the ollama section below.
   # fake: the scripted model the end-to-end tests use, no key needed.
   provider: openrouter
   # Ids as OpenRouter writes them. Listed 2026-09-10, USD per million tokens in / out:
@@ -83,6 +84,23 @@ openrouter:
 
 anthropic:
   api_key_env: ANTHROPIC_API_KEY    # only read for provider: anthropic
+
+# A model on your own hardware, through Ollama (https://ollama.com). No key, no bill.
+# Set these in the model section above:
+#   provider: ollama
+#   id: qwen3:8b        # a model you have pulled, with the "tools" tag on ollama.com
+#   reasoning: "off"    # measured on qwen3:8b: with thinking on it thought and never answered
+# model.timeout defaults to 5m for this provider. `aab check` says whether the server
+# is up, the model is pulled and the model can call tools.
+# ollama:
+#   base_url: http://localhost:11434  # where Ollama listens
+#   # The context window the service asks for on every request. Ollama's own default is
+#   # 4096 tokens on a card under 24 GiB, the rules and tools alone are about 10,000,
+#   # and Ollama cuts a prompt that does not fit without saying so. 16384 holds a
+#   # question with its tool results; an 8B model at that size takes about 7.5 GiB.
+#   num_ctx: 16384
+#   keep_alive: 30m                   # how long the model stays in memory after a question
+#   api_key_env: OLLAMA_API_KEY       # only for a server that wants a key, https://ollama.com
 
 # Per-question limits. A question that hits one still answers, with a notice saying why.
 agent:

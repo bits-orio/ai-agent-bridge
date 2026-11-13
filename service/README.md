@@ -18,7 +18,8 @@ The service needs two things from you, and a model key:
 2. **RCON.** The server's RCON address and password.
 3. **A model key.** An [OpenRouter](https://openrouter.ai/keys) key by
    default, which buys every model it lists; or an Anthropic key with
-   `model.provider: anthropic`.
+   `model.provider: anthropic`. Or no key at all: `model.provider: ollama`
+   runs a model on your own hardware, see [Local models](#local-models-with-ollama).
 
 Get the binary from the [releases page](https://github.com/bits-orio/ai-agent-bridge/releases),
 Linux, Windows and macOS builds are attached to every release, or build it
@@ -124,7 +125,7 @@ each key):
 
 | key | default | meaning |
 |---|---|---|
-| `model.provider` | `openrouter` | `openrouter`, `anthropic`, or `fake` (a scripted model for tests, no key) |
+| `model.provider` | `openrouter` | `openrouter`, `anthropic`, `ollama` (your own hardware, no key), or `fake` (a scripted model for tests, no key) |
 | `model.id` | `deepseek/deepseek-v4-pro-0813` | any model the provider lists that supports tool calling |
 | `model.small` | `deepseek/deepseek-v4.1-flash` | reserved for sub-agents, unused until they land |
 | `model.fallbacks` | none | OpenRouter models tried in order when `model.id` fails |
@@ -134,6 +135,52 @@ each key):
 
 A simple question costs a fraction of a cent on the default model. Every
 answer logs what it cost, and `/v1/status` on the control API totals it.
+
+### Local models with Ollama
+
+You can answer questions with a model on your own machine. It costs nothing
+per question and nothing leaves your network. Install
+[Ollama](https://ollama.com), pull a model that has the "tools" tag, and
+point the service at it:
+
+```sh
+ollama pull qwen3:8b
+```
+
+```yaml
+model:
+  provider: ollama
+  id: qwen3:8b
+  reasoning: "off"
+```
+
+`aab check` then tells you whether Ollama is up, the model is pulled and the
+model can call tools. No key is needed.
+
+| key | default | meaning |
+|---|---|---|
+| `ollama.base_url` | `http://localhost:11434` | where Ollama listens; another machine on your network works too |
+| `ollama.num_ctx` | `16384` | the context window the service asks for, in tokens |
+| `ollama.keep_alive` | `30m` | how long the model stays in memory after a question |
+| `ollama.api_key_env` | `OLLAMA_API_KEY` | only for a server that wants a key, such as ollama.com |
+
+What to expect, measured on an RTX 3080 (10 GB) with `qwen3:8b`:
+
+- The first question after a start takes about 13 seconds while the model
+  loads and reads the rules. After that a question takes 2 to 5 seconds,
+  because Ollama keeps the rules in its prompt cache.
+- The model takes about 7.5 GB of video memory at the default context.
+- Answers are weaker than a hosted model's. An 8B model picks the right tool
+  for a simple question, and often gets a hard one wrong or runs out of
+  rounds. Use the biggest model your card holds.
+- Keep `reasoning: "off"` unless you have tested your model with it on.
+  With thinking on, `qwen3:8b` thought and then stopped without answering.
+- Do not lower `num_ctx` below 12000. The rules and tools are about 10,000
+  tokens, and Ollama cuts a prompt that does not fit without an error. The
+  service notices the cut and fails the question with a log line that names
+  `ollama.num_ctx`.
+- `model.timeout` defaults to `5m` with this provider, since a cold model
+  on a slow card can take minutes.
 
 ## Every setting
 
@@ -157,6 +204,9 @@ from environment variables, which is what hosting panels want:
 | `model.reasoning` | `AAB_REASONING` | `low` |
 | `model.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
 | `model.data_collection` | `AAB_DATA_COLLECTION` | `deny` |
+| `ollama.base_url` | `AAB_OLLAMA_URL` | `http://localhost:11434` |
+| `ollama.num_ctx` | `AAB_OLLAMA_NUM_CTX` | `16384` |
+| `ollama.keep_alive` | `AAB_OLLAMA_KEEP_ALIVE` | `30m` |
 | `agent.max_rounds` | `AAB_MAX_ROUNDS` | `6` |
 | `agent.max_tokens_per_question` | `AAB_MAX_TOKENS_PER_QUESTION` | `20000` |
 | `agent.max_output_tokens` | `AAB_MAX_OUTPUT_TOKENS` | `4096` |
@@ -484,6 +534,7 @@ internal/chatscope/    a question's scope, carried to every history read
 internal/model/        the neutral model boundary: blocks, messages, usage
 internal/model/openrouter/  chat completions over OpenRouter
 internal/model/anthropic/   the Anthropic Messages API directly
+internal/model/ollama/      a local model through Ollama's chat API
 internal/model/fake/   the scripted model for tests and the harness
 internal/agent/        the loop, the grammar, sessions, artifacts, validation,
                        label substitution, quotas, the daily budget, the price table

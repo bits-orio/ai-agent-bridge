@@ -80,6 +80,13 @@ func runCheck(ctx context.Context, cfg *config.Config, client *rpc.Client) {
 		say(true, "model", "fake model, no key needed")
 	case "anthropic":
 		say(cfg.Anthropic.APIKey != "", "model", keyLine(cfg.Anthropic.APIKeyEnv, cfg.Anthropic.APIKey, "anthropic", cfg.Model.ID))
+	case "ollama":
+		switch v := checkOllama(ctx, cfg); v.level {
+		case "ok":
+			say(true, "model", v.text)
+		default:
+			say(false, "model", v.text)
+		}
 	default:
 		line := keyLine(cfg.OpenRouter.APIKeyEnv, cfg.OpenRouter.APIKey, "openrouter", cfg.Model.ID)
 		if cfg.OpenRouter.APIKey == "" {

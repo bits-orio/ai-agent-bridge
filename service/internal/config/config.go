@@ -33,6 +33,11 @@ const (
 	defaultModelTimeout            = "120s"
 	defaultOpenRouterKeyEnv        = "OPENROUTER_API_KEY"
 	defaultAnthropicKeyEnv         = "ANTHROPIC_API_KEY"
+	defaultOllamaKeyEnv            = "OLLAMA_API_KEY"
+	defaultOllamaBaseURL           = "http://localhost:11434"
+	defaultOllamaNumCtx            = 16384
+	defaultOllamaKeepAlive         = "30m"
+	defaultOllamaTimeout           = "5m"
 	defaultMaxRounds               = 6
 	defaultMaxTokensPerQuestion    = 20000
 	defaultMaxOutputTokens         = 4096
@@ -84,6 +89,7 @@ type Config struct {
 	Model        ModelConfig      `yaml:"model"`
 	OpenRouter   OpenRouterConfig `yaml:"openrouter"`
 	Anthropic    AnthropicConfig  `yaml:"anthropic"`
+	Ollama       OllamaConfig     `yaml:"ollama"`
 	Agent        AgentConfig      `yaml:"agent"`
 	History      HistoryConfig    `yaml:"history"`
 	ControlAPI   ControlAPIConfig `yaml:"control_api"`
@@ -179,7 +185,7 @@ type RCONConfig struct {
 // ModelConfig is the operator's model choice, one section for every
 // provider (docs/design/phase3-spec.md part 3, ADR 0007).
 type ModelConfig struct {
-	Provider       string   `yaml:"provider"`        // openrouter (default) | anthropic | fake
+	Provider       string   `yaml:"provider"`        // openrouter (default) | anthropic | ollama | fake
 	ID             string   `yaml:"id"`              // the model id as the provider names it
 	Small          string   `yaml:"small"`           // reserved for sub-agents; unused until they land
 	Fallbacks      []string `yaml:"fallbacks"`       // OpenRouter: models tried in order when ID fails
@@ -225,13 +231,27 @@ type AnthropicConfig struct {
 	APIKey    string `yaml:"-"` // resolved from env at load time
 }
 
+// OllamaConfig is where the Ollama server is and how it runs the model
+// (model.provider: ollama). The key is only for a server that wants one,
+// https://ollama.com for instance; a local server takes none.
+type OllamaConfig struct {
+	BaseURL   string `yaml:"base_url"`    // http://localhost:11434 (default)
+	NumCtx    int    `yaml:"num_ctx"`     // context window in tokens, 16384 (default); Ollama's own default is too small for the prompt
+	KeepAlive string `yaml:"keep_alive"`  // how long the model stays in memory after a question, 30m (default)
+	APIKeyEnv string `yaml:"api_key_env"` // OLLAMA_API_KEY (default); may stay unset
+	APIKey    string `yaml:"-"`           // resolved from env at load time
+}
+
 // check refuses a value a provider would refuse later, so a typo in
 // aab.yaml fails at start and not on the first question.
 func (m ModelConfig) check() error {
 	switch m.Provider {
-	case "openrouter", "anthropic", "fake":
+	case "openrouter", "anthropic", "ollama", "fake":
 	default:
-		return fmt.Errorf("model.provider: %q is not openrouter, anthropic or fake", m.Provider)
+		return fmt.Errorf("model.provider: %q is not openrouter, anthropic, ollama or fake", m.Provider)
+	}
+	if m.Provider == "ollama" && m.ID == "" {
+		return errors.New("model.id: provider ollama has no default model; name one you have pulled, qwen3:8b for instance")
 	}
 	switch m.Reasoning {
 	case "off", "model", "low", "medium", "high":
@@ -321,6 +341,9 @@ func load(path string, dump bool) (*Config, error) {
 	if c.Anthropic.APIKeyEnv != "" {
 		c.Anthropic.APIKey = os.Getenv(c.Anthropic.APIKeyEnv)
 	}
+	if c.Ollama.APIKeyEnv != "" {
+		c.Ollama.APIKey = os.Getenv(c.Ollama.APIKeyEnv)
+	}
 	if c.Factorio.SFTP.PasswordEnv != "" {
 		c.Factorio.SFTP.Password = os.Getenv(c.Factorio.SFTP.PasswordEnv)
 	}
@@ -386,13 +409,19 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		},
 		Model: ModelConfig{
 			Provider:       getenvDefault("AAB_MODEL_PROVIDER", defaultProvider),
-			ID:             getenvDefault("AAB_MODEL", defaultModel),
-			Small:          getenvDefault("AAB_MODEL_SMALL", defaultSmallModel),
+			ID:             os.Getenv("AAB_MODEL"),
+			Small:          os.Getenv("AAB_MODEL_SMALL"),
 			Fallbacks:      splitList(os.Getenv("AAB_MODEL_FALLBACKS")),
 			Reasoning:      getenvDefault("AAB_REASONING", defaultReasoning),
 			CacheTTL:       getenvDefault("AAB_CACHE_TTL", defaultCacheTTL),
 			DataCollection: getenvDefault("AAB_DATA_COLLECTION", defaultDataCollection),
-			Timeout:        getenvDefault("AAB_MODEL_TIMEOUT", defaultModelTimeout),
+			Timeout:        os.Getenv("AAB_MODEL_TIMEOUT"),
+		},
+		Ollama: OllamaConfig{
+			BaseURL:   os.Getenv("AAB_OLLAMA_URL"),
+			KeepAlive: os.Getenv("AAB_OLLAMA_KEEP_ALIVE"),
+			APIKeyEnv: defaultOllamaKeyEnv,
+			APIKey:    os.Getenv(defaultOllamaKeyEnv),
 		},
 		OpenRouter: OpenRouterConfig{
 			APIKeyEnv: defaultOpenRouterKeyEnv,
@@ -420,6 +449,13 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		c.PollInterval = Duration(defaultPollInterval)
 	}
 
+	if v := os.Getenv("AAB_OLLAMA_NUM_CTX"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return nil, fmt.Errorf("AAB_OLLAMA_NUM_CTX: invalid value %q", v)
+		}
+		c.Ollama.NumCtx = n
+	}
 	if v := os.Getenv("AAB_MAX_ROUNDS"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
@@ -547,6 +583,7 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 	c.applyBriefingDefaults()
 	c.applyControlDefaults()
 
+	c.applyModelDefaults()
 	if err := c.Model.check(); err != nil {
 		return nil, err
 	}
@@ -725,10 +762,13 @@ func (c *Config) applyModelDefaults() {
 	if c.Model.Provider == "" {
 		c.Model.Provider = defaultProvider
 	}
-	if c.Model.ID == "" {
+	// The default ids are OpenRouter's; a local Ollama has no model until
+	// the operator pulls one, so there the id has to be named (check).
+	local := c.Model.Provider == "ollama"
+	if c.Model.ID == "" && !local {
 		c.Model.ID = defaultModel
 	}
-	if c.Model.Small == "" {
+	if c.Model.Small == "" && !local {
 		c.Model.Small = defaultSmallModel
 	}
 	if c.Model.Reasoning == "" {
@@ -742,6 +782,23 @@ func (c *Config) applyModelDefaults() {
 	}
 	if c.Model.Timeout == "" {
 		c.Model.Timeout = defaultModelTimeout
+		if local {
+			// A local model may have to load first and then read the whole
+			// prompt at the card's speed.
+			c.Model.Timeout = defaultOllamaTimeout
+		}
+	}
+	if c.Ollama.BaseURL == "" {
+		c.Ollama.BaseURL = defaultOllamaBaseURL
+	}
+	if c.Ollama.NumCtx <= 0 {
+		c.Ollama.NumCtx = defaultOllamaNumCtx
+	}
+	if c.Ollama.KeepAlive == "" {
+		c.Ollama.KeepAlive = defaultOllamaKeepAlive
+	}
+	if c.Ollama.APIKeyEnv == "" {
+		c.Ollama.APIKeyEnv = defaultOllamaKeyEnv
 	}
 	if c.OpenRouter.APIKeyEnv == "" {
 		c.OpenRouter.APIKeyEnv = defaultOpenRouterKeyEnv
