@@ -1,4 +1,71 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.0
+Date: 2026-11-14
+  Features:
+    - /aab-ask always works, and a new startup setting, aab-claim-ask-command, lets you leave /ask
+      to another mod that uses it. The question echo now names the command: "Bob asked with /ask:
+      ...".
+    - A new setting, aab-ask-hints. With all, a player who has not asked yet gets one private line
+      saying how, when they join, see someone else ask, or hear an answer. off brings back the
+      plain "Bob asked: ..." line.
+    - New tools: machine_status (why machines are slow or idle, counted by status with examples),
+      power (electric networks: power delivered, accumulator charge, top producers and
+      consumers), research_cost (the science the queue still needs and what holds it back), mods
+      (the active mods and versions) and resources (ore and oil left near a player).
+    - New sweep metrics: logistic_robots, construction_robots, researched, item_used and
+      enemies_killed.
+    - Three commands that need no AI round and cost nothing: /ask help lists what you can type,
+      /ask top <metric> ranks every force (for example /ask top rockets), and /ask card [force]
+      shows one force at a glance. top and card count against the hourly question limits, help
+      does not. They need the new force_card tool and a service that has them.
+    - New tool: force_card, one summary of a force with its players, research, rockets, robots,
+      enemies killed and top items.
+    - The service can print a line nobody asked for, such as a force's first rocket or the first
+      to finish a key technology. A new setting, aab-allow-say, turns that off. Mods can listen
+      with the new on_say event.
+    - find_entities finds idle furnaces and takes several names. entity_count takes several names
+      or a type. production_since takes a list of items. item_rate and top_items work without a
+      surface and total every surface. list_surfaces can list space platforms alone.
+    - tech_status gives a technology's cost: units, seconds per unit, the science packs, or the
+      trigger that unlocks it, and tells you whether it can be started.
+    - Rates say how much of the window the map has lived through, so a ten minute rate on a
+      three minute old map is not read as a full one.
+  Changes:
+    - recipe_needs answers a plain "how do I make X" with one machine per item instead of
+      refusing. Given a surface, it counts only what can run there. Every answer says why its
+      figures are rough, and a single close name is used for a misspelt one.
+    - The sweep metric robots counts logistic and construction robots together; it counted
+      logistic robots only. research is progress through the current technology only.
+    - kills splits enemies, trees_and_rocks and other, so "enemies killed" has a number of its
+      own.
+    - Long lists are cut to fit and name where the next page starts; the bot reads the rest with
+      offset instead of guessing.
+    - A label shared by two forces is reported as ambiguous instead of silently picking one.
+    - The ping, big, write and pcall_test checks of the aab-rpc command are off unless the new
+      startup setting aab-selftest-ops is on. They are for test rigs.
+    - Another mod's questions are capped at 60 a minute for the whole server. A force name or
+      chat scope such a mod sends is cleaned like any other.
+    - When 64 questions are waiting, the oldest answered one is dropped first. Only a full ring of
+      unanswered questions loses one, and the event log records it as question_dropped.
+  Bugfixes:
+    - A private answer whose audience listed a player index the game refuses could stop /ask
+      with a script error, or leave its question unanswered.
+    - A question from another mod with an oversized force name or chat scope could block every
+      question asked after it.
+    - Leaving and rejoining reset a player's ask cooldown.
+    - A question asked in asker-only mode could be read back by other players through the history.
+      It is now kept to its asker.
+    - A force that took a name later could hear a private answer meant for the force that held it
+      before.
+    - A problem while printing an answer was reported as a bad artifact, and a failing subscriber
+      to on_answer could turn a delivered answer into an error. An answer over 16,000 bytes is
+      refused.
+    - tech_status said a technology was available after it was researched.
+  Info:
+    - Server operators take the new service binary from the GitHub release: it also gives each
+      question a deadline, keeps the day's spend across restarts, can require an SFTP host key,
+      and keeps its files readable by its owner only.
+---------------------------------------------------------------------------------------------------
 Version: 1.1.1
 Date: 2026-11-13
   Features:
