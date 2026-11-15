@@ -205,6 +205,19 @@ Each `tool_calls` entry:
 | `voice` | the voice the question ran in (Decision 12): `off`, a preset's own name (`factorio`), or `custom` for free text. The question's in-game `aab-personality` setting wins over the config's `agent.personality`. The service logs once when the map's setting starts or stops deciding the voice |
 | `clipped` | true when the answer the player got was over a cap and went out cut at a word boundary with an ellipsis: the model had no round left to rewrite it, the question ended before a rewrite came back, or the model answered in prose too long for a summary. False for an answer that was refused and rewritten whole |
 
+Updated 2026-11-14: the ledger records gained fields, all optional and omitted
+when empty. A question record and each of its rounds carry `run_id`, one value
+per run of a question, because question ids repeat across a re-run after an
+outage and across maps; join on it when it is there. A `submit_refusals` entry
+now also carries `args`, the arguments the model sent, clipped to about a
+kilobyte, and `kind` has a new value, `cut_off` (the turn stopped on the output
+limit, so nothing in it ran). A round carries `salvaged`, `{note, args}`, when
+its answer was taken only after the service moved its text into the field its
+shape reads. A tool call carries `not_run`, one of `repeat`, `last_round` or
+`cut_off`, when it was never dispatched, and `refunded` when it ran but the
+round's byte budget refused its result. Neither counts as a lookup. The ledger
+directory is created `0700` and its files `0600`.
+
 ## 3. Where it lives, its rotation, and its size
 
 One JSONL file per UTC calendar day, `ledger-YYYY-MM-DD.jsonl`, appended by

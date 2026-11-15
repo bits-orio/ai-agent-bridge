@@ -4,6 +4,29 @@ A concrete pass to run against a live server. Tick as you go, and record what ac
 happened, not what you expect to happen (see `feedback_empirical_diagnosis` in the
 house rules: verify with in-game console tests, don't theorize about engine internals).
 
+## Running the automated layers
+
+Four layers, from cheapest to most real. None calls a model or needs an API key.
+
+- **Lua unit suites.** `make lua-check` runs `luac5.4 -p` over every companion
+  file. `make lua-test` runs each `tests/lua/aab_*test.lua` against a fake game.
+- **Go tests.** `make test` fails on any unformatted Go file, then runs
+  `go vet` and `go test`, inside Docker. The release workflow runs the same
+  checks as CI before it builds anything.
+- **End to end, headless.** `make e2e` starts a real headless server with the
+  companion and the service on the scripted `fake` model, and runs every
+  scenario. When a live service already owns `service/aab`, build the binary
+  elsewhere and pass it in: `SERVICE_BIN=/tmp/aab-e2e E2E_CONTROL_PORT=8191
+  python3 tests/e2e/run.py`. Ports, environment variables and scenarios are in
+  `tests/e2e/README.md`.
+- **Against a real save.** `python3 tests/realsave/run.py --save <zip>` loads a
+  played map and checks what the tools answer against what the engine says,
+  with a before and after comparison for a change to the companion. Needs a
+  full Factorio install and the save's mods; see `tests/realsave/README.md`.
+
+All of them keep Factorio on its own write-data folder, mod directory and
+ports, and stop what they started.
+
 ## 1. Phase 0, transport checks (PLAN.md)
 
 The six checks PLAN.md's Phase 0 rests the whole design on. None of them need the

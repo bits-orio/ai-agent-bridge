@@ -1,5 +1,24 @@
 # AI Agent Bridge (AAB): plan
 
+Status, 2026-11-14: a large batch of fixes and features is built on the
+`review-fixes` branch, uncommitted and unreleased, on top of 1.1.1. In the
+companion: the `/ask` command is optional (`aab-claim-ask-command`, with
+`/aab-ask` always there), `aab-ask-hints` teaches players how to ask, the
+diagnostic ops are off unless `aab-selftest-ops` is on, a mod's remote asks
+are cleaned and capped at 60 a game minute, the question ring evicts answered
+rows first and writes `question_dropped`, asker mode marks a question
+`to_asker`, tool replies fit 3,800 bytes and page with `offset`, and the tool
+set grew: `machine_status`, `power`, `research_cost`, `mods` and `resources`,
+with new sweep metrics. In the service: the agent loop repairs, refuses and
+ends answers more carefully and announces its last turn, one question has a
+deadline (`agent.question_timeout`), the day's spend survives a restart
+(`agent.daily_spend_path`), SFTP host-key checking can be made mandatory,
+the history tailer starts at the file's end and two guards keep another
+map's lines out of a new epoch, and the ledger, history, log and spend files
+are owner-only. A new check, `tests/realsave/`, runs the tools against a real
+save. No version is bumped until the owner decides. The changes are in
+`companion-mod/changelog.txt` under 1.2.0 and in the READMEs. Three more landed the same day: free commands (`/ask help`, `top` and `card`, no model round), the companion tool `force_card` with the rpc op `say` and its `on_say` event and `aab-allow-say` setting, and service milestone toasts (`toasts.*`).
+
 Status, 2026-09-15: Phases 0 through 4 built and running on a live server.
 Phase 4's briefing was measured against the live ledger the day it shipped:
 the free tier's zero-lookup rate went from 0 of 7 questions, when nothing
@@ -99,14 +118,15 @@ Each decision has a fuller record in `docs/adr/`.
   hosted service can drive the same companion without touching it.
 
 **8. A briefing rides with every question, and reads are tiered by cost.**
-- The briefing is one `briefing` op call where the companion has it,
-  replacing a serialized sequence with a single round trip. Where the
-  companion lacks the op, the service assembles the same snapshot from five
-  serialized `call` trips, about 525 ms added to every question, still far
-  cheaper than the round it removes. Either way the briefing is best effort,
-  with its own 2-second timeout: on timeout, on error, or against a companion
-  that lacks the op, it is omitted, logged once, and the question proceeds
-  exactly as it does today.
+- The briefing is assembled by the service from five serialized `call` trips
+  (`list_forces`, `current_research`, `list_surfaces`, `game_time` and
+  `list_players`), about 525 ms added to every question, still far cheaper
+  than the round it removes. A list that the companion cut is followed page
+  by page, up to four pages a section. A dedicated `briefing` op that would
+  have made it one trip was planned and never built: neither the companion nor
+  the service has it. The briefing is best effort, with its own 2-second
+  timeout: on timeout or on error it is omitted, logged once, and the question
+  proceeds exactly as it does today.
 - Reads backed by engine-maintained counters are cheap enough to always sweep
   every force in one call, never a single force at a time.
 - Entity walks stay per force, bounded by a work budget and a maximum radius.
@@ -117,8 +137,9 @@ Each decision has a fuller record in `docs/adr/`.
   logistic networks before it falls back to an anchored walk, and installed
   power capacity ships as a swept nameplate estimate ahead of the exact
   per-network read.
-- A round becomes one RCON trip: a new `calls` op carries a whole round's
-  tool calls in one command, replacing N serialized round trips with one.
+- A round was planned to become one RCON trip: a `calls` op carrying a whole
+  round's tool calls in one command. It was planned and never built (ADR
+  0011); a round's calls still run as separate `call` trips, at once.
 - Voice is one server-wide setting, `personality`, off by default. The map's
   runtime-global setting `aab-personality` rides on every question and wins
   over the operator's `agent.personality`; an admin changes it with
@@ -143,10 +164,15 @@ out through `rcon.print`. Every reply is `{"ok":true,"r":...}` or
 | `providers` | `{}` | sorted list of `{iface, v, tools: [names]}`, one small row per provider | no |
 | `manifest` | `{i}` | one provider's manifest verbatim | no |
 | `call` | `{i, f, a}` | the provider's return value, plain data | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope`, `private`, the asker's `surface` (the one they look at) and `physical_surface` when it differs (Phase 3), and `personality`, the map's `aab-personality` setting as it was when the question was asked | no |
+| `poll` | `{after?, limit?}` | unanswered questions with id greater than `after` (default 0), oldest first, at most `limit` of them (default 16, max 64); rows carry `scope`, `private`, `to_asker` (only when true), the asker's `surface` (the one they look at) and `physical_surface` when it differs (Phase 3), and `personality`, the map's `aab-personality` setting as it was when the question was asked | no |
 | `labels` | `{}` | sorted `{name, label}` rows for every force a labels provider names (Phase 3) | no |
 | `answers` | `{after?, limit?}` | answered questions with id greater than `after`, each with the lines the asker saw | no |
-| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer`. An artifact that would print nothing is refused as `bad_artifact` |
+| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, then marks answered and raises `on_answer`. An artifact that is malformed, over 16,000 encoded bytes or would print nothing is refused as `bad_artifact`; a failure to print is not |
+| `say` | `{artifact}` | `true` | no: validates and prints one unprompted line to everyone (a milestone toast), writes a `say` event, raises `on_say`. `bad_op` when the runtime setting `aab-allow-say` is off; `bad_artifact` for a malformed artifact or one with `to_asker` |
+
+The diagnostic ops `ping`, `big`, `write` and `pcall_test` answer `bad_op`
+unless the startup setting `aab-selftest-ops` is on. No op named `calls` or
+`briefing` exists.
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
 `provider_error`, `bad_result`, `too_large`, `no_question`, `bad_artifact`.
@@ -158,16 +184,20 @@ exists before `pcall(remote.call, i, f, a)`. A result above the byte cap is
 refused, never truncated. The cap is measured in Phase 0.
 
 Remote interface `ai-agent-bridge-v1`:
-- `ask{ text, player_index?, force? }` returns a question id.
+- `ask{ text, player_index?, force?, viewing_force?, watching_force?, scope? }`
+  returns a question id, or nil for a bad spec or over its cap of 60 a game
+  minute for the whole server.
 - `get_event_id("on_answer")` returns the session's event id. Fetch it every
   session from a one-shot `on_nth_tick(1)` armed in `on_init` and `on_load`.
 
 Probe: `agent_tools_v1()` returns `{ v = 1, tools = { <fn> = { desc, params? } } }`.
 `params` entries read `<type>[!] <description>` with type one of string,
 integer, number, boolean, and a trailing `!` meaning required. `force` is
-reserved: the service injects it on every tool, a provider never declares it.
+reserved: the service fills it on every game tool, and a provider never
+declares it. A history tool takes it as an optional filter.
 
-Player-facing: `/ask <question>`. A chat prefix is a setting, off by default.
+Player-facing: `/aab-ask <question>`, and `/ask` unless another mod owns it
+or `aab-claim-ask-command` is off. A chat prefix is a setting, off by default.
 
 ## Artifacts, v1 shapes
 
@@ -227,9 +257,10 @@ Permissioned acting tools. Sub-agents on a cheaper model.
 
 ## Open questions
 
-1. **`/ask` may already be taken by another mod.** Current plan: register
-   `/ask` under `pcall`, fall back to `/aab-ask`, and say which one is live in
-   `status`.
+1. **`/ask` may already be taken by another mod.** Resolved 2026-11-14:
+   `/aab-ask` is always registered, `/ask` is tried under `pcall` beside it,
+   and the startup setting `aab-claim-ask-command` lets an operator leave
+   `/ask` to another mod. `status` says which name is live.
 2. **Chat trigger.** Current plan: the command ships first; a chat prefix
    setting arrives in Phase 2, off by default so ordinary chat never reaches
    the model.
@@ -239,7 +270,9 @@ Permissioned acting tools. Sub-agents on a cheaper model.
    a token-budget choice. Resolved: tool results are capped at 8000 bytes, the
    legacy tools op and one manifest at 32 KB each, other reads at 64 KB, refused
    above, never truncated. The tools op shared the 8000 cap until 1.0.4, by which
-   point the companion's own catalog had reached 8087 bytes and no longer fit.
+   point the companion's own catalog had reached 8087 bytes and no longer fit. Since
+   2026-11-14 the companion's own list tools also fit 3,800 bytes, under the
+   service's 4,096-byte cut, and page with `offset` and `next_offset`.
 4. **Command handlers may block the simulation for every player while they
    run.** Current plan: measure in Phase 0; if true, each tool gets a hard
    time budget in Lua as well as a byte cap.
@@ -308,3 +341,17 @@ Permissioned acting tools. Sub-agents on a cheaper model.
     flight; its budget only stops the next one starting. Giving `Execute` a
     context would tighten every call path rather than one, and is worth doing
     when something needs it more than this did.
+14. **Nothing in the companion declares `better` yet.** The sweep reply may
+    carry `better`, `higher` or `lower`, and the service reads it to rank a
+    metric where less is better, but no companion metric sets it. Current
+    plan: add it to the first metric that needs it.
+15. **The walk tools do not report their coverage.** ADR 0009 promised
+    `covered`, `examined`, `budget` and `exhausted` on every entity walk and a
+    structured refusal with `accepts`. The tools bound themselves (2,000
+    entities for `find_entities`, which says `truncated`) but do not send those
+    fields. Current plan: leave it until a question is answered wrongly for
+    the want of one.
+16. **A same-seed map first reached after its fifth minute can still read the
+    map before it.** The map-epoch guards close the other routes (see
+    `service/README.md`, History). Current plan: accept it; the companion
+    cannot tell two maps of one seed and tick apart.

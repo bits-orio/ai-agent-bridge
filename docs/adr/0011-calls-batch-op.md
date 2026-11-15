@@ -26,3 +26,7 @@ this ADR simply lacks the op: the service falls back to serialized `call` trips 
 the same fallback ADR 0008 describes for a companion whose dedicated `briefing` op is missing.
 No existing provider, tool or client has to change to keep working, since nothing about `call`
 itself moved.
+
+Updated 2026-11-14: not built. The companion has no `calls` op, the service never
+sends one, and a round's reads still run as separate `call` trips. The
+decision stands as a plan; nothing depends on it.

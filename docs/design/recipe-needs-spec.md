@@ -451,6 +451,15 @@ equals the union of the single filters less hidden: 712 of 712 recipes on
 - The targets are capped at 12 items in one call.
 - A bare value where a list was asked for is read as a one-entry list.
 
+Updated 2026-11-14: with a `surface`, the plan counts only what that surface
+can run, and a target it cannot make there puts `not_makeable_on_surface` in
+`approx`. With neither `per_min` nor `machines` the tool no longer refuses: it
+answers for one machine per item and says `assumed: machines=1`. `approx` now
+always carries `no_modules_or_beacons`, and `no_fuel` when a machine in the
+plan burns fuel. A single close name is used in place of an unknown one, and
+the reply says `resolved_from`. The reply fits 3,800 bytes, the one budget
+every tool shares (`bounded.REPLY_BUDGET`), not 4000.
+
 ### Verification as run
 
 The rig numbers: a full red belt is 1800 iron plate a minute on 48 steel

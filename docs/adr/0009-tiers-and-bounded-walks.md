@@ -27,3 +27,11 @@ the nameplate capacity path (`count_entities_filtered` times `get_max_energy_pro
 the two paths that keep a walk's refusal rare rather than routine. Policy in Lua cannot be
 argued with the way a prompt instruction can.
 
+Updated 2026-11-14: what is built and what is not. Every manifest entry
+declares its tier, and the counter-backed reads that sweep every force take
+`all=true`. The walk envelope is not built: no tool replies with `covered`,
+`examined`, `budget` or `exhausted`, and there is no structured
+`refused`/`why`/`accepts` result. The walks bound themselves instead
+(`find_entities` asks the engine for at most 2,000 entities and says
+`truncated`), and a sweep over its read budget is refused with what to ask
+instead.

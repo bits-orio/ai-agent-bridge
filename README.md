@@ -24,10 +24,10 @@ cost, and the guards on each.
 
 ## What it does
 
-- `/ask` a question; the answer comes back in chat a few seconds later,
+- `/ask` (or `/aab-ask`) a question; the answer comes back in chat a few seconds later,
   with item icons, clickable tags when you ask about a thing itself, and
   `[gps]` pings for "where" questions.
-- Follow-ups share a session; `#named` sessions let others join yours.
+- Follow-ups share a session; `#named` sessions let others join yours. `/ask help` lists what you can type.
 - Any player may ask about any force. A team in private chat gets private
   answers, and forces are named the way players name them, when a mod such
   as Multi-Team Support supplies both.

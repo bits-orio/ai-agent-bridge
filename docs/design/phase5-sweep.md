@@ -217,6 +217,18 @@ and `trains` are new companion tools backed by the three per-surface
 `LuaFlowStatistics` families on `LuaForce` and by `game.train_manager`, each
 with its own `all=true`, so the model can call them directly as well.
 
+Updated 2026-11-14: `robots` now counts logistic and construction robots
+together, and `logistic_robots` and `construction_robots` count each kind
+alone; it summed logistic robots only before. New metrics: `researched` (how
+many technologies a force has finished), `item_used` (the consumption side of
+`item_made`, from `production_since`'s `consumed`) and `enemies_killed`.
+`research` is progress through the current technology only. A metric that
+predicts a pass count prunes the force-and-surface cells it will not read
+itself, so the estimate counts the reads it would really make. A refusal for
+too many reads names what to ask instead, and only asks that would pass. The
+reply is held under 3,800 bytes, header and rows together. The envelope may
+carry `better`, `higher` or `lower`; no companion metric sets it yet.
+
 Not a companion metric, deliberately: **playtime**. A team's clock belongs to
 the team mod, and a team mod makes it sweepable by declaring a `sweep` block on
 its clock tool. The companion never names a mod.

@@ -8,9 +8,9 @@ privacy section again on 2026-10-11; every guard here has a test.
 
 | actor | can | cannot |
 |---|---|---|
-| A player in game | `/ask`, the chat prefix, `/ask new`, `/ask #name`, `/ask sessions` | run `/aab-rpc` (refused with one private line; only RCON and the server console reach it), see another team's private question or private chat through an answer (see Chat privacy), forge an answer in the bot's name. An admin alone can change the bot's voice with `/aab-personality`; any player can read it |
+| A player in game | `/ask` (or `/aab-ask`), the chat prefix, `/ask new`, `/ask #name`, `/ask sessions`, `/ask help`, `/ask top`, `/ask card` | run `/aab-rpc` (refused with one private line; only RCON and the server console reach it), see another team's private question or private chat through an answer (see Chat privacy), forge an answer in the bot's name. An admin alone can change the bot's voice with `/aab-personality`; any player can read it |
 | Another mod on the server | ask through `ai-agent-bridge-v1.ask`, expose tools, a chat scope, force labels | anything a mod could not already do: a mod is server code |
-| The service, over RCON | the `aab-rpc` protocol: poll, catalog, tool calls, answers | anything else; the RCON password itself is the server's root, so keep the port on localhost or behind a firewall, as Factorio's own docs say |
+| The service, over RCON | the `aab-rpc` protocol: poll, catalog, tool calls, answers, and `say`, one unprompted line to everyone while `aab-allow-say` is on | run the diagnostic ops `ping`, `big`, `write` and `pcall_test` on a server where `aab-selftest-ops` is off, the default; anything else; the RCON password itself is the server's root, so keep the port on localhost or behind a firewall, as Factorio's own docs say |
 | The model | call the tools in the catalog, with arguments it chooses, and submit one answer | invent a tool, call a function a provider did not list, write anything: every tool is a bounded read |
 
 Player-typed text (questions, names, chat) reaches the model as data. The
@@ -23,6 +23,7 @@ asker's own quota on odd tool calls.
 |---|---|---|---|
 | ask cooldown per player | companion, `aab-ask-cooldown-seconds` | 5 s | a held-down key: refused privately before the echo, the ring and the service |
 | asks per minute, whole server | companion, `aab-asks-per-minute` | 30 | chat flooding by any number of players |
+| asks per minute from other mods, whole server | companion, fixed | 60 a game minute | a loop in another mod filling the question ring; over it, `ask` returns nil and the log says so once a minute |
 | question text | companion | 400 bytes | a wall of text as a question |
 | questions per player per hour | service, `agent.questions_per_player_per_hour` | 20 | one player's cost |
 | questions per hour, whole server | service, `agent.questions_per_hour` | 120 | everyone's cost together |
@@ -32,13 +33,21 @@ asker's own quota on odd tool calls.
 | lookups per question | service, `agent.max_tool_calls` | 30; a round over the cap is refused and the model answers from what it has | dozens of surface scans from one question |
 | output tokens per turn | service, `agent.max_output_tokens` | 4,096 | a model that writes essays |
 | tool result bytes | service, `agent.max_tool_result_bytes` | 4,096 | a result that floods the context |
-| answer size | service and companion | 12,000 bytes and 320 characters a line in the service, 1,280 bytes a line in the companion, 8 rows | chat spam per answer. An answer over a cap is sent back to the model to rewrite, at most twice, and cut only after that |
+| answer size | service and companion | 12,000 bytes and 320 characters a line in the service; in the companion 16,000 encoded bytes in all and 1,280 bytes a line, 8 rows | chat spam per answer. An answer over a cap is sent back to the model to rewrite, at most twice, and cut only after that |
 | live sessions | service | 200 | a player inventing a new `#name` every question |
+| time per question | service, `agent.question_timeout` | 90 s (10 min for ollama) | one slow question holding every question behind it |
+| milestone toasts per hour | service, `toasts.max_per_hour` | 6 | a burst of milestones turning the bot into a chat flood; the rest are dropped with a log line |
+| unprompted lines allowed | companion, `aab-allow-say` | on | the service speaking when nobody asked; off, the `say` op answers `bad_op` |
+| question ring | companion | 64 rows | an unpolled server growing storage; the oldest answered row goes first, and an unanswered one only when all 64 wait, logged and written as `question_dropped` |
 
 A refused question is a private notice to the asker, never a line to the
 audience, so a player's spam cannot become the server's. Questions asked by
-another mod through the interface are exempt from the companion's rate
-limits, mods being server code, and still count against the service's caps.
+another mod through the interface skip the per-player cooldown and the
+per-minute limit on players, no player being behind them, but have the cap of
+their own above, and still count against the service's caps. A player's
+cooldown is not reset by leaving and rejoining. A mod's force names are
+clipped and dropped unless they name a real force, and a scope it passes is
+cleaned the way a scope provider's answer is.
 
 ## The game thread
 
@@ -50,6 +59,9 @@ call that took over 100 ms so an operator can see which one. Two known
 costs to watch: `production_since` on a game with every quality unlocked
 makes one engine call per quality and precision window, and `list_players`
 sorts every player the force has ever had before cutting.
+
+A tool reply is fitted to 3,800 bytes and paged with `offset`, so no single
+call sends more than that into the model's context.
 
 Polling is one small command a second, the labels and scope probes are one
 call each per question, and the catalog is rebuilt every ten minutes.
@@ -123,6 +135,17 @@ before it answers anything: it drops held answers and ends sessions. An answer,
 and the notice sent for a refused artifact, only ever goes over the RCON
 connection its question was polled on.
 
+### Asker mode
+
+With `aab-answer-audience` set to `asker`, a global question prints to its
+asker alone. The companion marks it `to_asker` when it is asked, so a later
+change of the setting does not rewrite it, and puts that on its event line and
+its poll row. The service then stores the question under the private scope
+key `asker:<name>` and keeps its session to that asker: no other player's
+question reads it, and neither does one asked in the open. With no player name
+it is read by nobody. A private audience that has gone, or a force that took
+the name later, hears nothing; the asker alone does.
+
 ### Provider key contract
 
 A scope provider's key is opaque and compared whole, byte for byte, and is at
@@ -164,19 +187,83 @@ sanitised to one short line with no rich-text tags and always ends with a guard
 sentence, so it changes how an answer sounds and never a number, a unit, an item
 name or a table cell.
 
+### The map epoch's two guards
+
+An epoch that a `status` reply starts has no session line of its own at first,
+and the file may still hold lines from the map before it. Two guards cover
+that. Lines that arrive before the epoch's own `session` line, or before the
+tail has caught up with the status, are stored unreadable and lost to every
+read. And a `session` line that names a different map than the status did is
+held: its rows read as nothing until a status names that map, and for good if
+a status names another. The tail itself starts at the end of the file on a
+restart, so a stale session is not replayed; it starts at the top only for a
+file that does not exist yet, or when the file shrinks or its first line
+changes.
+
+### Milestone toasts
+
+A toast is a line nobody asked for, so it follows stricter rules than an
+answer:
+
+- It is made only from public history rows of the current map epoch. A
+  private row, a row the history guards held and a quarantined row never
+  produce one, so a toast cannot leak what a private chat or another map
+  held.
+- It is made only from what happens while the service runs and someone is
+  online, never from history it reads at start, and is dropped when the event
+  is over five game minutes old or the companion is out of reach.
+- In `toasts.mode: model` the model gets no tools and no history, only the
+  milestone sentence, and so cannot be asked to say anything else. It is paid
+  from `agent.max_cost_per_day`, and a failed, late or multi-line reply
+  becomes the plain sentence.
+- At most `toasts.max_per_hour` go out in an hour (6 by default).
+- The `say` op prints through the same guarded printer as an answer, to
+  everyone, never to one player. The runtime setting `aab-allow-say` turns it
+  off, and an admin can change it in game. The companion logs the shape of a
+  line, never its text.
+
 ### Answers that print nothing
 
 In asker mode a global question whose asker has left prints to nobody, with a
 log line, instead of to the server. The `answer` op refuses an artifact that
-would print nothing as `bad_artifact`, counting the title and what the shape
+would print nothing, or that encodes to more than 16,000 bytes, as
+`bad_artifact`, counting the title and what the shape
 prints within the caps. Colour and font tags, empty tags like `[img=]`, spaces
 and control characters do not count.
 
 ## Data
 
-The service log and `events.jsonl` hold every question, including ones
-asked in a team's private chat, since the operator's service answers them.
-`events.jsonl` grows for the life of a save; turn `aab-events-enabled` off
-to stop it, or rotate it from the service's host. Prompts leave the server
+What the service keeps on disk, and who can read it. Every file below holds
+player text, including questions asked in a team's private chat, since the
+operator's service answers them.
+
+| file | holds | mode |
+|---|---|---|
+| `history.path`, SQLite | every chat line, question and event, private ones included, for every map it has seen | `0600`, narrowed on open if an older service left it wider |
+| the ledger, `ledger.dir`, one file a day | one record per question and per round: cost, tokens, tool calls with their arguments, refusals with the arguments sent | `0600`, a new directory `0700` |
+| the log, `log_file` | what the service did, with player text quoted so it cannot forge a line | `0600` |
+| `agent.daily_spend_path` | the rolling day's spend | `0600` |
+
+Back these up or delete them as private data. `events.jsonl` on the game
+server holds the same lines and is the game server's file, with whatever mode
+Factorio gives it. It grows for the life of a save; turn `aab-events-enabled`
+off to stop it, or rotate it from the service's host. Prompts leave the server
 only for the model provider; the default OpenRouter routing denies providers
 that train on prompts.
+
+### SFTP host key
+
+Over SFTP the service checks the server's key against `known_hosts_path`. With
+no such file it accepts any key, which lets a machine between you and the
+server pose as it, and logs a warning at every connect. That is the default,
+as it was before the option existed. Set `factorio.sftp.insecure_ignore_host_key`
+to `false` (or `AAB_SFTP_INSECURE_IGNORE_HOST_KEY=false`) and the service
+refuses to start until `known_hosts_path` names a file.
+
+### Spend with an unpriced model
+
+`agent.max_cost_per_day` can only count what it can price. A direct Anthropic
+model whose id has no price in the build counts as $0, so the cap never trips.
+The service says so in a warning at every start. OpenRouter reports its own
+cost, and Ollama costs nothing. The day's spend is kept across restarts in
+`agent.daily_spend_path`; the hourly quotas are not, and start again.

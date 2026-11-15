@@ -156,6 +156,13 @@ Group B, with a mod release: a dedicated `briefing` op in companion-mod/scripts/
 
 Failure path: the briefing is best effort and never fails a question. On timeout, an error, or a companion that lacks the op it needs, the service omits the briefing, logs one line, and the question proceeds exactly as it does without one, the model working from the tools it already has, one round longer than it would have needed. The briefing carries its own budget inside the question's overall one, 2 seconds, tracked separately from the rpc call's own timeout so a slow briefing cannot eat into the rounds that follow it. The budget bounds how many trips START, not how long one already in flight may run, and that distinction is deliberate: `rcon.Client.Execute` takes no context, so a trip given up on would keep running and keep holding the single RCON mutex, and round 1 would then queue behind a briefing already abandoned, invisibly. Nothing is abandoned. The bound on one in-flight trip is therefore the RCON client's own dial and io timeouts, the same exposure every ordinary tool call already carries, so the briefing adds at most one more trip's worth of it rather than a new class of risk. Giving `Execute` a context would tighten this for every call path, not only the briefing, and is recorded as an open question in PLAN.md rather than done here. It is a read either way: it never writes storage, so CONTEXT.md invariant 2 holds regardless of which group produced it.
 
+Updated 2026-11-14: Group B was never built. Neither the companion nor the
+service has a `briefing` op or a `calls` op, so the briefing is still the five
+`call` trips of Group A. What changed is that the companion now fits each list
+reply to 3,800 bytes and names `next_offset` when it cuts one, and the briefing
+follows those pages, up to four a section (`maxBriefingPages`). A section still
+cut after that is omitted, the rule a single cut page always had.
+
 ### Fencing
 
 The whole payload lands wrapped exactly like this, one line ahead of it saying what it is:
@@ -1058,6 +1065,10 @@ line 82). Concurrency on the Go side buys nothing once the wire only allows
 one command in flight. A new `calls` op removes the serialization by carrying
 the whole round in one command.
 
+Updated 2026-11-14: not built. The companion has no `calls` op and the service
+does not send one; a round's reads still run as separate `call` trips, at once,
+and queue on the one RCON connection. ADR 0011 says the same.
+
 ### The `calls` op
 
 Request, one entry per tool call the round wants, same fields the existing
@@ -1367,3 +1378,14 @@ Every config key this design adds or changes, with its default. A key not listed
 | tier 2 `work_budget` | `2000` | default entities examined for a bounded entity walk |
 | `recent_chat` limit | `10` | rows returned when a caller does not pass `limit` |
 | `briefing` | `on` | whether the briefing rides with each question; an operator can turn it off for the pre-Phase-4 behaviour |
+
+Updated 2026-11-14: the `max_tool_result_bytes` rise to 8000 and the `CAPS.call`
+rise to 16384 were not made with Group B, which was never built. The service
+clip is still 4096 and the companion's `call` reply cap 8000; the companion
+fits its list replies to 3,800 bytes to stay under the clip. The agent loop
+now announces its last turn: after the tool results of the round before the
+last, the model reads "One turn is left" and is asked to answer with what it
+has. On the last round the service forces `submit_answer` where the route
+supports it, runs no read, and takes an answer sent beside reads. The same
+announcement follows the round in which the token budget passed its warning
+mark.

@@ -23,12 +23,13 @@ In use on dedicated servers, vanilla and with Multi-Team Support, with and witho
 1. Install this mod on the server and on every client.
 2. Turn on RCON on the server: a port and a password, in your launch settings or in your hosting panel.
 3. Run the agent program beside the server. It is a small download from GitHub, needs to know where the mod's event log is and how to reach RCON, and takes your own model key. The walkthrough: https://github.com/bits-orio/ai-agent-bridge/blob/main/QUICKSTART.md
-4. Type `/ask what is my iron plate rate` in chat.
+4. Type `/ask what is my iron plate rate` in chat. `/aab-ask` works too.
 
 ## Features
 
 - Ask in plain words; answers come back in chat with item icons and map pings.
 - Follow-ups share a session; `/ask #iron` names one others can join, `/ask new` starts fresh.
+- `/ask top rockets` and `/ask card` answer at once with no AI round, and the server announces milestones such as a first rocket.
 - Every player can ask about every team or force, and "which team has the most" is one lookup however many teams there are.
 - On a Multi-Team Support server, team-only chat gets team-only answers, and teams are called by their names, in their colours.
 - Player names print in each player's own chat colour.

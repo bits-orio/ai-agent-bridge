@@ -44,7 +44,8 @@ Contents:
 
 Type `/ask` and a question. The mod echoes the question to everyone who will
 see the answer, since a command is not a chat line, and the answer arrives a
-few seconds later:
+few seconds later. The echo names the command, `Bob asked with /ask: ...`, so
+a player who only watches learns how to ask:
 
 ```
 /ask what is my iron plate rate
@@ -72,25 +73,57 @@ Items, fluids, machines and technologies show as icons, positions as
 clickable map pings, and forces by the name players use for them when a mod
 supplies it.
 
-If another mod already owns `/ask`, this mod registers `/aab-ask` instead
-and says so in its `status` reply. A chat prefix can ask as well, see the
-settings.
+`/aab-ask` always works and does the same. `/ask` works too, unless another
+mod already owns it or you turn off the startup setting
+`aab-claim-ask-command`; the `status` reply says which name is live. A chat
+prefix can ask as well, see the settings.
+
+A player who asks again soon after is told to wait, and leaving and
+rejoining does not reset that wait. The echo shows the text the mod kept: at
+most 400 bytes, with control characters replaced.
 
 `/aab-personality` shows how the bot sounds. An admin, the server console or
 RCON can change it: `/aab-personality a cheerful pirate`, `off`, or `reset`
 to hand it back to the operator's config. Anyone else is told only an admin
 can.
 
+### Things you can type
+
+Three commands skip the model. They make no model round and cost no money.
+`top` and `card` count against the hourly question limits; `help` does not.
+`top` and `card` need a mod that has the `sweep` and `force_card` tools; on an
+older one you are told to ask it as a question instead.
+
+- `/ask help` (also `/ask ?` and `/ask commands`) lists what you can type. Only
+  you see it.
+- `/ask top <metric> [item]` ranks something across every force, for example
+  `/ask top rockets` or `/ask top item_made iron-plate`. A metric is one of
+  the `sweep` metrics.
+- `/ask card [force]` shows one force at a glance: players, research, rockets,
+  robots, enemies killed and its top items. With no name it is your own force.
+
+A line must be exactly one of these forms. `/ask top 5 reasons my base is
+slow` is still a question.
+
+The service also prints a line of its own now and then, with no question
+behind it, when a force reaches a milestone such as its first rocket. The
+setting `aab-allow-say` turns that off.
+
 ## Settings
 
-All runtime-global: change them under Settings, Mod settings, while the
-server runs.
+The first two are startup settings, read when the game loads. The rest are
+runtime-global: change them under Settings, Mod settings, while the server
+runs.
 
 | setting | default | what it does |
 |---|---|---|
+| `aab-claim-ask-command` | on | Startup. On, the mod registers `/ask` as well as `/aab-ask`. Turn it off when another mod's `/ask` has to stay; players then use `/aab-ask`. |
+| `aab-selftest-ops` | off | Startup. For test rigs only. Turns on the diagnostic ops `ping`, `big`, `write` and `pcall_test`; off, they answer `bad_op`. Leave it off on a real server. |
 | `aab-events-enabled` | on | Append deaths, joins, leaves, chat, questions, answers, research and rocket launches to `script-output/ai-agent-bridge/events.jsonl`. Off stops the file growing. |
 | `aab-chat-prefix` | blank (off) | Blank means only `/ask` asks. Set it and any chat line starting with those exact characters becomes a question, the rest of the line being the text. Matched literally, spaces included; pick something no sentence starts with, `?` or `@ai `. The answer goes to whoever saw the line, see [Asking](#asking). |
 | `aab-answer-audience` | server | `server` prints every global answer to everyone, so anyone can follow up. `asker` prints only to the player who asked, and to nobody when they have left before the answer arrives; the log says so. A question a mod asked with no player still prints to everyone. A private question always prints to its own audience, whatever this says: one a chat privacy mod marked private, or one asked in a chat line that reached a single force. |
+| `aab-ask-hints` | echo | How players learn to ask. `echo`: the line others see names the command, `Bob asked with /ask: ...`. `all`: also one private line, once per player, `You can ask too: /ask <your question>`, sent when the player joins, sees a question echoed or hears an answer. `off`: the plain `Bob asked: ...` line. |
+| `aab-allow-say` | on | Runtime, global. Lets the service print a line to everyone that answers no question, such as a milestone it noticed. Off keeps the bot silent until someone asks; the `say` op then answers `bad_op`. Answers to questions are not affected. |
 | `aab-ask-cooldown-seconds` | 5 | A player who asks again sooner is told to wait, privately: no echo, no question, no cost. 0 turns it off. |
 | `aab-asks-per-minute` | 30 | When the whole server has asked this many times in a minute, further asks are refused privately until the minute turns. 0 turns it off. |
 | `aab-personality` | blank | How the bot sounds. Blank uses the operator's config, `off` turns the voice off, `factorio` picks the built-in one, anything else describes it, `a cheerful pirate` for example, at most 500 bytes. Each question carries the value it was asked with. Admins can also set it with `/aab-personality`. |
@@ -130,15 +163,16 @@ their own console gets one private line and nothing runs.
 
 | op | request | reply `r` | writes storage |
 |---|---|---|---|
-| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, which `/ask` command name is live, `map_id` | only the map id, once, on a save that has none yet |
+| `status` | `{}` | protocol version, mod version, tick, connected player count, pending question count, `last_id`, `ask_command` (the `/ask` command name that is live, left out when neither could be registered), `map_id` | only the map id, once, on a save that has none yet |
 | `providers` | `{}` | sorted list of `{iface, v, tools}`, one per provider, `tools` being the sorted tool names | no |
 | `manifest` | `{i}` | one provider's manifest verbatim, `{v, tools}` | no |
 | `tools` | `{}` | every provider's manifest at once, for small servers and tests | no |
 | `call` | `{i, f, a?}` | the tool's return value, plain data | no |
 | `labels` | `{}` | sorted `{name, label}` rows: what players call each force, from any labels provider | no |
-| `poll` | `{after?, limit?}` | unanswered questions with id above `after`, oldest first, each `{id, text, player_index, player_name, force, viewing_force, watching_force, tick, scope, private, surface, physical_surface, personality}` | no |
-| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, marks answered, raises `on_answer` |
+| `poll` | `{after?, limit?}` | unanswered questions with id above `after`, oldest first, each `{id, text, player_index, player_name, force, viewing_force, watching_force, tick, scope, private, to_asker, surface, physical_surface, personality}` | no |
+| `answer` | `{qid, artifact}` | `true` | yes: validates, renders, marks answered, and marks each player it hints as taught; raises `on_answer` |
 | `answers` | `{after?, limit?}` | answered questions with id above `after`, oldest first, each `{id, shape, lines, player_index}` | no |
+| `say` | `{artifact}` | `true` | no: validates and prints one unprompted line to everyone, writes a `say` event, raises `on_say`; `bad_op` when `aab-allow-say` is off; `bad_artifact` for a bad artifact or one with `to_asker` |
 
 Error codes: `bad_json`, `bad_version`, `bad_op`, `no_provider`, `no_tool`,
 `provider_error`, `bad_artifact`, `bad_result`, `too_large`, `no_question`.
@@ -147,7 +181,9 @@ Replies are capped: 8,000 bytes for `call`, 32,768 for `tools` and
 `manifest`, 65,536 for the rest. A reply over its cap is refused whole as
 `too_large`, never cut. That is why the catalog is read as `providers` then
 one `manifest` each: a mod with forty wordy tools costs itself its tools and
-nobody else theirs.
+nobody else theirs. The companion's own tools keep each list reply under
+3,800 bytes and page it: a reply that was cut says `next_offset`, and the
+same call with `offset` set to that value returns the next rows.
 
 ### Questions
 
@@ -170,6 +206,10 @@ Where such a mod is installed but leaves the line to the game's rule,
 questions under `global` apart from everyone else's: nothing says who else
 heard them.
 
+`to_asker` is present, and true, on a global question whose answer prints to
+its asker alone, because `aab-answer-audience` was `asker` when it was asked.
+An agent keeps such a question, and the session it opens, to that one asker.
+
 `personality` is the `aab-personality` setting as it stood when the question
 was asked, trimmed and at most 500 bytes, and is left out when blank. The
 mod never reads it; the agent decides what it means. A row with 400 bytes of
@@ -179,7 +219,7 @@ rows passes the 65,536-byte cap and answers `too_large`: page smaller then.
 ### Tool calls
 
 `call` takes the interface name `i`, the function `f` and one JSON object
-`a`. Every tool takes `force`: the agent fills it with the asker's force
+`a`. Every game tool takes `force`: the agent fills it with the asker's force
 unless the question named another. `a` may be left out for a tool that
 needs nothing. A tool that fails answers `provider_error` with the first
 line of its message, which is written for a model to read and try again.
@@ -204,11 +244,13 @@ The model fills one of five shapes; the mod renders it. Every shape but
 | `art` | `lines: string[]`, printed as written in a monospace font, spaces kept | 12 lines of 60 characters |
 
 Two optional fields on any shape: `session: {name, fresh}` renders a
-`(new session)` marker when `fresh` is true, and `to_asker: true` prints the
-answer to the asker alone, for a refusal that is nobody else's business.
+`(new session)` marker when `fresh` is true, with `#name` added when `name`
+matches `[a-z0-9_-]{1,16}` and left off otherwise, and `to_asker: true` prints
+the answer to the asker alone, for a refusal that is nobody else's business.
 
 The caps are the bundled service's own, so an answer it sends is never cut
-again here. A cell is 320 characters there; here every string has its
+again here. The artifact as a whole may be at most 16,000 bytes encoded, above
+the service's own 12,000, and a larger one is `bad_artifact`. A cell is 320 characters there; here every string has its
 control characters replaced, so a player name echoed into an answer cannot
 forge a line, and a line past 1,280 bytes, 320 characters at four bytes
 each, is cut on a UTF-8 boundary and ends with an ellipsis. Factorio rich
@@ -237,16 +279,27 @@ line, ` | ` between cells, each column padded to its widest cell and
 numbers right-aligned.
 
 `answer` validates before it touches anything: an unknown shape, a
-mistyped field, or an artifact that would print nothing, its title and
-every line, item or cell blank, is `bad_artifact` and the question stays
-pending. Rendering happens before the question is marked answered, so a
+mistyped field, an artifact over the size cap, or an artifact that would print
+nothing, its title and every line, item or cell blank, is `bad_artifact` and
+the question stays pending. Only a problem with the artifact itself comes back
+as `bad_artifact`: a failure while printing is logged and never blamed on the
+client. Rendering happens before the question is marked answered, so a
 question is never marked done with nothing shown. Answering an already
 answered question succeeds and changes nothing, so a lost reply can be sent
-again.
+again. `on_answer` is raised under its own guard, so a subscriber that fails
+cannot turn a delivered answer into an error.
+
+`say` is an answer without a question. It takes the same artifact, checks it
+and renders it the same way, and prints it to everyone with the mod's name in
+front and no channel tag or session marker. There is no asker, so `to_asker`
+is refused and the line is always global. It writes nothing to `storage` and
+never touches the question ring. `on_say` is raised under its own guard too.
 
 ### Diagnostic ops
 
-Kept from the transport checks; not part of the frozen surface.
+Kept from the transport checks; not part of the frozen surface. They are
+for test rigs: unless the startup setting `aab-selftest-ops` is on, each one
+answers `bad_op`, as an unknown op does.
 
 | op | request | reply `r` |
 |---|---|---|
@@ -335,14 +388,18 @@ end
 
 | function | args | returns |
 |---|---|---|
-| `ask` | `{ text, player_index?, force?, scope? }` | the new question's id, or `nil` if `text` was missing |
-| `get_event_id` | `"on_answer"` | this session's event id for `on_answer`, or `nil` |
+| `ask` | `{ text, player_index?, force?, viewing_force?, watching_force?, scope? }` | the new question's id, or `nil` if `text` was missing or the mod is over its cap |
+| `get_event_id` | `"on_answer"` or `"on_say"` | this session's event id for that event, or `nil` |
 
-`text` must be a non-empty string; `force` a force *name*; `player_index` a
-number. A field of the wrong type is dropped rather than stored, because one
-unencodable question would break every later poll. Nothing here errors.
-Questions asked this way are exempt from the ask rate limits, a mod being
-server code, and still count against the agent's own caps.
+`text` must be a non-empty string; `force`, `viewing_force` and `watching_force`
+are force *names*; `player_index` a number. A field of the wrong type is dropped
+rather than stored, because one unencodable question would break every later
+poll. A force name is clipped to 64 bytes and dropped unless it names a real
+force. A `scope` you pass is cleaned exactly as a scope provider's answer is
+(see seam 4). Nothing here errors. Questions asked this way skip the per-player
+cooldown and the per-minute limit on players, since no player is behind them.
+They have a cap of their own: 60 a game minute for the whole server, and `ask`
+returns `nil` over it. They still count against the agent's own caps.
 
 ### 3. Answers by event, `on_answer`
 
@@ -350,7 +407,8 @@ Raised once per answered question. `e.artifact` is what the agent sent;
 `e.shape` and `e.lines` are what this mod rendered, the same lines the
 `answers` op returns. `e.scope` and `e.private` are the question's: a
 subscriber that relays answers anywhere else keeps a private one inside its
-channel, and one with `e.artifact.to_asker` to the asker alone. A private
+channel, and one with `e.artifact.to_asker` to the asker alone. A subscriber
+that errors is logged and changes nothing for the player. A private
 one under `global` has no channel to keep it in, so relay it nowhere. A `generate_event_name()` id is only valid in the
 session that made it, so fetch it in `on_init` and
 `on_configuration_changed`, cache it in `storage`, and reuse it in `on_load`:
@@ -374,6 +432,15 @@ script.on_init(function() fetch_event_id(); register_handler() end)
 script.on_configuration_changed(function() fetch_event_id(); register_handler() end)
 script.on_load(register_handler)
 ```
+
+The service can also print a line nobody asked for, a milestone for example,
+through the `say` op. It raises a second event, `on_say`, with
+`{ artifact, shape, lines }`: what the service sent and what this mod printed.
+There is no question, scope or asker, because the line went to everyone. Get
+its id with `remote.call("ai-agent-bridge-v1", "get_event_id", "on_say")` and
+cache it the same way. A subscriber that errors is logged and changes
+nothing. Nothing is raised while `aab-allow-say` is off, since nothing is
+printed.
 
 ### 4. Chat scope by probe, `chat_scope_v1`
 
@@ -454,7 +521,9 @@ What you return is read as who heard the text:
 answer, a private answer wins. The result is fixed when the question is
 asked, so an answer prints to that audience however the channel has changed
 since, and a channel that leaves private mode never sees its private session
-continue in the open. Keep the probe cheap and free of side effects: it runs
+continue in the open. A force audience is kept with the force's index as
+well as its name: if another force takes that name later, it hears nothing,
+and the asker alone sees the answer. Keep the probe cheap and free of side effects: it runs
 on every chat line.
 
 ### 5. Force labels by probe, `force_labels_v1`
@@ -490,32 +559,47 @@ repair packs here?" is about the watched force.
 ## Tools this mod provides
 
 The mod is a provider like any other, on the interface
-`ai-agent-bridge-tools`. `force` is injected into every one of these.
+`ai-agent-bridge-tools`. `force` is injected into every game tool here; a
+tool that reads history, which the service owns, treats it as an optional
+filter instead.
 
 | tool | arguments | returns |
 |---|---|---|
-| `list_forces` | `include_empty`, `limit` | the forces that have ever had a player: name, player count, connected player count, with `total`, `empty` (left out as never-joined slots) and `shown`; `include_empty=true` lists every force |
-| `list_players` | `connected`, `limit` | that force's players: name, connected, admin, with `known`, `total` and `shown` |
-| `list_surfaces` | `limit` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it |
-| `current_research` | `all` | what that force is researching, and its progress; `all=true` gives one row per force that has players or research, in one call |
+| `list_forces` | `include_empty`, `names`, `limit`, `offset` | the forces that have ever had a player: name, player count, connected player count, with `total`, `empty` (left out as never-joined slots) and `shown`; `include_empty=true` lists every force; `names=true` adds the name each force was given |
+| `list_players` | `connected`, `all`, `limit`, `offset` | that force's players: name, connected, admin, with `known`, `total` and `shown`; `all=true` answers for every force in one call |
+| `list_surfaces` | `kind`, `limit`, `offset` | the surfaces: name, index, planet if it has one, how many of that force's players stand on it (`force_players`) and how many of them are connected (`force_players_online`); `kind` is `all`, `planets` or `platforms`, and a platform row adds its owner, location and state |
+| `current_research` | `all` | what that force is researching, and its progress through that one technology; `all=true` gives one row per force that has players or research, in one call |
 | `research_queue` | `limit` | the running technology and the queue behind it: name, level, research units, progress |
-| `tech_status` | `tech`, `limit` | one technology: researched, enabled, available, level, units, progress, missing prerequisites |
-| `item_rate` | `surface`, `item`, `window` | how fast one item is made and used, per minute over the window, summed over every quality; a rate, never a total |
-| `top_items` | `surface`, `window`, `n` | the n most-produced items, ranked, each summed over every quality |
-| `production_since` | `surface?`, `item`, `since_tick` | how much of one item that force produced and consumed since a tick, 0 for the whole game; with no surface, every surface the force has made it on, with a per-surface breakdown; the answer to "how much" |
-| `logistics_summary` | `surface`, `limit` | that force's logistic networks on one surface: robots, idle robots, cells, the eight largest item counts |
-| `entity_count` | `surface`, `name` | how many entities of one prototype that force has on one surface, counted by the engine |
+| `research_cost` | `tech`, `level` | the science the queue, or one technology, still needs: units left, packs per unit and in all, minutes at the current rate and the bottleneck pack |
+| `tech_status` | `tech`, `all`, `limit`, `offset` | one technology: researched, enabled, `available` (false once researched), level, progress, missing prerequisites, and its cost: `units`, `unit_time`, `ingredients`, or `research_trigger` for one that unlocks by doing something; `all=true` gives one row per force |
+| `item_rate` | `surface?`, `item`, `window` | how fast one item is made and used, per minute over the window, summed over every quality; with no `surface`, totalled over every surface with a per-surface breakdown; a rate, never a total |
+| `top_items` | `surface?`, `window`, `n` | the n most-produced items, ranked, each summed over every quality; with no `surface`, over every surface |
+| `production_since` | `surface?`, `item` or `items`, `since_tick` | how much of one item, or up to the listed items, that force produced and consumed since a tick, 0 for the whole game; with no surface, every surface the force has made it on, with a per-surface breakdown; the answer to "how much" |
+| `fluid_rate` | `surface`, `fluid`, `window`, `all` | how fast one fluid is made and used, units per minute; `all=true` ranks every force |
+| `logistics_summary` | `surface`, `limit`, `contents` | that force's logistic networks on one surface: robots, idle robots, cells, the eight largest item counts |
+| `entity_count` | `surface`, one of `name`, `names` or `type`; `all`, `per_surface`, `offset` | how many entities that force has, counted by the engine, per name and in total; `type` counts every entity of a prototype type such as `furnace`; `all=true` gives one row per force |
+| `machine_status` | `surface`, one of `name` or `type`; `near`, `radius`, `limit`, `offset` | why machines are slow or idle: that force's entities of a name or type on a surface, counted by status with example gps tags, optionally around one player |
+| `power` | `surface`, `limit` | the electric networks on a surface, largest first: power delivered now, accumulator charge, and the top producers and consumers. Delivered power cannot show a shortage; look for empty accumulators here and `low_power` in `machine_status` |
+| `resources` | `surface`, `near`, `resource`, `radius`, `offset` | the ore and oil left around a player, per resource: tiles, total and the richest tile as a gps tag; infinite resources give their average yield |
 | `evolution` | `surface` | the evolution factor on one surface and its time, pollution and spawner-kill parts |
 | `pollution` | `surface` | total pollution on one surface and which pollutant it uses |
-| `rockets` | `limit` | rockets launched by that force and the items it sent up, largest first |
+| `rockets` | `limit`, `all`, `offset` | rockets launched by that force and the items it sent up, largest first; `all=true` gives counts for every force |
+| `trains` | `surface?`, `all`, `offset` | how many trains that force has and how many are moving or in manual control |
+| `kills` | `surface?`, `limit`, `all`, `offset` | what that force has destroyed and lost; `kills` is split into `enemies`, `trees_and_rocks` and `other`, so "enemies killed" is `enemies` |
+| `built` | `surface?`, `limit`, `all`, `offset` | how many entities that force has built and mined back, counted as events over the game rather than what stands now |
 | `game_time` | force only | tick, ticks played, hours played, connected players on the server and on that force |
-| `find_entities` | `surface`, one of `name`, `type`, `recipe`, `product`; `ghost`, `limit` | where that force's entities are on one surface, each with a ready `[gps=x,y,surface]` tag: by prototype name, entity type, the recipe a crafting machine is set to, or the item or fluid that recipe makes; ghosts match by what they will become and say `ghost = true`; an unknown name comes back with up to five close names |
-| `locate_player` | `player`, `all`, `nearby` | where one player's character is, with a gps tag, whether they are connected, and `viewing` when they look at another surface; `nearby=N` adds the closest built things within N tiles, nearest first, with distance and gps; `all=true` answers for every connected player in one call |
-| `recipe_needs` | `items`, one of `per_min` or `machines`; `machine`, `belt`, `stop_at` | what it takes to make the targets, worked out from that force's own unlocked recipes: every crafted item per minute with its recipe, machine and machine count, the raw inputs per minute, and belts of each; `machines` turns a count the player has into a rate; a machine or belt the force cannot build yet says `unlocked = false`, a raw item whose recipe is still locked says `recipe_locked`; `approx` lists why figures are rough (`byproducts` not balanced, a `cycle`, a `cap` reached); research productivity only, no modules or beacons; a raw input the game hands out, mined from a resource or pumped from a tile, with no recipe named after it, stays raw and says `raw = "mined"`, the recipes that could make it anyway, asteroid crushing or ice melting, in `alternatives`; unknown names come back `found = false` with `did_you_mean`, up to five real names each |
+| `mods` | `offset` | the active mods and their versions |
+| `find_entities` | `surface`, one of `name`, `names`, `type`, `recipe`, `product`; `ghost`, `limit` | where that force's entities are on one surface, each with a ready `[gps=x,y,surface]` tag: by prototype name or several names, entity type, the recipe a crafting machine is set to (an idle furnace by its last one), or the item or fluid that recipe makes; ghosts match by what they will become and say `ghost = true`; an unknown name comes back with up to five close names |
+| `locate_player` | `player`, `all`, `nearby`, `offset` | where one player's character is, with a gps tag, whether they are connected, and `viewing` when they look at another surface; `nearby=N` adds the closest built things within N tiles, nearest first, with distance and gps; `all=true` answers for every connected player in one call |
+| `recipe_needs` | `items`, one of `per_min` or `machines`; `machine`, `belt`, `stop_at`, `surface` | what it takes to make the targets, worked out from that force's own unlocked recipes: every crafted item per minute with its recipe, machine and machine count, the raw inputs per minute, and belts of each; see below |
+| `force_card` | none, `force` only | one summary of one force: `players_total`, `players_online`, `researched`, `current_research` with `research_progress` and `queue`, `rockets`, `robots_total` with `logistic_robots` and `construction_robots`, `enemies_killed` and `top_items` (the five most made, per minute over one hour). A key with no value is left out; `surfaces_cut` or `partial_window` say when a figure is partial. Use it first for "how is this force doing" |
+| `sweep` | `metric`, `axis`, `subject`, `window`, `limit` | which force, surface, platform or player has the most of something, in one call; the metrics are `entities`, `rockets`, `research`, `researched`, `players`, `item_made`, `item_used`, `item_rate`, `pollution`, `evolution`, `robots`, `logistic_robots`, `construction_robots`, `networks`, `kills`, `enemies_killed`, `built`, `fluid_rate` and `trains` |
 
 Every list is bounded and sorted before it is cut, and reports `total`
 beside `shown`, so an agent can say "12 online of 214 known" instead of
-believing it saw everyone. `find_entities` asks the engine for at most 2,000
+believing it saw everyone. A reply fits 3,800 bytes: rows past that are left
+off, `next_offset` names where the next page starts, and a list tool takes
+`offset` to read it. `find_entities` asks the engine for at most 2,000
 entities in one pass and returns 5 positions by default, 10 at most;
 `truncated` says when the pass hit its cap, and a truncated reply shows
 what the pass saw, never that something is absent. A `recipe` or `product`
@@ -523,17 +607,46 @@ search with no name or type asks for the three crafter types rather than
 for everything, so the 2,000 are spent on machines that can match instead
 of on belts and poles. Every fraction is rounded and
 sent as a short decimal string, `"1.79"`, because the engine's JSON writer
-would otherwise print fifty digits of it; whole numbers stay numbers. Every `surface` argument takes a name or an index and answers
-`found = false` with a reason for one this game does not have, as
-`tech_status`, `entity_count` and `find_entities` do for a name.
+would otherwise print fifty digits of it; whole numbers stay numbers. Every
+`surface` argument takes a name or an index and answers `found = false` with
+a reason for one this game does not have, as `tech_status`, `entity_count`
+and `find_entities` do for a name. A label two forces share is refused as
+ambiguous, never resolved to one of them silently.
 
 Rates and totals are summed over every quality, because the engine treats a
 bare item name as normal quality alone. `window` is one of the engine's own
 precisions: `five_seconds`, `one_minute`, `ten_minutes`, `one_hour`,
 `ten_hours`, `fifty_hours`, `two_hundred_fifty_hours`, `one_thousand_hours`.
+A rate reply carries `window_ticks` and `map_age_ticks`, and says
+`partial_window = true` when the map is younger than the window, so a rate
+over ten minutes on a three-minute-old map is not read as a full one.
 `production_since` sums flow samples from the smallest window that covers
 the elapsed ticks and reports `elapsed_ticks`, `covered_ticks` and
 `covers_full_period`, since the engine keeps 300 samples per window.
+
+`recipe_needs` works from what the force has unlocked. With a `surface` it
+counts only what can run and be mined or pumped there, and says
+`not_makeable_on_surface` in `approx` when the target cannot be made on it.
+With neither `per_min` nor `machines` it answers for one machine per item
+and says `assumed: machines=1`. A single close name is resolved, with
+`resolved_from` showing what was asked. Every reply carries `approx`, a list
+of why its figures are rough: `no_modules_or_beacons` (research productivity
+only), `no_fuel` when a machine burns fuel, and where they apply `byproducts` not balanced, a `cycle`,
+a `cap` reached. A machine or belt the force cannot build yet says
+`unlocked = false`, a raw item whose recipe is still locked says
+`recipe_locked`, and a raw input the game hands out, mined from a resource or
+pumped from a tile, says `raw = "mined"`, with the recipes that could make
+it anyway, asteroid crushing or ice melting, in `alternatives`. Unknown
+names come back `found = false` with `did_you_mean`, up to five real names
+each.
+
+`sweep` takes the metrics of every provider that declares one, beside its
+own. `robots` counts logistic and construction robots together, with
+`logistic_robots` and `construction_robots` for each alone. `research` is
+progress through the current technology only; `researched` counts finished
+ones. A refusal names the metric, axis or subject that would have passed. A
+reply may carry `better`, `higher` or `lower`, which says which end of the
+ranking is the good one.
 
 ## The events file
 
@@ -557,8 +670,10 @@ it, never a client. One JSON object per line:
 | `console_chat` | `player`, `force`, `message`, `scope`, `private` |
 | `research_finished` | `force`, `tech`, `level` |
 | `rocket_launched` | `force`, `surface` |
-| `question` | `qid`, `player`, `force`, `text`, `scope`, `private` |
+| `question` | `qid`, `player`, `force`, `text`, `scope`, `private`, `to_asker` (only when true) |
 | `answer` | `qid`, `shape` |
+| `question_dropped` | `qid` |
+| `say` | `shape`, never the text |
 
 `session` is the first line of every session. Its `map_id` is made once
 per map, from the map seed, the tick it was made at and a random number,
@@ -570,7 +685,13 @@ the same id as its own `map_id`, so an agent knows the map before any event
 is written.
 
 A `question` row's `text` is the text the question kept, at most 400 bytes,
-the same as its `poll` row.
+the same as its `poll` row. A row with `to_asker` true was shown to its asker
+alone: treat it as private to that player, whatever `scope` says.
+
+The question ring holds 64. When it is full, the oldest answered question goes
+first. Only when all 64 are still waiting does the oldest of them go, and the
+mod writes `question_dropped` with its `qid`, since an answer to it can no
+longer land.
 
 `scope` and `private` say who heard a chat line or a question. A row with
 `private` true was heard only inside its `scope` key: show its text only to
@@ -580,6 +701,10 @@ show it to nobody. A row with `private` false was heard by everyone. A line type
 the server console has no `force` and is public. An `answer` is as private
 as its question.
 
+A `say` row is one line the service printed to everyone with no question
+behind it. It records the shape and never the text, so it is public and
+holds nothing to hide.
+
 An agent on the same machine reads the file; one elsewhere reads it over
 SFTP. The bundled service does either.
 
@@ -588,8 +713,10 @@ SFTP. The bundled service does either.
 What players can do, what an agent can do, what it can cost and the guards
 on each are in [SECURITY.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/SECURITY.md).
 In short: the rpc command runs for RCON only, asking is rate limited before
-anything else happens, refusals are private, every tool is a bounded read,
-and the agent side keeps its own quotas and a daily budget.
+anything else happens (a mod's asks have a cap of their own), refusals are
+private, every tool is a bounded read, the diagnostic ops are off unless a
+startup setting turns them on, and the agent side keeps its own quotas and a
+daily budget.
 
 The full design lives in the repository: [CONTEXT.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/CONTEXT.md)
 for the words, [PLAN.md](https://github.com/bits-orio/ai-agent-bridge/blob/main/PLAN.md)

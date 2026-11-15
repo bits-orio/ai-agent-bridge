@@ -28,3 +28,7 @@ at 525 ms or one dedicated op both cost far less than the 2 to 6 second round ei
 so the briefing is paid for even on questions that never needed it. A briefing that fails
 never turns a question into a failed one, only a plainer one.
 
+Updated 2026-11-14: the `briefing` op and the `calls` op were planned and never
+built. The service assembles the briefing from the five `call` trips, and
+follows `next_offset` when the companion cuts a list, up to four pages a
+section.

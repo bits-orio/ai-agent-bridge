@@ -92,7 +92,10 @@ all work, on any machine that can reach the server.
 
 The question is echoed to everyone, the answer prints a few seconds later,
 and anyone can follow up. `/ask new` starts over, `/ask #iron ...` names a
-session, `/ask sessions` lists them.
+session, `/ask sessions` lists them, and `/ask help` lists everything you can
+type. `/aab-ask` does the same and always
+works; `/ask` is left to another mod that owns it when the startup setting
+`aab-claim-ask-command` is off.
 
 ## When it does not work
 
@@ -102,6 +105,8 @@ session, `/ask sessions` lists them.
   the address or the password is wrong. `question 3: no catalog available`
   means it has the question and is waiting to read the tool list; the line
   above it says why.
+- **"That took too long, so I stopped."** One question may take 90 seconds
+  (10 minutes with a local model), set by `agent.question_timeout`.
 - **The service refuses to start.** Read `aab.effective.yaml` next to it:
   every setting as resolved, each secret marked `SET (n chars)` or `MISSING`.
 - **The question is refused with a short notice.** The asker hit a cap: five
