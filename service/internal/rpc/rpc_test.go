@@ -440,3 +440,17 @@ func TestAnswerOnHoldsTheAnswerToItsConnection(t *testing.T) {
 		t.Errorf("Connection() over an executor without connections = %d, want 0", got)
 	}
 }
+
+// S4: a question the companion prints to its asker alone (aab-answer-audience
+// = asker) says so with to_asker; an older companion sends none, which reads
+// as false.
+func TestPollParsesToAsker(t *testing.T) {
+	fake := &fakeRCON{resp: `{"ok":true,"r":[{"id":5,"text":"a","tick":1,"to_asker":true},{"id":6,"text":"b","tick":2}]}`}
+	got, err := New(fake).Poll(context.Background(), 4, 16)
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(got) != 2 || !got[0].ToAsker || got[1].ToAsker {
+		t.Errorf("Poll() = %+v, want to_asker on the first question only", got)
+	}
+}

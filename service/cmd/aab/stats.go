@@ -27,6 +27,7 @@ import (
 	"log"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -168,18 +169,30 @@ func (t tokenTotals) cacheHitRatio() (ratio float64, ok bool) {
 	return float64(t.cacheRead) / float64(total), true
 }
 
-// questionTokenTotals sums InputTokens/CacheReadTokens per question_id
-// across every round, so a round can be joined back to the question it
-// belongs to the same way the ledger itself is keyed (section 2).
-func questionTokenTotals(rounds []ledger.RoundRecord) map[int64]tokenTotals {
-	out := make(map[int64]tokenTotals)
+// questionTokenTotals sums InputTokens/CacheReadTokens per run across
+// every round, so a round can be joined back to the question it belongs to
+// (section 2). A run is its run_id when the ledger names one; question ids
+// repeat across re-runs and maps, so joining on them alone mixes runs. An
+// older ledger with no run_id falls back to the question id.
+func questionTokenTotals(rounds []ledger.RoundRecord) map[string]tokenTotals {
+	out := make(map[string]tokenTotals)
 	for _, r := range rounds {
-		t := out[r.QuestionID]
+		k := runOf(r.RunID, r.QuestionID)
+		t := out[k]
 		t.input += r.InputTokens
 		t.cacheRead += r.CacheReadTokens
-		out[r.QuestionID] = t
+		out[k] = t
 	}
 	return out
+}
+
+// runOf is the key one record joins on: its run_id, or its question id
+// when it has none.
+func runOf(runID string, qid int64) string {
+	if runID != "" {
+		return runID
+	}
+	return "q" + strconv.FormatInt(qid, 10)
 }
 
 // aggregateCacheHitRatio is the regression alarm itself: cache_read summed
@@ -221,7 +234,7 @@ func questionRows(qs []ledger.QuestionRecord, rounds []ledger.RoundRecord) []que
 	totals := questionTokenTotals(rounds)
 	rows := make([]questionRow, 0, len(qs))
 	for _, q := range qs {
-		ratio, ok := totals[q.QuestionID].cacheHitRatio()
+		ratio, ok := totals[runOf(q.RunID, q.QuestionID)].cacheHitRatio()
 		rows = append(rows, questionRow{
 			ID: q.QuestionID, Asker: q.Asker, Rounds: q.Rounds, Lookups: q.Lookups,
 			Cost: q.Cost, CacheHit: ratio, HasCacheHit: ok, Shape: q.Shape,
@@ -850,7 +863,7 @@ func writeZeroLookup(b *strings.Builder, qs []ledger.QuestionRecord) {
 		fmt.Fprintln(b, "  n/a: no question in this window has briefing=on yet (feature not shipped, or the operator has it off)")
 		return
 	}
-	fmt.Fprintf(b, "  %d of %d answered with zero tool calls (%s)\n", rep.ZeroCount, rep.OnCount, pct(share))
+	fmt.Fprintf(b, "  %d of %d answered from the briefing alone, no read reached the model (%s)\n", rep.ZeroCount, rep.OnCount, pct(share))
 }
 
 func writeBriefingROI(b *strings.Builder, qs []ledger.QuestionRecord, rounds []ledger.RoundRecord) {

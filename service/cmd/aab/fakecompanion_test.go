@@ -88,6 +88,13 @@ type fakeCompanion struct {
 	askers   map[int64]fakeAsker
 	onCall   func(op string)
 	onStatus func()
+
+	// says is every artifact the say op printed. sayErr refuses say with a
+	// protocol error code, the way an older companion (bad_op) does.
+	// players is status's player_count, 1 when nil.
+	says    []string
+	sayErr  string
+	players *int
 }
 
 // fakeAsker is who asked one question: a player on a force, in a scope, and
@@ -215,8 +222,18 @@ func (f *fakeCompanion) execute(cmd string) (string, error) {
 		if f.mapID != "" {
 			mapField = fmt.Sprintf(`,"map_id":%q`, f.mapID)
 		}
-		return fmt.Sprintf(`{"ok":true,"r":{"protocol":1,"mod_version":"test","tick":%d,"player_count":1,"pending":%d,"ask_command":"ask","last_id":%d%s}}`,
-			f.gameTick, len(f.pending), f.lastID(), mapField), nil
+		players := 1
+		if f.players != nil {
+			players = *f.players
+		}
+		return fmt.Sprintf(`{"ok":true,"r":{"protocol":1,"mod_version":"test","tick":%d,"player_count":%d,"pending":%d,"ask_command":"ask","last_id":%d%s}}`,
+			f.gameTick, players, len(f.pending), f.lastID(), mapField), nil
+	case "say":
+		if f.sayErr != "" {
+			return refusal(f.sayErr), nil
+		}
+		f.says = append(f.says, string(req.Artifact))
+		return `{"ok":true,"r":true}`, nil
 	case "providers":
 		if f.providersErr != "" {
 			return refusal(f.providersErr), nil

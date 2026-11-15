@@ -210,8 +210,15 @@ func TestRecentEvents(t *testing.T) {
 		}
 	})
 
-	t.Run("no rows for an unfiltered but empty event", func(t *testing.T) {
-		out := callTool(t, recent, map[string]any{"event": "never_happened"})
+	t.Run("an unknown event key names the kinds there are", func(t *testing.T) {
+		_, err := recent.Call(context.Background(), []byte(`{"event":"never_happened"}`))
+		if err == nil || !strings.Contains(err.Error(), "ping 25, player_died 3, other 1") {
+			t.Errorf("err = %v, want the kinds there are, commonest first", err)
+		}
+	})
+
+	t.Run("no rows for a known event filtered to nothing", func(t *testing.T) {
+		out := callTool(t, recent, map[string]any{"event": "player_died", "since_tick": 1000})
 		header, rows := splitColumnar(t, out)
 		if header != eventHeader {
 			t.Errorf("header = %q, want %q", header, eventHeader)
@@ -243,10 +250,10 @@ func TestLastEvent(t *testing.T) {
 		}
 	})
 
-	t.Run("none recorded for an unknown event key", func(t *testing.T) {
-		out := callTool(t, last, map[string]any{"event": "never_happened"})
-		if string(out) != "none recorded" {
-			t.Errorf("result = %q, want %q", out, "none recorded")
+	t.Run("an unknown event key names the kinds there are", func(t *testing.T) {
+		_, err := last.Call(context.Background(), []byte(`{"event":"never_happened"}`))
+		if err == nil || !strings.Contains(err.Error(), `no events of kind "never_happened"`) {
+			t.Errorf("err = %v, want the kinds there are", err)
 		}
 	})
 
@@ -287,8 +294,9 @@ func TestCountEvents(t *testing.T) {
 	if got := decode(callTool(t, count, map[string]any{"event": "ping", "since_tick": 20})); got != 6 {
 		t.Errorf("count(ping, since_tick=20) = %d, want 6 (ticks 20..25)", got)
 	}
-	if got := decode(callTool(t, count, map[string]any{"event": "never_happened"})); got != 0 {
-		t.Errorf("count(never_happened) = %d, want 0", got)
+	// A kind never recorded is no count of 0 (F3): it says which kinds are.
+	if _, err := count.Call(context.Background(), []byte(`{"event":"never_happened"}`)); err == nil || !strings.Contains(err.Error(), "ping 25") {
+		t.Errorf("count(never_happened) err = %v, want the kinds there are", err)
 	}
 	if _, err := count.Call(context.Background(), []byte(`{}`)); err == nil {
 		t.Error("got nil error, want error for missing \"event\"")

@@ -23,7 +23,7 @@ func TestSystemPromptIsTheSameForEveryAsker(t *testing.T) {
 	// per-question text into the system string, runs through Answer in
 	// agent_test.go; a comparison here could only ever compare a pure
 	// function to itself.
-	off, on := systemPrompt(""), systemPrompt(VoiceFactorio)
+	off, on := systemPrompt("", 6), systemPrompt(VoiceFactorio, 6)
 	if off == on {
 		t.Error("the voice tail is missing: turning personality on changed nothing")
 	}

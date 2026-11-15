@@ -33,7 +33,7 @@ jobs:
         run: |
           TAG="$INPUT_TAG"
           if [ -z "$TAG" ]; then
-            TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .tag_name)
+            TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)
           fi
           if [ -z "$TAG" ]; then
             echo "::error::Could not resolve a tag to upload"
@@ -44,10 +44,14 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Resolved tag: ${TAG} (version ${VERSION})"
 
+      # Every value reaches a script through env, never ${{ }} inside it: the
+      # tag is typed by whoever runs this, and a quote in it would be code.
       - name: Read mod name from info.json at that tag
         id: info
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          NAME=$(git show "${{ steps.tag.outputs.tag }}:companion-mod/info.json" | jq -r .name)
+          NAME=$(git show "${TAG}:companion-mod/info.json" | jq -r .name)
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Verify API key is configured
@@ -59,18 +63,21 @@ jobs:
       - name: Download release zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          MOD_NAME: ${{ steps.info.outputs.name }}
         run: |
           # release.yml builds the companion mod as <name>_<version>.zip.
-          ZIP="${{ steps.info.outputs.name }}_${{ steps.tag.outputs.version }}.zip"
-          gh release download "${{ steps.tag.outputs.tag }}" \
+          ZIP="${MOD_NAME}_${VERSION}.zip"
+          gh release download "${TAG}" \
             --pattern "${ZIP}" \
             --output "${ZIP}"
           ls -la "${ZIP}"
 
       - name: Upload to Factorio mod portal
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          MOD_NAME: ${{ steps.info.outputs.name }}
         run: |
-          ZIP="${{ steps.info.outputs.name }}_${{ steps.tag.outputs.version }}.zip"
-          ./tools/upload_mod_portal.sh \
-            "${{ steps.info.outputs.name }}" \
-            "${{ steps.tag.outputs.version }}" \
-            "${ZIP}"
+          ZIP="${MOD_NAME}_${VERSION}.zip"
+          ./tools/upload_mod_portal.sh "${MOD_NAME}" "${VERSION}" "${ZIP}"

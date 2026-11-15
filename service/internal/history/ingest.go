@@ -42,17 +42,39 @@ type entry struct {
 // epoch it belongs to (epoch.go) and who may read it back (visibility.go),
 // both decided once, here, from what the line says and the line before it.
 func (s *Store) Ingest(line []byte) error {
+	_, err := s.IngestRow(line)
+	return err
+}
+
+// Ingested is what IngestRow made of one line: the row it stored, the epoch
+// it went into, and whether every question may read it back. Public is false
+// for a private row, and for one the guards (guard.go) held or quarantined:
+// the line may be another map's, so nothing may speak from it.
+type Ingested struct {
+	ID     int64 // 0 for a blank line, which stores nothing
+	Event  string
+	Tick   int64
+	Force  string
+	Data   json.RawMessage
+	Epoch  int64
+	Public bool
+}
+
+// IngestRow is Ingest, reporting the row it stored.
+func (s *Store) IngestRow(line []byte) (Ingested, error) {
 	trimmed := bytes.TrimSpace(line)
 	if len(trimmed) == 0 {
-		return nil
+		return Ingested{}, nil
 	}
 	r, err := parseLine(trimmed)
 	if err != nil {
-		return err
+		return Ingested{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.insert(r, s.at.next(r.event, r.tick, json.RawMessage(r.data)))
+	data := json.RawMessage(r.data)
+	mode, at := s.lineMode(r.event, data, s.at.next(r.event, r.tick, data))
+	return s.insert(r, at, mode)
 }
 
 // Mark is where history stood at one moment, taken before a status call
@@ -123,11 +145,13 @@ func (s *Store) NoteMap(before Mark, mapID string, tick, lastID int64) (bool, er
 		named.mapID = at.mapID
 		at = named
 	}
-	if at == s.at {
-		return false, nil
-	}
 	moved := s.at.epoch != 0 && at.epoch != s.at.epoch
-	return moved, s.insert(r, at)
+	record, err := s.noteStatus(mapID, at) // guard.go: may release a held epoch instead
+	if err != nil || !record {
+		return false, err
+	}
+	_, err = s.insert(r, at, stored)
+	return moved, err
 }
 
 // parseLine reads one non-blank events.jsonl line, or says why it is not the
@@ -152,21 +176,35 @@ func parseLine(line []byte) (entry, error) {
 }
 
 // insert stores one row in the epoch `at` places it in, with who may read it
-// back, and moves the store on to `at`. The caller holds s.mu.
-func (s *Store) insert(r entry, at epochState) error {
+// back, and moves the store on to `at`. mode is what the guards (guard.go)
+// made of it: a held row is stored with heldOffset on its private flag, and
+// a quarantined one unreadable, in the current epoch, moving nothing. The
+// caller holds s.mu.
+func (s *Store) insert(r entry, at epochState, mode rowMode) (Ingested, error) {
 	// Every row already stored is older than this one, so the bound on an
 	// answer's question lookup is no bound at all.
 	vis, err := rowVisibility(s.db, at.epoch, math.MaxInt64, r.event, r.fields.Force, json.RawMessage(r.data))
 	if err != nil {
-		return fmt.Errorf("history: classify %q: %w", r.event, err)
+		return Ingested{}, fmt.Errorf("history: classify %q: %w", r.event, err)
 	}
-	_, err = s.db.Exec(
+	flag := vis.flag()
+	switch mode {
+	case held:
+		flag += heldOffset
+	case quarantined:
+		vis, flag, at = unreadable, unreadable.flag(), s.at
+	}
+	res, err := s.db.Exec(
 		`INSERT INTO events (tick, event, player, force, data, received_at, scope, private, epoch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.tick, r.event, r.fields.Player, r.fields.Force, r.data, time.Now().UTC().Format(time.RFC3339), vis.scope, vis.flag(), at.epoch,
+		r.tick, r.event, r.fields.Player, r.fields.Force, r.data, time.Now().UTC().Format(time.RFC3339), vis.scope, flag, at.epoch,
 	)
 	if err != nil {
-		return fmt.Errorf("history: insert %q: %w", r.event, err)
+		return Ingested{}, fmt.Errorf("history: insert %q: %w", r.event, err)
 	}
 	s.at = at
-	return nil
+	id, _ := res.LastInsertId()
+	return Ingested{
+		ID: id, Event: r.event, Tick: r.tick, Force: r.fields.Force, Data: json.RawMessage(r.data),
+		Epoch: at.epoch, Public: flag == 0,
+	}, nil
 }

@@ -39,7 +39,9 @@ func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, sha
 	r.Asker = q.askerName()
 	r.Force = q.force()
 	r.Surface = q.Surface
-	r.SessionKey = mark.Key
+	// Not mark.Key, which names a private session and the public one of the
+	// same name alike: the ledger must tell the two sessions apart.
+	r.SessionKey = sessionKey(q.sessionLabel(), mark.Name)
 	r.SessionFresh = mark.Fresh
 	r.Text = rawText
 	r.Rounds = rounds
@@ -58,6 +60,7 @@ func (a *Agent) questionRecord(q Question, rawText string, mark SessionMark, sha
 	r.Refused = refused
 	r.RefusedReason = refusedReason
 	r.ModelError = modelError
+	r.Toast = q.Toast
 	return r
 }
 

@@ -237,8 +237,8 @@ func TestLedgerWritesModelErrorQuestion(t *testing.T) {
 func TestLedgerZeroLookupFalseWhenCapRefusesEveryRound(t *testing.T) {
 	dir := t.TempDir()
 	twoReads := model.Step{StopReason: model.StopToolUse, Blocks: []model.Block{
-		{Type: model.BlockToolUse, ID: "a", Name: "nothing", Input: json.RawMessage(`{}`)},
-		{Type: model.BlockToolUse, ID: "b", Name: "nothing", Input: json.RawMessage(`{}`)},
+		{Type: model.BlockToolUse, ID: "a", Name: "nothing", Input: json.RawMessage(`{"n":1}`)},
+		{Type: model.BlockToolUse, ID: "b", Name: "nothing", Input: json.RawMessage(`{"n":2}`)},
 	}}
 	m := &scriptedModel{steps: []model.Step{twoReads}}
 	c := caps()
@@ -421,7 +421,7 @@ func TestLedgerRecordsAFailedToolCall(t *testing.T) {
 func TestLedgerWritesTokenBudgetNotice(t *testing.T) {
 	dir := t.TempDir()
 	ts := []tools.Tool{stubTool("probe", `{"ok":true}`, nil)}
-	m := &scriptedModel{steps: []model.Step{toolStep("t1", "probe", map[string]any{})}}
+	m := &scriptedModel{steps: []model.Step{toolStep("t1", "probe", map[string]any{"n": 1}), toolStep("t2", "probe", map[string]any{"n": 2})}}
 	c := caps()
 	c.MaxTokensPerQuestion = 20 // two rounds of 12 tokens each trips it
 	a := New(m, c)
@@ -433,8 +433,10 @@ func TestLedgerWritesTokenBudgetNotice(t *testing.T) {
 	a.Ledger.Close()
 
 	rec := findQuestion(t, dir, 901)
-	if rec.Rounds != 2 || rec.Lookups != 2 || rec.ZeroLookup {
-		t.Errorf("rounds/lookups/zero_lookup = %d/%d/%v, want 2/2/false", rec.Rounds, rec.Lookups, rec.ZeroLookup)
+	// Round 2 spent the budget, so it was the last: its read never ran,
+	// since no model would have read the result (review finding A2).
+	if rec.Rounds != 2 || rec.Lookups != 1 || rec.ZeroLookup {
+		t.Errorf("rounds/lookups/zero_lookup = %d/%d/%v, want 2/1/false", rec.Rounds, rec.Lookups, rec.ZeroLookup)
 	}
 	if rec.Shape != ShapeNotice {
 		t.Errorf("shape = %q, want notice", rec.Shape)
@@ -448,7 +450,11 @@ func TestLedgerWritesTokenBudgetNotice(t *testing.T) {
 func TestLedgerWritesRoundsNotice(t *testing.T) {
 	dir := t.TempDir()
 	ts := []tools.Tool{stubTool("probe", `{"ok":true}`, nil)}
-	m := &scriptedModel{steps: []model.Step{toolStep("t1", "probe", map[string]any{})}}
+	m := &scriptedModel{steps: []model.Step{
+		toolStep("t1", "probe", map[string]any{"n": 1}),
+		toolStep("t2", "probe", map[string]any{"n": 2}),
+		toolStep("t3", "probe", map[string]any{"n": 3}),
+	}}
 	c := caps()
 	c.MaxRounds = 3
 	a := New(m, c)
@@ -460,8 +466,10 @@ func TestLedgerWritesRoundsNotice(t *testing.T) {
 	a.Ledger.Close()
 
 	rec := findQuestion(t, dir, 1001)
-	if rec.Rounds != 3 || rec.Lookups != 3 || rec.ZeroLookup {
-		t.Errorf("rounds/lookups/zero_lookup = %d/%d/%v, want 3/3/false", rec.Rounds, rec.Lookups, rec.ZeroLookup)
+	// The third round is the last, so its read never ran (review finding
+	// A2) and is recorded as not run, not as a lookup.
+	if rec.Rounds != 3 || rec.Lookups != 2 || rec.ZeroLookup {
+		t.Errorf("rounds/lookups/zero_lookup = %d/%d/%v, want 3/2/false", rec.Rounds, rec.Lookups, rec.ZeroLookup)
 	}
 	if rec.Shape != ShapeNotice {
 		t.Errorf("shape = %q, want notice", rec.Shape)
@@ -470,8 +478,12 @@ func TestLedgerWritesRoundsNotice(t *testing.T) {
 		t.Errorf("refused/refused_reason = %v/%v, want false/nil: running out of rounds is not a refusal", rec.Refused, rec.RefusedReason)
 	}
 
-	if rounds := roundsFor(t, dir, 1001); len(rounds) != 3 {
-		t.Errorf("round records = %d, want 3", len(rounds))
+	rounds := roundsFor(t, dir, 1001)
+	if len(rounds) != 3 {
+		t.Fatalf("round records = %d, want 3", len(rounds))
+	}
+	if tc := rounds[2].ToolCalls; len(tc) != 1 || tc[0].NotRun != ledger.NotRunLastRound || tc[0].OK {
+		t.Errorf("round 3 tool calls = %+v, want its read recorded as not run on the last round", tc)
 	}
 }
 
@@ -480,10 +492,12 @@ func TestLedgerWritesRoundsNotice(t *testing.T) {
 // the moment the cap catches it.
 func TestLedgerRecordsCapRefusedRoundCalls(t *testing.T) {
 	dir := t.TempDir()
+	// Each round asks about two forces of its own: asking round 1's two
+	// again would be repeats, which never reach the cap at all.
 	call := func(id string) model.Step {
 		return model.Step{StopReason: model.StopToolUse, Blocks: []model.Block{
-			{Type: model.BlockToolUse, ID: id + "a", Name: "current_research", Input: json.RawMessage(`{"force":"north"}`)},
-			{Type: model.BlockToolUse, ID: id + "b", Name: "current_research", Input: json.RawMessage(`{"force":"south"}`)},
+			{Type: model.BlockToolUse, ID: id + "a", Name: "current_research", Input: json.RawMessage(`{"force":"north` + id + `"}`)},
+			{Type: model.BlockToolUse, ID: id + "b", Name: "current_research", Input: json.RawMessage(`{"force":"south` + id + `"}`)},
 		}}
 	}
 	late := submitStep("t3", map[string]any{"shape": "summary", "lines": []string{"late"}})
@@ -779,5 +793,37 @@ func TestLedgerRecordsBriefingOff(t *testing.T) {
 	}
 	if rec.MsRCON != 0 {
 		t.Errorf("ms_rcon = %d, want 0: no briefing ran and the round was a bare submission", rec.MsRCON)
+	}
+}
+
+// A15 (review findings). A private session and the public one of the same
+// name are two sessions, and the ledger tells them apart.
+func TestLedgerSessionKeyTellsAPrivateSessionFromThePublicOne(t *testing.T) {
+	dir := t.TempDir()
+	m := &scriptedModel{steps: []model.Step{submitStep("s", map[string]any{"shape": "summary", "lines": []string{"ok"}})}}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	for _, q := range []Question{
+		{ID: 5501, Text: "#ops q", PlayerIndex: player(1), Scope: "north"},
+		{ID: 5502, Text: "#ops q", PlayerIndex: player(2), Scope: "north", Private: true},
+		{ID: 5503, Text: "q", PlayerIndex: player(3), Private: true},
+	} {
+		if _, err := a.Answer(context.Background(), q, nil); err != nil {
+			t.Fatalf("answer %d: %v", q.ID, err)
+		}
+	}
+	a.Ledger.Close()
+	public, private, keyless := findQuestion(t, dir, 5501).SessionKey, findQuestion(t, dir, 5502).SessionKey, findQuestion(t, dir, 5503).SessionKey
+	if public != "north#ops" {
+		t.Errorf("public session_key = %q, want north#ops as before", public)
+	}
+	if private == public || !strings.HasPrefix(private, "private:") || !strings.HasSuffix(private, "#ops") {
+		t.Errorf("private session_key = %q, want it marked private and apart from %q", private, public)
+	}
+	if strings.ContainsRune(private+keyless, 0) {
+		t.Errorf("a session_key carries the pool's NUL marker: %q %q", private, keyless)
+	}
+	if keyless == "global" || keyless == private {
+		t.Errorf("a keyless private session_key = %q, want its own pool", keyless)
 	}
 }

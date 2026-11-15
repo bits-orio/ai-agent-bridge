@@ -54,3 +54,62 @@ func TestRankEdges(t *testing.T) {
 		}
 	}
 }
+
+// Ranking and ties go by the raw figures; rounding is for display. The old
+// code rounded first, so 3 rockets in 100 h against 1 was "tied at 0".
+func TestRawValuesDecideTiesAndShowEnoughPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		name, tool, args string
+		want, notWant    []string
+	}{
+		{"3 vs 1 rocket in 100 h", "rank_by_rate",
+			`{"rows":[{"name":"a","total":3,"hours":100},{"name":"b","total":1,"hours":100}]}`,
+			[]string{`"leader":"a"`, `"per_hour":0.03`, `"per_hour":0.01`, `"margin":"0.02 over b's 0.01"`}, []string{"tied"}},
+		{"12.34 vs 12.31", "rank",
+			`{"rows":[{"name":"a","value":12.34},{"name":"b","value":12.31}]}`,
+			[]string{`"leader":"a"`, `"value":12.34`, `"value":12.31`, `"margin":"0.03 over b's 12.31"`}, []string{"tied"}},
+		{"equal raw is a tie", "rank",
+			`{"rows":[{"name":"a","value":12.34},{"name":"b","value":12.34}]}`,
+			[]string{`"leader":"a and b tied"`, `tied at 12.3`}, nil},
+		{"one decimal is enough when figures differ at it", "rank",
+			`{"rows":[{"name":"a","value":12.4},{"name":"b","value":12.1}]}`,
+			[]string{`"margin":"0.3 over b's 12.1"`}, nil},
+		{"lower is better ranks on raw too", "rank",
+			`{"rows":[{"name":"a","value":12.34},{"name":"b","value":12.31}],"higher_is_better":false}`,
+			[]string{`"leader":"b"`}, []string{"tied"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := call(t, tc.tool, tc.args)
+			for _, w := range tc.want {
+				if !strings.Contains(out, w) {
+					t.Errorf("missing %s in %s", w, out)
+				}
+			}
+			for _, w := range tc.notWant {
+				if strings.Contains(out, w) {
+					t.Errorf("unexpected %s in %s", w, out)
+				}
+			}
+		})
+	}
+}
+
+// Hours so small that the rate overflows are skipped with a reason, and the
+// reply stays valid JSON.
+func TestNonFiniteRatesAreSkipped(t *testing.T) {
+	out := call(t, "rank_by_rate", `{"rows":[{"name":"a","total":1e300,"hours":1e-300},{"name":"b","total":10,"hours":2}]}`)
+	if !json.Valid([]byte(out)) {
+		t.Fatalf("not JSON: %s", out)
+	}
+	if !strings.Contains(out, `"leader":"b"`) || !strings.Contains(out, `a (the hours are too small`) {
+		t.Errorf("overflowing rate not skipped: %s", out)
+	}
+	only := call(t, "rank_by_rate", `{"rows":[{"name":"a","total":1e300,"hours":1e-300}]}`)
+	if !json.Valid([]byte(only)) || !strings.Contains(only, `"leader":"nobody"`) {
+		t.Errorf("all rows skipped: %s", only)
+	}
+	huge := call(t, "rank", `{"rows":[{"name":"a","value":1.7e308},{"name":"b","value":-1.7e308}]}`)
+	if !json.Valid([]byte(huge)) {
+		t.Errorf("not JSON: %s", huge)
+	}
+}

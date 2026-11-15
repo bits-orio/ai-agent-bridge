@@ -14,9 +14,9 @@ GO_DOCKER := docker run --rm -v "$(CURDIR)/$(SERVICE_DIR)":/src -w /src -e GOFLA
 service:
 	$(GO_DOCKER) go build -o aab ./cmd/aab
 
-## Go unit tests (gofmt -l, go vet, go test), all inside Docker.
+## Go unit tests (gofmt -l, failing on any file it lists, go vet, go test), all inside Docker.
 test:
-	$(GO_DOCKER) sh -c "gofmt -l . ; go vet ./... && go test ./..."
+	$(GO_DOCKER) sh -c 'out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt wants to rewrite:"; echo "$$out"; exit 1; fi; go vet ./... && go test ./...'
 
 ## Full e2e harness: rig server + service, no player.
 e2e:

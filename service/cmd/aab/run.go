@@ -10,11 +10,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -77,6 +79,7 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		store:    store,
 		stats:    controlapi.NewStats(mdl.Name(), time.Now()),
 		inFlight: map[int64]*delivery{},
+		toasts:   newToaster(cfg.Toasts),
 		agent: agent.New(mdl, agent.Caps{
 			MaxRounds:               cfg.Agent.MaxRounds,
 			MaxTokensPerQuestion:    cfg.Agent.MaxTokensPerQuestion,
@@ -96,6 +99,9 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		}),
 	}
 
+	if cfg.Agent.MaxCostPerDay > 0 {
+		keepSpend(r.agent, cfg.Agent.DailySpendPath)
+	}
 	r.agent.Trace = log.Printf
 	r.agent.Ledger = ledgerWriter
 	r.agent.Floor = client.Floor
@@ -109,7 +115,14 @@ func runService(cfg *config.Config, client *rpc.Client) {
 		log.Print("briefing: off (briefing.enabled: false)")
 	}
 
-	go tailEvents(ctx, cfg, store)
+	var feed *toastFeed
+	if r.toasts != nil {
+		feed = r.toasts.feed
+		log.Printf("toasts: %s, at most %d an hour, technologies %s", cfg.Toasts.Mode, cfg.Toasts.MaxPerHour, strings.Join(cfg.Toasts.Technologies, ", "))
+	} else {
+		log.Print("toasts: off (toasts.mode: off)")
+	}
+	go tailEvents(ctx, cfg, store, feed)
 	if cfg.ControlAPI.Addr != "" {
 		go func() {
 			if err := controlapi.New(cfg.ControlAPI.Addr, cfg.ControlAPI.Token, r.stats).Run(ctx); err != nil {
@@ -147,7 +160,10 @@ func logVoice(configured string) {
 // tailEvents feeds the companion's events.jsonl into history. A read failure
 // is logged by the tailer and retried; it never stops the service answering
 // live questions.
-func tailEvents(ctx context.Context, cfg *config.Config, store *history.Store) {
+//
+// feed, when toasts are on, gets a candidate for every milestone among the
+// lines that arrive after the tailer first caught up (toasts.go).
+func tailEvents(ctx context.Context, cfg *config.Config, store *history.Store, feed *toastFeed) {
 	tailer := transport.NewLocal(cfg.Factorio.EventsFile, cfg.Interval())
 	if cfg.Transport == "sftp" {
 		tailer = transport.NewSFTP(transport.SFTPConfig{
@@ -156,12 +172,26 @@ func tailEvents(ctx context.Context, cfg *config.Config, store *history.Store) {
 			KeyPath:        cfg.Factorio.SFTP.KeyPath,
 			Password:       cfg.Factorio.SFTP.Password,
 			KnownHostsPath: cfg.Factorio.SFTP.KnownHostsPath,
+			RequireHostKey: !cfg.Factorio.SFTP.IgnoreHostKey(),
 		}, cfg.Factorio.EventsFile, cfg.Interval())
 	}
 	log.Printf("history: %s, tailing %s over %s", cfg.History.Path, cfg.Factorio.EventsFile, cfg.Transport)
+	// The lines a status call got ahead of stay unreadable until the tail has
+	// delivered everything written before it (history, guard.go).
+	tailer.OnCaughtUp(func(at time.Time) {
+		store.CaughtUp(at)
+		if feed != nil {
+			feed.caughtUp()
+		}
+	})
 	tailer.Run(ctx, func(line []byte) {
-		if err := store.Ingest(line); err != nil {
+		if err := ingestLine(store, feed, cfg.Toasts.Technologies, line); err != nil {
 			log.Printf("history: could not store an event: %v", err)
+		}
+		// The companion only drops a question nobody answered when its ring
+		// is full of them, which means this service fell far behind.
+		if bytes.Contains(line, []byte(`"question_dropped"`)) {
+			log.Printf("WARNING: the companion dropped an unanswered question, its ring was full: %s", bytes.TrimSpace(line))
 		}
 	})
 }
@@ -186,8 +216,21 @@ func buildModel(cfg *config.Config) (model.Model, error) {
 		case "low", "medium", "high":
 			thinking, effort = "adaptive", m.Reasoning
 		}
+		// The price table only knows a few ids. An id it does not know costs
+		// nothing as far as the daily budget can tell, so the cap never
+		// trips. Said loudly at every start instead of refusing to run: an
+		// upgrade must not stop a server that was answering yesterday.
+		if cfg.Agent.MaxCostPerDay > 0 && !agent.PriceKnown("anthropic", m.ID) {
+			log.Printf("WARNING: model.id %q has no price in this build, so agent.max_cost_per_day ($%.2f) will NOT stop spending: every question is counted as $0. Route the model through openrouter, which reports its own cost, or use an id from the price table",
+				m.ID, cfg.Agent.MaxCostPerDay)
+		}
+		timeout, err := m.RequestTimeout()
+		if err != nil {
+			return nil, err
+		}
 		return anthropic.New(cfg.Anthropic.APIKey, anthropic.Options{
 			Model: m.ID, MaxOutput: cfg.Agent.MaxOutputTokens, Thinking: thinking, Effort: effort, CacheTTL: m.CacheTTL,
+			Timeout: timeout,
 		}), nil
 	case "ollama":
 		return newOllama(cfg)

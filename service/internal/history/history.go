@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"os"
 	"sync"
 
 	_ "modernc.org/sqlite" // pure Go sqlite driver, registers as "sqlite"
@@ -29,6 +30,8 @@ type Store struct {
 	// at is where the newest row left the map epochs (epoch.go), read from
 	// the file on Open and moved on by every row Ingest or NoteMap stores.
 	at epochState
+	// g is the two guards on an epoch a status row named (guard.go).
+	g guards
 }
 
 // schemaTable is the events table. scope and private say who may read a row
@@ -56,6 +59,14 @@ const schemaIndex = `CREATE INDEX IF NOT EXISTS idx_events_event_tick ON events(
 // placed and classified before Open returns, so no read ever meets a row
 // without them.
 func Open(path string) (*Store, error) {
+	// The file holds every private channel's chat: the owner's alone,
+	// created so before SQLite makes it with the process umask, and narrowed
+	// when an older service left it readable. Best effort: SQLite reports a
+	// path it cannot open better than this would.
+	if f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600); err == nil {
+		_ = f.Chmod(0o600)
+		f.Close()
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("history: open %s: %w", path, err)
@@ -86,7 +97,12 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("history: read the current epoch of %s: %w", path, err)
 	}
-	return &Store{db: db, at: at}, nil
+	g, err := loadGuards(db, at)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("history: read the current epoch of %s: %w", path, err)
+	}
+	return &Store{db: db, at: at, g: g}, nil
 }
 
 // Close releases the underlying database handle.

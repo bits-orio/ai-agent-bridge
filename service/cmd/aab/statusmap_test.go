@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/chatscope"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/history"
@@ -201,6 +202,9 @@ func TestASameSeedRoundIsANewMapToHistory(t *testing.T) {
 		`{"event":"question","tick":72100,"data":{"qid":4,"player":"Bob","force":"team-4","text":"q","scope":"team-4","private":true}}`)
 
 	r.greet(context.Background())
+	// The tail catches up past the status before round two's line is written
+	// (history, guard.go): a line it still owed would stay unreadable.
+	r.store.CaughtUp(time.Now().Add(time.Millisecond))
 	ingestAll(t, r.store, `{"event":"console_chat","tick":40100,"data":{"player":"Cid","force":"team-4","message":"NEW-T4 line","scope":"team-4","private":true}}`)
 	if got := heard(t, r.store, "team-4", true); strings.Contains(got, "OLD-T4") || !strings.Contains(got, "NEW-T4 line") {
 		t.Errorf("round two's team-4 reads the wrong round:\n%s", got)

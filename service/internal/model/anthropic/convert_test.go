@@ -157,3 +157,41 @@ func TestThinkingBlocksRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The Messages API wants tool_result blocks first in a user message, and a
+// note after them ("one turn left") must not push them out of place. The
+// per-round breakpoint then lands on the note, the last block.
+func TestToolResultsComeBeforeTextInOneUserMessage(t *testing.T) {
+	res := func(id string) model.Block {
+		return model.Block{Type: model.BlockToolResult, ID: id, Content: "r" + id}
+	}
+	note := model.Block{Type: model.BlockText, Text: "one turn left"}
+	for name, blocks := range map[string][]model.Block{
+		"results then note": {res("1"), res("2"), note},
+		"note then results": {note, res("1"), res("2")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			msgs := cacheLastUserBlock(toMessageParams([]model.Message{{Role: model.RoleUser, Blocks: blocks}}))
+			body, err := json.Marshal(msgs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []struct {
+				Content []map[string]any `json:"content"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil || len(got) != 1 {
+				t.Fatalf("body %s: %v", body, err)
+			}
+			var types []string
+			for _, c := range got[0].Content {
+				types = append(types, c["type"].(string))
+			}
+			if strings.Join(types, ",") != "tool_result,tool_result,text" {
+				t.Errorf("block order = %v, want tool_result,tool_result,text", types)
+			}
+			if c := got[0].Content[2]["cache_control"]; c == nil {
+				t.Errorf("the breakpoint should sit on the last block: %s", body)
+			}
+		})
+	}
+}

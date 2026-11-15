@@ -25,10 +25,7 @@ func setupLogFile(cfg *config.Config) {
 	if path == "" {
 		return
 	}
-	if dir := filepath.Dir(path); dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openLogFile(path)
 	if err != nil {
 		log.Printf("log: cannot write to %s: %v (logging to stderr only)", path, err)
 		return
@@ -36,6 +33,22 @@ func setupLogFile(cfg *config.Config) {
 	// f intentionally stays open for the lifetime of the process.
 	log.SetOutput(io.MultiWriter(logTerminal(), f))
 	log.Printf("log: also writing to %s", path)
+}
+
+// openLogFile opens the log for appending, the owner's alone: it holds
+// question text and answers. A file an older service made readable to
+// everyone is narrowed, best effort; a directory created for it is the
+// owner's too.
+func openLogFile(path string) (*os.File, error) {
+	if dir := filepath.Dir(path); dir != "" {
+		_ = os.MkdirAll(dir, 0o700)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_ = f.Chmod(0o600)
+	return f, nil
 }
 
 // resolveLogPath returns the log-file path, or "" for stderr-only.

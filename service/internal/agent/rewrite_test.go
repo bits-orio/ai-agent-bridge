@@ -330,7 +330,7 @@ func TestEverySubmitRefusalIsLoggedAndLedgered(t *testing.T) {
 func TestALookupCapRefusalOfASubmitIsLoggedAndLedgered(t *testing.T) {
 	dir := t.TempDir()
 	m := &scriptedModel{steps: []model.Step{
-		round(use("t1", "probe", map[string]any{}), use("t2", "probe", map[string]any{}), use("s1", SubmitTool, map[string]any{"shape": "summary", "lines": []string{"early"}})),
+		round(use("t1", "probe", map[string]any{"n": 1}), use("t2", "probe", map[string]any{"n": 2}), use("s1", SubmitTool, map[string]any{"shape": "summary", "lines": []string{"early"}})),
 		submitStep("s2", map[string]any{"shape": "summary", "lines": []string{"done"}}),
 	}}
 	c := caps()

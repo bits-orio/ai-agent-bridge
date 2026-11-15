@@ -59,6 +59,11 @@ type Exchange struct {
 	Question string
 	Answer   string
 	At       time.Time
+
+	// qid is the question that made this exchange, so AmendSession can find
+	// it again once delivery says what the player actually saw. Zero for an
+	// exchange recorded without one.
+	qid int64
 }
 
 func (e Exchange) size() int { return len(e.Asker) + len(e.Question) + len(e.Answer) }
@@ -202,13 +207,20 @@ func (s *sessions) record(scope, name string, e Exchange, awaitingReply bool) {
 	defer s.mu.Unlock()
 	key := sessionID{scope, name}
 	live := s.byKey[key]
-	if live == nil {
+	created := live == nil
+	if created {
 		live = &session{scope: scope, name: name, startedAt: e.At}
 		s.byKey[key] = live
 	}
 	live.exchanges = append(live.exchanges, e)
 	live.lastAt = e.At
 	live.awaitingReply = awaitingReply
+	if created {
+		// The session idled out or was ended while its question ran, so
+		// open's own trim never saw this one: without trimming here too, a
+		// burst of such questions grows the map past its cap.
+		s.trim()
+	}
 	total := 0
 	for _, x := range live.exchanges {
 		total += x.size()
@@ -220,6 +232,36 @@ func (s *sessions) record(scope, name string, e Exchange, awaitingReply bool) {
 	if len(live.exchanges) > s.caps.MaxExchanges {
 		live.exchanges = live.exchanges[len(live.exchanges)-s.caps.MaxExchanges:]
 	}
+}
+
+// amend finds the exchange question qid recorded at at and replaces its
+// answer with shown, or drops it when shown is nil. When it is the session's
+// newest exchange, whether the session awaits the player's reply follows
+// what they actually saw: an ask-back nobody saw asks nothing. Reports
+// whether there was such an exchange.
+func (s *sessions) amend(scope, name string, qid int64, at time.Time, shown *string, awaitingReply bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := s.byKey[sessionID{scope, name}]
+	if live == nil || qid == 0 {
+		return false
+	}
+	for i, e := range live.exchanges {
+		if e.qid != qid || !e.At.Equal(at) {
+			continue
+		}
+		newest := i == len(live.exchanges)-1
+		if shown == nil {
+			live.exchanges = append(live.exchanges[:i:i], live.exchanges[i+1:]...)
+		} else {
+			live.exchanges[i].Answer = *shown
+		}
+		if newest {
+			live.awaitingReply = shown != nil && awaitingReply
+		}
+		return true
+	}
+	return false
 }
 
 // list is every live session in one scope, the default first, then named

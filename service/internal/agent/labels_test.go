@@ -42,7 +42,7 @@ func TestSubstituteLabels(t *testing.T) {
 // The system prompt no longer carries labels, and does carry the clickable
 // and where rules.
 func TestSystemPromptRules(t *testing.T) {
-	got := systemPrompt("")
+	got := systemPrompt("", 6)
 	if strings.Contains(got, "Team Ace") {
 		t.Errorf("labels leaked into the prompt:\n%s", got)
 	}
@@ -88,7 +88,7 @@ func TestAskerContextWatchingForce(t *testing.T) {
 	if plain := askerContext(Question{Text: "x", Force: "team-4"}); strings.Contains(plain, "base") {
 		t.Errorf("a question watching nobody must not name a watched force:\n%s", plain)
 	}
-	if sys := systemPrompt(""); !strings.Contains(sys, "never report it as the whole surface") {
+	if sys := systemPrompt("", 6); !strings.Contains(sys, "never report it as the whole surface") {
 		t.Errorf("system prompt lacks the one-force search rule")
 	}
 }

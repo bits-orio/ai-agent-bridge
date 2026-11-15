@@ -122,6 +122,12 @@ func readEverything(t *testing.T, s *Store, ctx context.Context) string {
 			}
 			out, err := tool.Call(ctx, raw)
 			if err != nil {
+				// A kind with no rows this question may read answers with the
+				// kinds it may: content all the same, so it is read too.
+				if strings.Contains(err.Error(), "no events of kind") {
+					answered++
+					fmt.Fprintf(&all, "%s %s: error %v\n", tool.Name, raw, err)
+				}
 				continue
 			}
 			answered++
@@ -388,5 +394,50 @@ func TestModelDataKeepsTheTextAsTyped(t *testing.T) {
 	}
 	if got := modelData("answer", json.RawMessage(`not json`)); got != "{}" {
 		t.Errorf("unparseable answer data = %q, want {}", got)
+	}
+}
+
+// A question the companion's ring dropped unanswered is logged as
+// question_dropped {qid}. It is a fact about the game and public like any
+// other event, holds no text, and its qid counts questions across every
+// channel like a question's own, so the file keeps it and no reply shows it.
+func TestAQuestionDroppedRowIsPublicAndCarriesNoQID(t *testing.T) {
+	s := mustOpen(t, filepath.Join(t.TempDir(), "history.sqlite"))
+	defer s.Close()
+	plantSecrets(t, s)
+	ingest(t, s, `{"event":"question_dropped","tick":3000,"data":{"qid":7}}`)
+
+	var private int
+	var scope string
+	if err := s.db.QueryRow(`SELECT private, scope FROM events WHERE event = 'question_dropped'`).Scan(&private, &scope); err != nil {
+		t.Fatalf("stored row: %v", err)
+	}
+	if private != 0 {
+		t.Errorf("question_dropped stored private=%d, want public", private)
+	}
+	var kept int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM events WHERE event = 'question_dropped' AND json_extract(data, '$.qid') = 7`).Scan(&kept); err != nil || kept != 1 {
+		t.Errorf("the file keeps the dropped qid %d times (%v), want once", kept, err)
+	}
+
+	for _, a := range audiences() {
+		out, err := findTool(t, s.Tools(), "recent_events").Call(a.ctx, json.RawMessage(`{"event":"question_dropped"}`))
+		if err != nil {
+			t.Fatalf("%s: recent_events: %v", a.name, err)
+		}
+		_, rows := splitColumnar(t, out)
+		if len(rows) != 1 {
+			t.Fatalf("%s read %d question_dropped rows, want 1: %q", a.name, len(rows), out)
+		}
+		if f := splitRow(rows[0]); f[4] != "{}" {
+			t.Errorf("%s read data %q, want no qid", a.name, f[4])
+		}
+		cnt, err := findTool(t, s.Tools(), "count_events").Call(a.ctx, json.RawMessage(`{"event":"question_dropped"}`))
+		if err != nil {
+			t.Fatalf("%s: count_events: %v", a.name, err)
+		}
+		if _, rows := splitColumnar(t, cnt); rows[0] != "1" {
+			t.Errorf("%s counts %q, want 1", a.name, rows[0])
+		}
 	}
 }

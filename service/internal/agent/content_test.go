@@ -24,7 +24,7 @@ func TestContentCutsLongResultsOnARuneBoundary(t *testing.T) {
 	if !utf8.ValidString(got) {
 		t.Fatalf("cut result is not valid UTF-8: %q", got)
 	}
-	if !strings.HasSuffix(got, "[cut: 100 of 204 bytes shown; ask for fewer rows]") {
+	if !strings.HasSuffix(got, "[cut: 100 of 204 bytes shown; ask for fewer rows or page with offset]") {
 		t.Errorf("cut note missing or wrong: %q", got)
 	}
 	if !strings.HasPrefix(got, `["`+strings.Repeat("é", 49)) {

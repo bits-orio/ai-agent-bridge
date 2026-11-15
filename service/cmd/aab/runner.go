@@ -82,6 +82,16 @@ type runner struct {
 	// answer is held to it (deliver).
 	lost bool
 	conn uint64
+
+	// runs counts how many times each question has been run, across the
+	// resets that drop what is held for it (mayRun).
+	runs map[runKey]int
+
+	// lastPlayers is the player count the last status read saw: a toast
+	// waits for somebody to hear it (toasts.go). toasts is nil with
+	// toasts.mode off.
+	lastPlayers int
+	toasts      *toaster
 }
 
 // delivery is what the service knows about one question: the artifact the model

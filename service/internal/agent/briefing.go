@@ -363,15 +363,15 @@ func Assemble(ctx context.Context, byName map[string]tools.Tool, q Question, mar
 
 	if bctx.Err() == nil {
 		ran++
-		forcesRaw, forcesOK = rawTrip(bctx, byName, "list_forces", force, map[string]any{})
+		forcesRaw, forcesOK = pagedRaw(bctx, byName, "list_forces", force, map[string]any{})
 	}
 	if bctx.Err() == nil {
 		ran++
-		researchRaw, researchOK = rawTrip(bctx, byName, "current_research", force, map[string]any{"all": true})
+		researchRaw, researchOK = pagedRaw(bctx, byName, "current_research", force, map[string]any{"all": true})
 	}
 	if bctx.Err() == nil {
 		ran++
-		surfacesRaw, surfacesOK = rawTrip(bctx, byName, "list_surfaces", force, map[string]any{"limit": surfacesLimit})
+		surfacesRaw, surfacesOK = pagedRaw(bctx, byName, "list_surfaces", force, map[string]any{"limit": surfacesLimit})
 	}
 	if bctx.Err() == nil {
 		ran++
@@ -383,7 +383,7 @@ func Assemble(ctx context.Context, byName map[string]tools.Tool, q Question, mar
 		// all=true (file header comment above has the reason this stays
 		// unconditional this pass, and the cost it accepts against a 1.0.3
 		// server).
-		playersRaw, playersOK = rawTrip(bctx, byName, "list_players", force, map[string]any{"all": true})
+		playersRaw, playersOK = pagedRaw(bctx, byName, "list_players", force, map[string]any{"all": true})
 	}
 	if ran < groupATrips {
 		log.Printf("briefing: question %d budget ran out after %d of %d trips", q.ID, ran, groupATrips)
@@ -484,9 +484,120 @@ func rawTrip(ctx context.Context, byName map[string]tools.Tool, fn, force string
 	return out, true
 }
 
+// maxBriefingPages is how many pages one section may cost. The companion fits
+// each list reply to about 3,800 bytes (bounded.lua page) and names the next
+// page in next_offset; a section still cut after this many pages is omitted,
+// the same rule a single cut page has always followed.
+const maxBriefingPages = 4
+
+// pagedRaw is rawTrip that follows next_offset. A reply with no next_offset is
+// returned as it came, byte for byte, so a list that fits one page costs one
+// trip and reads exactly as before. Otherwise the rows of every page are
+// joined into the first page's reply, whose shown becomes the rows held and
+// whose next_offset is dropped; the decoders then see one whole list.
+//
+// ok is false when the list could not be completed: a trip failed, the page
+// cap was reached, the budget was spent before the next page could start
+// (the budget only stops a trip starting, never one in flight, as in Assemble),
+// or a next_offset did not move forward. An incomplete list is omitted by the
+// caller, the same as a cut list always was.
+func pagedRaw(ctx context.Context, byName map[string]tools.Tool, fn, force string, args map[string]any) (json.RawMessage, bool) {
+	first, ok := rawTrip(ctx, byName, fn, force, args)
+	if !ok {
+		return nil, false
+	}
+	next, more := nextOffset(first)
+	if !more {
+		return first, true
+	}
+	var head map[string]json.RawMessage
+	if json.Unmarshal(first, &head) != nil {
+		return nil, false
+	}
+	key, rows := pageRows(head)
+	if key == "" {
+		return nil, false
+	}
+	prev := 0
+	for page := 1; ; page++ {
+		if page >= maxBriefingPages || ctx.Err() != nil || next <= prev {
+			return nil, false
+		}
+		prev = next
+		pageArgs := make(map[string]any, len(args)+1)
+		for k, v := range args {
+			pageArgs[k] = v
+		}
+		pageArgs["offset"] = next
+		raw, ok := rawTrip(ctx, byName, fn, force, pageArgs)
+		if !ok {
+			return nil, false
+		}
+		var m map[string]json.RawMessage
+		if json.Unmarshal(raw, &m) != nil {
+			return nil, false
+		}
+		k, more := pageRows(m)
+		if k != key {
+			return nil, false
+		}
+		rows = append(rows, more...)
+		n, again := nextOffset(raw)
+		if !again {
+			break
+		}
+		next = n
+	}
+	rowsRaw, err := json.Marshal(rows)
+	if err != nil {
+		return nil, false
+	}
+	head[key] = rowsRaw
+	head["shown"] = json.RawMessage(strconv.Itoa(len(rows)))
+	delete(head, "next_offset")
+	delete(head, "offset")
+	out, err := json.Marshal(head)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// nextOffset reads a reply's next_offset, if it names one.
+func nextOffset(raw json.RawMessage) (int, bool) {
+	var r struct {
+		Next *int `json:"next_offset"`
+	}
+	if json.Unmarshal(raw, &r) != nil || r.Next == nil {
+		return 0, false
+	}
+	return *r.Next, true
+}
+
+// pageRows finds the list in a page: the one key the three paged replies carry
+// rows under. An empty Lua table may arrive as {} (looseArray), which is no rows.
+func pageRows(m map[string]json.RawMessage) (string, []json.RawMessage) {
+	for _, key := range []string{"surfaces", "forces", "players"} {
+		raw, ok := m[key]
+		if !ok {
+			continue
+		}
+		var rows []json.RawMessage
+		if json.Unmarshal(raw, &rows) != nil {
+			if string(raw) != "{}" {
+				return "", nil
+			}
+			rows = nil
+		}
+		return key, rows
+	}
+	return "", nil
+}
+
 // withForceArgs fills the reserved force argument in the same way read()
-// does for a model-driven call (agent.go): only when the tool's own schema
-// declares it, and only when the caller left it out. Every Group A tool
+// does for a model-driven call (fillForce, agent.go): only when the tool's
+// own schema takes it as the catalog's required parameter, and only when the
+// caller left it out. Every Group A tool
 // takes force, but built defensively rather than assumed, matching that
 // existing idiom.
 func withForceArgs(t tools.Tool, force string, args map[string]any) json.RawMessage {
@@ -494,10 +605,7 @@ func withForceArgs(t tools.Tool, force string, args map[string]any) json.RawMess
 	if err != nil {
 		raw = []byte("{}")
 	}
-	if tools.Declares(t.Schema, catalog.ForceParam) {
-		raw = tools.FillString(raw, catalog.ForceParam, force)
-	}
-	return raw
+	return fillForce(t, raw, force)
 }
 
 // The five reply shapes below are exactly what the companion's own tools

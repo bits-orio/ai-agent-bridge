@@ -192,3 +192,63 @@ func TestRankSweepRanksAStringEncodedFraction(t *testing.T) {
 		t.Errorf("margin = %s, want 7.5 over team-a, so the fraction was read as its real value", fields["margin"])
 	}
 }
+
+// The companion may say which way a metric runs. "lower" makes the smallest
+// value the leader, absent or "higher" the largest, and anything else is not
+// a sweep this ranker understands, so the reply goes back untouched.
+func TestRankSweepHonoursBetter(t *testing.T) {
+	envelope := func(better string) string {
+		return `{"sweep_v":1,"axis":"force","metric":"deaths","unit":"count","cols":["name","value"],` + better +
+			`"rows":[["a",9],["b",4]],"total":2,"shown":2,"skipped":0}`
+	}
+	for _, tc := range []struct {
+		name, better, leader string // leader "" means the reply must come back unchanged
+	}{
+		{"absent", ``, `"a"`},
+		{"higher", `"better":"higher",`, `"a"`},
+		{"lower", `"better":"lower",`, `"b"`},
+		{"unknown", `"better":"sideways",`, ``},
+		{"wrong type", `"better":3,`, ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := envelope(tc.better)
+			got := rankSweep(context.Background(), json.RawMessage(in))
+			if tc.leader == "" {
+				if string(got) != in {
+					t.Errorf("reply changed: %s", got)
+				}
+				return
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(got, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if string(fields["leader"]) != tc.leader {
+				t.Errorf("leader = %s, want %s", fields["leader"], tc.leader)
+			}
+			if _, ok := fields["better"]; tc.better != "" && !ok {
+				t.Errorf("the reply lost its better field: %s", got)
+			}
+		})
+	}
+}
+
+// Close figures are told apart, and a tie is said to rest on rounded figures.
+func TestRankSweepIsHonestAboutCloseFiguresAndTies(t *testing.T) {
+	close := `{"sweep_v":1,"axis":"force","metric":"m","cols":["name","value"],"rows":[["a","12.34"],["b","12.31"]],"total":2,"shown":2,"skipped":0}`
+	var f map[string]json.RawMessage
+	if err := json.Unmarshal(rankSweep(context.Background(), json.RawMessage(close)), &f); err != nil {
+		t.Fatal(err)
+	}
+	if string(f["leader"]) != `"a"` || string(f["margin"]) != `"0.03 over b's 12.31"` {
+		t.Errorf("leader %s margin %s", f["leader"], f["margin"])
+	}
+
+	tie := `{"sweep_v":1,"axis":"force","metric":"m","cols":["name","value"],"rows":[["a",3],["b",3]],"total":2,"shown":2,"skipped":0}`
+	if err := json.Unmarshal(rankSweep(context.Background(), json.RawMessage(tie)), &f); err != nil {
+		t.Fatal(err)
+	}
+	if string(f["leader"]) != `"a and b tied"` || !strings.Contains(string(f["margin"]), "rounded") {
+		t.Errorf("tie: leader %s margin %s", f["leader"], f["margin"])
+	}
+}

@@ -23,6 +23,22 @@ const eventHeader = "tick\tevent\tplayer\tforce\tdata"
 // currentMapOnly ends every history tool's description.
 const currentMapOnly = " History covers the current map only."
 
+// knownKinds is every event kind the companion writes
+// (companion-mod/scripts/events.lua, questions.lua), named in the
+// descriptions so the model does not have to guess one.
+const knownKinds = " Kinds recorded: player_joined, player_left, player_died, research_finished, rocket_launched, console_chat, question, answer, question_dropped, session; a kind not on the map yet answers with the kinds there are."
+
+// ticksPerMinute converts since_minutes to ticks: 60 updates a second.
+const ticksPerMinute = 60 * 60
+
+// forceSchema is the force filter every event tool takes. It is optional
+// and covers every force when left out: a filter the caller did not mean
+// narrows a player's history to one team and answers 0.
+var forceSchema = map[string]any{
+	"type":        "string",
+	"description": "Optional filter: only rows about this force. Leave it out to cover every force.",
+}
+
 // Tools returns the service's five list tools (docs/design/phase4-spec.md
 // sections 13 and 15): recent_events, last_event, count_events, recent_chat
 // and catch_up. None sweeps an axis, so none carries the sweep envelope a
@@ -34,21 +50,23 @@ func (s *Store) Tools() []tools.Tool {
 		{
 			Name: "recent_events",
 			Description: "Recorded history events, newest first: one header line (tick, event, player, force, data) then one tab-separated row per event; data is that event's own JSON payload. " +
-				"Filter by event, force or player, and by since_tick for a window. At most 20 rows; use count_events for a total. " +
-				"A chat line or question said in a private channel shows up only when this question was asked in that same channel." + currentMapOnly,
+				"Filter by event (one kind or several, comma-separated), force or player, and by since_minutes or since_tick for a window: what happened in the last hour is since_minutes 60 with no event. At most 20 rows; use count_events for a total. " +
+				"A chat line or question said in a private channel shows up only when this question was asked in that same channel." + knownKinds + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
-					"description": "Event key, e.g. player_died or research_finished. Omit for every key.",
+					"description": "Event key, e.g. player_died, or several comma-separated: player_died,research_finished. Omit for every key.",
 				},
 				"since_tick": map[string]any{
 					"type":        "integer",
 					"description": "Only events at or after this tick.",
 				},
-				"force": map[string]any{
-					"type":        "string",
-					"description": "Force name. Omit for the asker's force.",
+				"since_minutes": map[string]any{
+					"type":        "integer",
+					"description": "Only events from the last this many minutes of game time, counted back from the newest event.",
+					"minimum":     1,
 				},
+				"force": forceSchema,
 				"player": map[string]any{
 					"type":        "string",
 					"description": "Player name. Omit for every player.",
@@ -66,7 +84,7 @@ func (s *Store) Tools() []tools.Tool {
 			Name: "last_event",
 			Description: "The newest recorded occurrence of one event key, optionally for one player or force: when a player last died, when research last finished. " +
 				"One header line (tick, event, player, force, data) then the one matching row, or the plain line \"none recorded\" when there is none. " +
-				"A private channel's rows show only for that channel's own questions." + currentMapOnly,
+				"A private channel's rows show only for that channel's own questions." + knownKinds + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
@@ -76,27 +94,25 @@ func (s *Store) Tools() []tools.Tool {
 					"type":        "string",
 					"description": "Player name.",
 				},
-				"force": map[string]any{
-					"type":        "string",
-					"description": "Force name. Omit for the asker's force.",
-				},
+				"force": forceSchema,
 			}, "event"),
 			Call: s.lastEvent,
 		},
 		{
 			Name: "count_events",
-			Description: "How many times one event key was recorded, optionally for one force and only " +
-				"from since_tick on. One header line \"count\" then one row holding the number. Use it for totals instead of listing rows. " +
-				"A private channel's rows count only for that channel's own questions." + currentMapOnly,
+			Description: "How many times one event key was recorded, optionally for one player or force and only " +
+				"from since_tick on: how many times a player logged off is player_left with that player. One header line \"count\" then one row holding the number. Use it for totals instead of listing rows. " +
+				"A private channel's rows count only for that channel's own questions." + knownKinds + currentMapOnly,
 			Schema: tools.ObjectSchema(map[string]any{
 				"event": map[string]any{
 					"type":        "string",
 					"description": "Event key, e.g. rocket_launched.",
 				},
-				"force": map[string]any{
+				"player": map[string]any{
 					"type":        "string",
-					"description": "Force name. Omit for the asker's force.",
+					"description": "Player name. Omit for every player.",
 				},
+				"force": forceSchema,
 				"since_tick": map[string]any{
 					"type":        "integer",
 					"description": "Count only events at or after this tick.",
@@ -141,25 +157,56 @@ func (s *Store) Tools() []tools.Tool {
 	}
 }
 
+// The force filter is never listed as required (forceSchema): the agent
+// fills the asker's force in only for a tool that requires it
+// (tools.Requires), so these tools see a force only when the model asked for
+// one (F2). TODO(agent): should the agent come to need an explicit flag
+// instead, it goes on the three event tools above.
+
 func (s *Store) recentEvents(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
-		Event     string `json:"event"`
-		Force     string `json:"force"`
-		Player    string `json:"player"`
-		SinceTick int64  `json:"since_tick"`
-		Limit     int    `json:"limit"`
+		Event        string `json:"event"`
+		Force        string `json:"force"`
+		Player       string `json:"player"`
+		SinceTick    int64  `json:"since_tick"`
+		SinceMinutes int64  `json:"since_minutes"`
+		Limit        int    `json:"limit"`
 	}
 	if err := unmarshalArgs(args, &in); err != nil {
 		return nil, fmt.Errorf("recent_events: %w", err)
 	}
-
-	rows, err := s.queryEvents(ctx, eventQuery{
-		Event: in.Event, Force: in.Force, Player: in.Player, SinceTick: in.SinceTick, Limit: clampLimit(in.Limit),
-	})
+	q := eventQuery{Force: in.Force, Player: in.Player, SinceTick: in.SinceTick, Limit: clampLimit(in.Limit)}
+	kinds := splitKinds(in.Event)
+	if len(kinds) == 1 {
+		q.Event = kinds[0]
+	} else {
+		q.Events = kinds
+	}
+	if in.SinceMinutes > 0 {
+		// The window runs back from the newest row this question may see,
+		// the same "now" catch_up uses; the later of the two bounds wins.
+		now, err := s.maxTick(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("recent_events: %w", err)
+		}
+		q.SinceTick = max(q.SinceTick, now-in.SinceMinutes*ticksPerMinute, 1)
+	}
+	missing, err := s.unknownKinds(ctx, "recent_events", kinds)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.queryEvents(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("recent_events: %w", err)
 	}
-	return json.RawMessage(columnar(eventHeader, eventRowsToTSV(rows))), nil
+	out := columnar(eventHeader, eventRowsToTSV(rows))
+	if len(missing) > 0 {
+		out += "\nnote: no events of kind " + strings.Join(quoteAll(missing), ", ") + " are recorded on this map"
+	}
+	if len(rows) == 0 {
+		out += s.forceNote(ctx, q)
+	}
+	return json.RawMessage(out), nil
 }
 
 func (s *Store) lastEvent(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
@@ -174,13 +221,16 @@ func (s *Store) lastEvent(ctx context.Context, args json.RawMessage) (json.RawMe
 	if in.Event == "" {
 		return nil, errors.New(`last_event: "event" is required`)
 	}
-
-	rows, err := s.queryEvents(ctx, eventQuery{Event: in.Event, Force: in.Force, Player: in.Player, Limit: 1})
+	if _, err := s.unknownKinds(ctx, "last_event", []string{in.Event}); err != nil {
+		return nil, err
+	}
+	q := eventQuery{Event: in.Event, Force: in.Force, Player: in.Player, Limit: 1}
+	rows, err := s.queryEvents(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("last_event: %w", err)
 	}
 	if len(rows) == 0 {
-		return json.RawMessage("none recorded"), nil
+		return json.RawMessage("none recorded" + s.forceNote(ctx, q)), nil
 	}
 	return json.RawMessage(columnar(eventHeader, eventRowsToTSV(rows))), nil
 }
@@ -189,6 +239,7 @@ func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.Raw
 	var in struct {
 		Event     string `json:"event"`
 		Force     string `json:"force"`
+		Player    string `json:"player"`
 		SinceTick *int64 `json:"since_tick"`
 	}
 	if err := unmarshalArgs(args, &in); err != nil {
@@ -197,26 +248,162 @@ func (s *Store) countEvents(ctx context.Context, args json.RawMessage) (json.Raw
 	if in.Event == "" {
 		return nil, errors.New(`count_events: "event" is required`)
 	}
-
-	// Only the rows this question may read are counted: a total over hidden
-	// rows would tell another force how much a private channel said.
-	visible, params := visibleTo(ctx)
-	query := "SELECT COUNT(*) FROM events WHERE " + visible + " AND event = ?"
-	params = append(params, in.Event)
-	if in.Force != "" {
-		query += " AND force = ?"
-		params = append(params, in.Force)
+	if _, err := s.unknownKinds(ctx, "count_events", []string{in.Event}); err != nil {
+		return nil, err
 	}
+	q := eventQuery{Event: in.Event, Force: in.Force, Player: in.Player}
 	if in.SinceTick != nil {
-		query += " AND tick >= ?"
-		params = append(params, *in.SinceTick)
+		q.SinceTick = *in.SinceTick
 	}
-
-	var count int64
-	if err := s.db.QueryRowContext(ctx, query, params...).Scan(&count); err != nil {
+	count, err := s.countWhere(ctx, q)
+	if err != nil {
 		return nil, fmt.Errorf("count_events: query: %w", err)
 	}
-	return json.RawMessage(columnar("count", []string{strconv.FormatInt(count, 10)})), nil
+	out := columnar("count", []string{strconv.FormatInt(count, 10)})
+	if count == 0 {
+		out += s.forceNote(ctx, q)
+	}
+	return json.RawMessage(out), nil
+}
+
+// countWhere counts the rows q matches that the question on ctx may read: a
+// total over hidden rows would tell another force how much a private
+// channel said. q.Limit plays no part. A since_tick of 0 or less bounds
+// nothing, as in queryEvents.
+func (s *Store) countWhere(ctx context.Context, q eventQuery) (int64, error) {
+	visible, params := visibleTo(ctx)
+	query := "SELECT COUNT(*) FROM events WHERE " + visible
+	switch {
+	case q.Event != "":
+		query += " AND event = ?"
+		params = append(params, q.Event)
+	case len(q.Events) > 0:
+		query += " AND event IN (" + strings.TrimSuffix(strings.Repeat("?,", len(q.Events)), ",") + ")"
+		for _, e := range q.Events {
+			params = append(params, e)
+		}
+	}
+	if q.Force != "" {
+		query += " AND force = ?"
+		params = append(params, q.Force)
+	}
+	if q.Player != "" {
+		query += " AND player = ?"
+		params = append(params, q.Player)
+	}
+	if q.SinceTick > 0 {
+		query += " AND tick >= ?"
+		params = append(params, q.SinceTick)
+	}
+	var count int64
+	err := s.db.QueryRowContext(ctx, query, params...).Scan(&count)
+	return count, err
+}
+
+// forceNote is what a filtered read that came back empty adds when the
+// force filter alone hid the player's rows: the count without it, so the
+// model reads "none on that force" and not "none at all". "" otherwise, or
+// when the count fails: the plain result still stands.
+func (s *Store) forceNote(ctx context.Context, q eventQuery) string {
+	if q.Force == "" || q.Player == "" {
+		return ""
+	}
+	force := q.Force
+	q.Force = ""
+	n, err := s.countWhere(ctx, q)
+	if err != nil || n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nnote: 0 for force %q; %d for player %q across all forces (leave force out to see them)", force, n, q.Player)
+}
+
+// unknownKinds checks the requested kinds against the kinds the current map
+// has rows of, counted over what the question on ctx may read. When none of
+// them has a single row, the call answers with an error naming the kinds
+// there are, so the model stops guessing names and never reads a made-up
+// kind's 0 as a count. When only some are missing, they come back for a
+// note beside the rows of the rest.
+func (s *Store) unknownKinds(ctx context.Context, tool string, kinds []string) ([]string, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	counts, err := s.kindCounts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", tool, err)
+	}
+	var missing []string
+	for _, k := range kinds {
+		if !hasKind(counts, k) {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) < len(kinds) {
+		return missing, nil
+	}
+	parts := make([]string, len(counts))
+	for i, c := range counts {
+		parts[i] = fmt.Sprintf("%s %d", c.kind, c.n)
+	}
+	there := "none yet"
+	if len(parts) > 0 {
+		there = strings.Join(parts, ", ")
+	}
+	return nil, fmt.Errorf("%s: no events of kind %s are recorded on this map; kinds: %s", tool, strings.Join(quoteAll(missing), ", "), there)
+}
+
+// kindCount is one event kind and how many rows of it a question may read.
+type kindCount struct {
+	kind string
+	n    int64
+}
+
+// kindCounts is every kind the question on ctx may read rows of in the
+// current epoch, commonest first.
+func (s *Store) kindCounts(ctx context.Context) ([]kindCount, error) {
+	visible, params := visibleTo(ctx)
+	rows, err := s.db.QueryContext(ctx, "SELECT event, COUNT(*) AS n FROM events WHERE "+visible+" GROUP BY event ORDER BY n DESC, event", params...)
+	if err != nil {
+		return nil, fmt.Errorf("kinds: %w", err)
+	}
+	defer rows.Close()
+	var out []kindCount
+	for rows.Next() {
+		var c kindCount
+		if err := rows.Scan(&c.kind, &c.n); err != nil {
+			return nil, fmt.Errorf("kinds: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func hasKind(counts []kindCount, kind string) bool {
+	for _, c := range counts {
+		if c.kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// splitKinds reads recent_events' event argument: one kind, or several
+// separated by commas, blanks dropped. None means every kind.
+func splitKinds(v string) []string {
+	var out []string
+	for _, k := range strings.Split(v, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func quoteAll(ss []string) []string {
+	out := make([]string, len(ss))
+	for i, v := range ss {
+		out[i] = strconv.Quote(v)
+	}
+	return out
 }
 
 // eventRowsToTSV renders recent_events/last_event's shared row shape: tick,
@@ -267,7 +454,7 @@ func modelData(event string, data json.RawMessage) string {
 // every channel, "" for a row that has none.
 func countingField(event string) string {
 	switch event {
-	case questionEvent, "answer":
+	case questionEvent, "answer", "question_dropped":
 		return "qid"
 	case sessionEvent:
 		return "last_id"

@@ -40,9 +40,8 @@ func ObjectSchema(props map[string]any, required ...string) map[string]any {
 	}
 }
 
-// Declares reports whether a tool's schema has a property of this name. The
-// agent uses it to find the tools that take the reserved force argument,
-// whichever package built them: a game tool out of the catalog and a history
+// Declares reports whether a tool's schema has a property of this name,
+// whichever package built it: a game tool out of the catalog and a history
 // tool out of SQLite are the same shape here.
 func Declares(schema map[string]any, prop string) bool {
 	props, ok := schema["properties"].(map[string]any)
@@ -51,6 +50,35 @@ func Declares(schema map[string]any, prop string) bool {
 	}
 	_, found := props[prop]
 	return found
+}
+
+// Requires reports whether a tool's schema declares a property of this name
+// and lists it as required. The agent uses it to find the tools that take
+// the reserved force argument: the catalog adds force to every game tool as
+// a required parameter (catalog.ForceParam), so leaving it out there means
+// the asker's force and the agent fills it in. A tool that only offers force
+// as an optional filter, as every history tool does, means every force when
+// it is left out, and filling the asker's force in silently narrows the
+// answer to their own team.
+func Requires(schema map[string]any, prop string) bool {
+	if !Declares(schema, prop) {
+		return false
+	}
+	switch required := schema["required"].(type) {
+	case []string:
+		for _, name := range required {
+			if name == prop {
+				return true
+			}
+		}
+	case []any:
+		for _, name := range required {
+			if name == prop {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // FillString sets one string argument the caller left out and returns the

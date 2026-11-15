@@ -5,6 +5,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -37,5 +38,27 @@ func TestResolveLogPath(t *testing.T) {
 				t.Errorf("resolveLogPath() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// S10: the log holds question text and answers, so it is the owner's alone.
+func TestTheLogFileIsOwnerOnly(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		path := filepath.Join(t.TempDir(), "logs", "aab.log")
+		if existing {
+			_ = os.MkdirAll(filepath.Dir(path), 0o755)
+			if err := os.WriteFile(path, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		f, err := openLogFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		fi, _ := os.Stat(path)
+		if fi.Mode().Perm() != 0o600 {
+			t.Errorf("existing=%v: mode = %v, want 0600", existing, fi.Mode().Perm())
+		}
 	}
 }

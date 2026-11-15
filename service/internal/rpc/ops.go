@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -170,6 +171,11 @@ type Question struct {
 	// agent.personality: off, a preset name, or free text (agent/voice.go).
 	// An older companion never sends it, which reads as the config's voice.
 	Personality string `json:"personality,omitempty"`
+	// ToAsker is true when the companion prints this question's answer to
+	// its asker alone (aab-answer-audience = asker) whatever Scope says, so
+	// the service treats the question as private to that asker. An older
+	// companion never sends it, which reads as false.
+	ToAsker bool `json:"to_asker,omitempty"`
 }
 
 // PollReply is the "r" of a poll call: unanswered questions with id greater than
@@ -232,11 +238,7 @@ func (c *Client) Answer(ctx context.Context, qid int64, artifact any) (bool, err
 // someone else's question, in someone else's scope. conn 0, or an executor
 // that does not number its connections, sends it as Answer does.
 func (c *Client) AnswerOn(ctx context.Context, conn uint64, qid int64, artifact any) (bool, error) {
-	execute := c.rc.Execute
-	if p, ok := c.rc.(pinnedRCON); ok && conn != 0 {
-		execute = func(cmd string) (string, time.Duration, error) { return p.ExecuteOn(conn, cmd) }
-	}
-	raw, _, err := c.call(ctx, "answer", answerRequest{QID: qid, Artifact: artifact}, execute)
+	raw, _, err := c.call(ctx, "answer", answerRequest{QID: qid, Artifact: artifact}, c.executorOn(conn))
 	if err != nil {
 		return false, err
 	}
@@ -245,4 +247,54 @@ func (c *Client) AnswerOn(ctx context.Context, conn uint64, qid int64, artifact 
 		return false, fmt.Errorf("aab-rpc: answer: bad reply: %w", err)
 	}
 	return ok, nil
+}
+
+// ErrSayUnsupported is a say the companion answered bad_op: a companion older
+// than the op, or one whose aab-allow-say setting is off. Neither changes
+// while the connection lasts, so the caller stops trying until it reconnects.
+// The error still carries the bad_op code (HasCode).
+var ErrSayUnsupported = errors.New("aab-rpc: say: not supported by this companion or turned off in its settings")
+
+// sayRequest is the payload of a say op: {artifact}. No question id: a say
+// prints unprompted and writes no storage.
+type sayRequest struct {
+	Artifact any `json:"artifact"`
+}
+
+// Say prints artifact to everyone, unprompted, under the companion's usual
+// head. A reply other than r=true is an error: nothing was confirmed printed.
+func (c *Client) Say(ctx context.Context, artifact any) error {
+	return c.SayOn(ctx, 0, artifact)
+}
+
+// SayOn is Say held to RCON connection conn, as AnswerOn holds an answer. A
+// toast is not tied to a poll, but it is tied to a map: the event that
+// produced it was read from one map's event file, and a new connection may
+// mean a restart onto another save. Over a broken connection the call fails
+// as Unreachable and nothing is printed. conn 0 sends it unpinned.
+func (c *Client) SayOn(ctx context.Context, conn uint64, artifact any) error {
+	raw, _, err := c.call(ctx, "say", sayRequest{Artifact: artifact}, c.executorOn(conn))
+	if HasCode(err, CodeBadOp) {
+		return fmt.Errorf("%w: %w", ErrSayUnsupported, err)
+	}
+	if err != nil {
+		return err
+	}
+	var ok bool
+	if err := json.Unmarshal(raw, &ok); err != nil {
+		return fmt.Errorf("aab-rpc: say: bad reply: %w", err)
+	}
+	if !ok {
+		return errors.New("aab-rpc: say: the companion did not confirm it")
+	}
+	return nil
+}
+
+// executorOn is the executor held to connection conn when the RCON client
+// numbers its connections and conn names one, and plain Execute otherwise.
+func (c *Client) executorOn(conn uint64) func(cmd string) (string, time.Duration, error) {
+	if p, ok := c.rc.(pinnedRCON); ok && conn != 0 {
+		return func(cmd string) (string, time.Duration, error) { return p.ExecuteOn(conn, cmd) }
+	}
+	return c.rc.Execute
 }

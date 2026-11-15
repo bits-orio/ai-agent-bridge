@@ -103,6 +103,9 @@ func TestASameSeedMapFirstSeenLateStartsItsOwnEpoch(t *testing.T) {
 				if !noteMap(t, s, "seed-0-777", 40_000, 0) {
 					t.Error("NoteMap on round two said no read moved")
 				}
+				// The line below was written after the status: the tailer
+				// has caught up past it, so no quarantine holds it (guard.go).
+				caughtUp(s)
 			} else {
 				ingest(t, s, sessionAt(40_000, "seed-0-777", 0).jsonl())
 			}

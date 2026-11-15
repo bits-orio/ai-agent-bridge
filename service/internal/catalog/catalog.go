@@ -53,6 +53,7 @@ type Catalog struct {
 func Build(providers rpc.ToolsReply, caller Caller) *Catalog {
 	c := &Catalog{byName: map[string]Target{}}
 	for _, p := range providers {
+		used := 0 // bytes of this provider's tools kept so far
 		for _, fn := range sortedKeys(p.Tools) {
 			name := ToolName(p.Iface, fn)
 			if prev, taken := c.byName[name]; taken {
@@ -60,8 +61,18 @@ func Build(providers rpc.ToolsReply, caller Caller) *Catalog {
 					prev.Iface, prev.Fn, p.Iface, fn, name)
 				continue
 			}
+			t, ok := tool(name, p.Iface, fn, p.Tools[fn], caller)
+			if !ok {
+				continue
+			}
+			size := toolBytes(t)
+			if used+size > maxProviderSchemaBytes {
+				log.Printf("catalog: %s.%s: dropping the tool, the provider's tools would pass %d bytes of schema", p.Iface, fn, maxProviderSchemaBytes)
+				continue
+			}
+			used += size
 			c.byName[name] = Target{Iface: p.Iface, Fn: fn}
-			c.tools = append(c.tools, tool(name, p.Iface, fn, p.Tools[fn], caller))
+			c.tools = append(c.tools, t)
 		}
 	}
 	return c
@@ -76,11 +87,24 @@ func (c *Catalog) Target(name string) (Target, bool) {
 	return t, ok
 }
 
-func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tools.Tool {
+// toolBytes is what one tool adds to every request: its name, description
+// and schema as they are sent.
+func toolBytes(t tools.Tool) int {
+	raw, _ := json.Marshal(t.Schema)
+	return len(t.Name) + len(t.Description) + len(raw)
+}
+
+// tool builds one catalog tool. ok is false when its parameters left it
+// uncallable (schema says why in the log).
+func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) (tools.Tool, bool) {
+	sch, ok := schema(iface, fn, manifest)
+	if !ok {
+		return tools.Tool{}, false
+	}
 	return tools.Tool{
 		Name:        name,
 		Description: describe(manifest),
-		Schema:      schema(manifest),
+		Schema:      sch,
 		Call: func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 			out, err := caller.CallTool(ctx, iface, fn, withForce(ctx, args))
 			if err != nil {
@@ -88,7 +112,7 @@ func tool(name, iface, fn string, manifest rpc.ToolManifest, caller Caller) tool
 			}
 			return rankSweep(ctx, out), nil
 		},
-	}
+	}, true
 }
 
 var unsafeNameChar = regexp.MustCompile(`[^A-Za-z0-9_-]`)

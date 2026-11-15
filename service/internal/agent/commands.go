@@ -1,4 +1,5 @@
-// The two lines that never reach the model: "sessions" and a bare "new".
+// The session commands that never reach the model: "sessions" and a bare
+// "new". The free commands that read the game live in freecommands.go.
 
 package agent
 

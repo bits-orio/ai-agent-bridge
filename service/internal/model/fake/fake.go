@@ -41,6 +41,9 @@ func (m *Model) Step(_ context.Context, _ string, msgs []model.Message, defs []m
 	text := questionOf(msgs)
 	id := fmt.Sprintf("fake-%d", turn)
 
+	if c := scripted(text, turn, defs, msgs); c != nil {
+		return step(model.Block{Type: model.BlockToolUse, ID: id, Name: c.tool, Input: mustJSON(c.args)}), nil
+	}
 	if turn == 1 {
 		if has(text, "recall") {
 			return step(submitBlock(id, recall(msgs))), nil
@@ -53,6 +56,12 @@ func (m *Model) Step(_ context.Context, _ string, msgs []model.Message, defs []m
 		return step(submitBlock(id, echo(text))), nil
 	}
 	return step(submitBlock(id, artifactOf(text, lastToolResult(msgs)))), nil
+}
+
+// StepForced is Step: the scripted model already submits on its last turn, so
+// forcing changes nothing the end-to-end scripts could see.
+func (m *Model) StepForced(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef, _ string) (model.Step, error) {
+	return m.Step(ctx, system, msgs, defs)
 }
 
 func step(block model.Block) model.Step {

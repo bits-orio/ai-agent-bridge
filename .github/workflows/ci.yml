@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # release.yml runs these same jobs before it builds or uploads anything.
+  workflow_call:
 
 jobs:
   service:
@@ -13,9 +15,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: service/go.mod
-      - name: service, vet / test / build
+      - name: service, gofmt / vet / test / build
         working-directory: service
         run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt wants to rewrite: $unformatted"; exit 1
+          fi
           go vet ./...
           go test ./...
           go build ./...
@@ -26,7 +32,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install lua5.4
-        run: sudo apt-get update && sudo apt-get install -y lua5.4
+        # lua5.4 gives luac5.4 for the syntax check. liblua5.4-0 is the shared
+        # library tests/lua/luarun.py loads: the lua5.4 package does not pull
+        # it in, and without it every suite stops before its first check.
+        run: sudo apt-get update && sudo apt-get install -y lua5.4 liblua5.4-0
 
       - name: luac -p companion-mod/**/*.lua
         # Parse-only syntax check -- catches malformed Lua before it ever reaches a
@@ -45,6 +54,9 @@ jobs:
             luac5.4 -p "${files[@]}"
             echo "luac -p OK (${#files[@]} file(s))"
           fi
+
+      - name: Companion protocol tests against the fake game
+        run: make lua-test
 
       - name: Check companion-mod/changelog.txt format
         # CONTEXT.md / CLAUDE.md document this exact check -- Factorio's changelog

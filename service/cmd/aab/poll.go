@@ -48,6 +48,9 @@ func (r *runner) tick(ctx context.Context) {
 	r.forgetGone(questions, limit)
 	r.answerPage(ctx, questions)
 	r.advanceWatermark(questions)
+	// After the page, never before: a toast waits behind every answer, and
+	// goes over the connection this tick's poll just verified.
+	r.sendToast(ctx)
 }
 
 // pageSize is the poll page in use, pollLimit until a reply proves too large.

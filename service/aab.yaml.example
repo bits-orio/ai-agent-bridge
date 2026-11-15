@@ -22,7 +22,8 @@ factorio:
   #   user: aab-service
   #   key_path: /secrets/aab_ed25519     # or set a password via password_env
   #   password_env: SFTP_PASSWORD
-  #   known_hosts_path: /secrets/known_hosts # omit to skip host-key verification (logs a warning)
+  #   known_hosts_path: /secrets/known_hosts # omit to skip host-key verification (logs a warning at every connect)
+  #   insecure_ignore_host_key: false        # unset or true accepts any host key without known_hosts_path, as before; false refuses to start without it
 
 transport: local        # local | sftp  (RCON is always the control path either way)
 poll_interval: 1s       # every 30th poll also reads the companion's status, to notice a new map or an older save
@@ -133,6 +134,10 @@ agent:
   questions_per_hour: 120             # the whole server's rolling-hour quota, -1 for none
   max_cost_per_day: 5.0               # USD in a rolling day, whoever asks; -1 for no cap
   max_tool_calls: 30                  # lookups one question may make; a round over it is refused, the question goes on
+  question_timeout: 90s               # how long one question may take in all; past it the asker is told it took too long. 10m by default for ollama, at least 10s
+  # daily_spend_path: daily-spend.json  # where max_cost_per_day's rolling spend is kept across restarts; default beside history.path.
+  #                                     # The two hourly quotas are kept in memory only and start again at every restart.
+  # A negative value on any cap above is refused at start, except the three that take -1 for none.
 
 # The event history for this save. A relative path is resolved against this file, so
 # moving the config moves the database with it. One file can hold several maps; the
@@ -158,6 +163,26 @@ history:
 # turn it off for the pre-Phase-4 behaviour.
 # briefing:
 #   enabled: true
+
+# Milestone toasts: one unprompted line for the whole server when a force
+# launches its first rocket (and its 10th, 100th and 1,000th), or is the
+# first on the map to finish a headline technology. Only for events that
+# happen while the service is running and someone is online; nothing is
+# announced from before a restart. The game prints them only while the
+# in-game setting aab-allow-say is on. In env-var mode: AAB_TOASTS_MODE,
+# AAB_TOASTS_MAX_PER_HOUR, AAB_TOASTS_TECHNOLOGIES (comma separated) and
+# AAB_TOASTS_WHEN_EMPTY.
+# toasts:
+#   mode: plain          # plain: a fixed sentence. model: one line in the
+#                        # server's voice, paid from max_cost_per_day, plain
+#                        # when the model fails. off: no toasts.
+#   max_per_hour: 6      # the rest are dropped, with a log line
+#   technologies:        # glob patterns of technology names; [] for none
+#     - "*-science-pack"
+#     - rocket-silo
+#     - space-platform
+#     - "planet-discovery-*"
+#   when_empty: false    # true toasts with nobody online; for test servers
 
 # The service's own HTTP surface: /healthz and /v1/status (connected, mod version,
 # questions answered, tokens, cost, model, uptime). Leave addr empty to turn it off.

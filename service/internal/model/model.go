@@ -152,6 +152,15 @@ type Model interface {
 	Step(ctx context.Context, system string, msgs []Message, tools []ToolDef) (Step, error)
 }
 
+// ToolForcer is an optional capability of a Model: a step in which the model
+// must call the named tool. The loop uses it on the last round of a question,
+// so the answer arrives as a submission instead of prose. A route that cannot
+// force a tool (or cannot while its own settings, such as thinking, are on)
+// answers like Step, so the caller never has to know.
+type ToolForcer interface {
+	StepForced(ctx context.Context, system string, msgs []Message, tools []ToolDef, tool string) (Step, error)
+}
+
 // TextOf joins every text block in a turn, which is how the loop rescues an
 // answer from a model that stopped talking without calling submit_answer.
 func TextOf(blocks []Block) string {

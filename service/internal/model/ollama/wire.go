@@ -5,7 +5,6 @@ package ollama
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -221,10 +220,11 @@ func toToolDefs(defs []model.ToolDef, short map[string]string) []toolDef {
 }
 
 // fromResponse turns the reply into a Step. Older servers send no call ids,
-// so a call without one gets one here, unique within the question because
-// the prompt token count grows every round. A call comes back under the
-// name Ollama was shown; full gives it its own name again.
-func fromResponse(r *response, full map[string]string) model.Step {
+// so a call without one gets one from newID, which the client keeps unique
+// across rounds (the prompt token count is not: a cached prefix can make it
+// repeat). A call comes back under the name Ollama was shown; full gives it
+// its own name again.
+func fromResponse(r *response, full map[string]string, newID func() string) model.Step {
 	var step model.Step
 	if len(r.Message.ToolCalls) == 0 {
 		if call, ok := leakedCall(r.Message.Content, full); ok {
@@ -237,10 +237,10 @@ func fromResponse(r *response, full map[string]string) model.Step {
 	if r.Message.Content != "" {
 		step.Blocks = append(step.Blocks, model.Block{Type: model.BlockText, Text: r.Message.Content})
 	}
-	for i, call := range r.Message.ToolCalls {
+	for _, call := range r.Message.ToolCalls {
 		id := call.ID
 		if id == "" {
-			id = fmt.Sprintf("call_%d_%d", r.PromptEvalCount, i)
+			id = newID()
 		}
 		name := call.Function.Name
 		if f, ok := full[name]; ok {
@@ -280,8 +280,19 @@ const cutBytesPerToken = 8
 // wasCut says whether Ollama dropped part of the prompt to fit the context.
 // It does that from the front, rules first, and reports nothing, so the
 // only sign is a prompt token count far too small for the bytes sent.
-func wasCut(requestBytes int, r *response) bool {
-	return r.PromptEvalCount > 0 && requestBytes > 2000 && requestBytes/r.PromptEvalCount > cutBytesPerToken
+//
+// Some servers count only the tokens they evaluated and leave out a cached
+// prefix, which makes a healthy round look the same: a big request, a tiny
+// count. When the reply carries a cached count it is added back. When it
+// does not, the cache cannot be ruled out, so a cut is declared only if the
+// count is also at least an eighth of the context: a cut prompt is refilled
+// to about the window, while an uncached remainder is the few new tokens.
+func wasCut(requestBytes, numCtx int, r *response) bool {
+	tokens := r.PromptEvalCount + r.PromptCached
+	if tokens <= 0 || requestBytes <= 2000 || requestBytes/tokens <= cutBytesPerToken {
+		return false
+	}
+	return r.PromptCached > 0 || tokens >= numCtx/8
 }
 
 // leakedCall finds a tool call that came back as text. A small model now

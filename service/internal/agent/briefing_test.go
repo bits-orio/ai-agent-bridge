@@ -1149,3 +1149,132 @@ func TestChatRowsCarryTheSpeakersForceAndPrivateLines(t *testing.T) {
 		t.Errorf("ch = %s, want %s", body["ch"], want)
 	}
 }
+
+// pagedEngineTool serves rows of one list key in pages of per, the way
+// bounded.page does: total and shown always, offset and next_offset only on a
+// cut or non-first page. calls records the offset of every trip.
+func pagedEngineTool(fn, key, rowFmt string, n, per int, calls *[]int) tools.Tool {
+	return tools.Tool{
+		Name:        catalog.ToolName(engineIface, fn),
+		Description: "a paged stub",
+		Schema:      tools.ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}}, "force"),
+		Call: func(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+			var a struct {
+				Offset int `json:"offset"`
+			}
+			_ = json.Unmarshal(args, &a)
+			*calls = append(*calls, a.Offset)
+			end := a.Offset + per
+			if end > n {
+				end = n
+			}
+			rows := make([]string, 0, per)
+			for i := a.Offset; i < end; i++ {
+				rows = append(rows, fmt.Sprintf(rowFmt, i))
+			}
+			out := fmt.Sprintf(`{"force":"north","total":%d,"shown":%d,`, n, end-a.Offset)
+			if a.Offset > 0 || end < n {
+				out += fmt.Sprintf(`"offset":%d,`, a.Offset)
+				if end < n {
+					out += fmt.Sprintf(`"next_offset":%d,`, end)
+				}
+			}
+			return json.RawMessage(out + `"` + key + `":[` + strings.Join(rows, ",") + `]}`), nil
+		},
+	}
+}
+
+func TestAssembleFollowsListSurfacesPagesUntilTheListIsWhole(t *testing.T) {
+	var offsets []int
+	ts := withTool(happyGroupATools(), "list_surfaces",
+		pagedEngineTool("list_surfaces", "surfaces", `{"name":"s%[1]d","index":%[1]d,"force_players":1}`, 9, 3, &offsets))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	sf := rowsOf(t, fencedBody(t, res.Text)["sf"])
+	if len(sf) != 9 {
+		t.Fatalf("sf has %d rows, want all 9 over 3 pages (offsets %v)", len(sf), offsets)
+	}
+	if fmt.Sprint(offsets) != "[0 3 6]" {
+		t.Errorf("offsets asked = %v, want [0 3 6]", offsets)
+	}
+}
+
+func TestAssembleFollowsEveryPagedSectionNotOnlySurfaces(t *testing.T) {
+	var of, or, op []int
+	ts := happyGroupATools()
+	ts = withTool(ts, "list_forces", pagedEngineTool("list_forces", "forces", `{"name":"f%d","player_count":1,"connected_player_count":1}`, 4, 2, &of))
+	ts = withTool(ts, "current_research", pagedEngineTool("current_research", "forces", `{"force":"f%d","researching":false}`, 4, 2, &or))
+	ts = withTool(ts, "list_players", pagedEngineTool("list_players", "players", `{"name":"p%d","force":"f0"}`, 6, 2, &op))
+	// pagedEngineTool stamps a top-level force, which list_players must not carry.
+	ts[len(ts)-1] = pagedPlayers(&op)
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	m := fencedBody(t, res.Text)
+	if got := len(rowsOf(t, m["fs"])); got != 4 {
+		t.Errorf("fs rows = %d, want 4 (forces offsets %v, research %v)", got, of, or)
+	}
+	if got := len(rowsOf(t, m["pl"])); got != 6 {
+		t.Errorf("pl rows = %d, want 6 (offsets %v)", got, op)
+	}
+}
+
+// pagedPlayers is the list_players sweep shape, which carries no top-level force.
+func pagedPlayers(calls *[]int) tools.Tool {
+	inner := pagedEngineTool("list_players", "players", `{"name":"p%d","force":"f0"}`, 6, 2, calls)
+	call := inner.Call
+	inner.Call = func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+		out, err := call(ctx, args)
+		return json.RawMessage(strings.Replace(string(out), `"force":"north",`, "", 1)), err
+	}
+	return inner
+}
+
+func TestAssembleOmitsASectionWhoseListOutrunsThePageCap(t *testing.T) {
+	var offsets []int
+	ts := withTool(happyGroupATools(), "list_surfaces",
+		pagedEngineTool("list_surfaces", "surfaces", `{"name":"s%[1]d","index":%[1]d,"force_players":1}`, 50, 3, &offsets))
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if res.Status != ledger.BriefingOn {
+		t.Fatalf("status = %q", res.Status)
+	}
+	if raw, present := fencedBody(t, res.Text)["sf"]; present {
+		t.Errorf("sf should be omitted when 4 pages do not cover the list, got %s", raw)
+	}
+	if len(offsets) != maxBriefingPages {
+		t.Errorf("trips = %d (%v), want exactly the %d-page cap", len(offsets), offsets, maxBriefingPages)
+	}
+}
+
+func TestAssembleStopsPagingOnceTheBudgetIsSpentAndOmitsTheSection(t *testing.T) {
+	var offsets []int
+	inner := pagedEngineTool("list_surfaces", "surfaces", `{"name":"s%[1]d","index":%[1]d,"force_players":1}`, 12, 3, &offsets)
+	call := inner.Call
+	inner.Call = func(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+		time.Sleep(40 * time.Millisecond)
+		return call(ctx, args)
+	}
+	ts := withTool(happyGroupATools(), "list_surfaces", inner)
+	// Page 1 ends at ~40ms (budget open), page 2 at ~80ms (budget spent):
+	// page 2 runs to its end, page 3 never starts.
+	res := Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, 60*time.Millisecond)
+	if fmt.Sprint(offsets) != "[0 3]" {
+		t.Errorf("offsets = %v, want [0 3]: the trip in flight finishes, the next never starts", offsets)
+	}
+	if res.Status == ledger.BriefingOn {
+		if _, present := fencedBody(t, res.Text)["sf"]; present {
+			t.Error("sf must be omitted when paging was cut by the budget")
+		}
+	}
+}
+
+func TestAssembleSinglePageReplyIsPassedThroughUnchanged(t *testing.T) {
+	var offsets []int
+	ts := withTool(happyGroupATools(), "list_surfaces",
+		pagedEngineTool("list_surfaces", "surfaces", `{"name":"s%[1]d","index":%[1]d,"force_players":1}`, 2, 5, &offsets))
+	Assemble(context.Background(), index(ts), askerQuestion(), freshMark(), nil, BriefingBudget)
+	if fmt.Sprint(offsets) != "[0]" {
+		t.Errorf("a whole first page must cost one trip, got offsets %v", offsets)
+	}
+	raw, ok := pagedRaw(context.Background(), index(ts), "list_surfaces", "north", map[string]any{"limit": 50})
+	if !ok || !strings.Contains(string(raw), `"total":2,"shown":2`) {
+		t.Errorf("single page not returned as is: %s", raw)
+	}
+}

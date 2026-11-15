@@ -67,10 +67,12 @@ func historySchema() map[string]any {
 	}, "event")
 }
 
-// The prompt tells the model that leaving force out reads the asker's force.
-// That has to be true of a history tool as well, or "when did I last die"
-// silently answers for every force on the server.
-func TestForceIsFilledOnAHistoryShapedTool(t *testing.T) {
+// F2 (review findings). A history tool offers force as one optional filter,
+// and leaving it out means every force. Filling the asker's force in there
+// silently narrowed history to their own team: "how many times has bits-orio
+// logged off" counted 0 on team-9 because the player was on team-4, then
+// spent five rounds finding the way around the wrong zero.
+func TestForceIsNotFilledOnAHistoryTool(t *testing.T) {
 	rec := &recordingTool{}
 	ts := []tools.Tool{rec.tool("last_event", historySchema(), `{"event":"player_died","tick":900}`)}
 	m := &scriptedModel{steps: []model.Step{
@@ -79,7 +81,7 @@ func TestForceIsFilledOnAHistoryShapedTool(t *testing.T) {
 	}}
 	a := New(m, caps())
 
-	q := Question{ID: 1, Text: "when did I last die", PlayerIndex: player(1), Force: "enemy"}
+	q := Question{ID: 1, Text: "when did bits-orio last die", PlayerIndex: player(1), Force: "enemy"}
 	if _, err := a.Answer(context.Background(), q, ts); err != nil {
 		t.Fatalf("answer: %v", err)
 	}
@@ -88,11 +90,30 @@ func TestForceIsFilledOnAHistoryShapedTool(t *testing.T) {
 	if runs != 1 {
 		t.Fatalf("tool ran %d times, want 1", runs)
 	}
-	if args["force"] != "enemy" {
-		t.Errorf("force = %v, want the asker's force: %v", args["force"], args)
+	if _, filled := args["force"]; filled {
+		t.Errorf("force = %v, want none: a history filter left out reads every force", args["force"])
 	}
 	if args["event"] != "player_died" {
 		t.Errorf("the model's own argument was lost: %v", args)
+	}
+}
+
+// A game tool carries force as the catalog's reserved, required parameter,
+// and leaving it out still means the asker's force.
+func TestForceIsFilledOnAGameTool(t *testing.T) {
+	rec := &recordingTool{}
+	schema := tools.ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}, "item": map[string]any{"type": "string"}}, "force")
+	ts := []tools.Tool{rec.tool("ai-agent-bridge-tools__item_rate", schema, `{"rate":42}`)}
+	m := &scriptedModel{steps: []model.Step{
+		round(use("t1", "ai-agent-bridge-tools__item_rate", map[string]any{"item": "iron-plate"})),
+		submitStep("t2", map[string]any{"shape": "summary", "lines": []string{"42"}}),
+	}}
+	q := Question{ID: 11, Text: "our plate rate", PlayerIndex: player(1), Force: "enemy"}
+	if _, err := New(m, caps()).Answer(context.Background(), q, ts); err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if args, _ := rec.seen(); args["force"] != "enemy" || args["item"] != "iron-plate" {
+		t.Errorf("args = %v, want the asker's force filled beside the model's item", args)
 	}
 }
 

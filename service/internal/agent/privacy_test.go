@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/chatscope"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/ledger"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -208,5 +209,58 @@ func TestAKeyHoldingANameNeverSharesAnotherChannelsSession(t *testing.T) {
 		if !strings.Contains(prompt, "SECRET-GUILD-OPS") {
 			t.Errorf("private %v: guild's own #ops follow-up lost its session:\n%s", private, prompt)
 		}
+	}
+}
+
+// Asker mode (aab-answer-audience = asker): cmd/aab hands the agent scope
+// "asker:<name>", private. Two askers get two pools, each reads only its own
+// transcript, and the ledger's session_key tells them apart. A real private
+// channel a provider happened to key "asker:Bob" is the same pool as Bob's
+// asker-mode questions: pinned here, harmless because history already files
+// both under the one key, a provider has to choose that spelling on purpose,
+// and the pool is private to that key either way.
+func TestAskerModeSessionsAreSeparatePerAsker(t *testing.T) {
+	dir := t.TempDir()
+	m := &answering{}
+	a := New(m, caps())
+	a.Ledger = ledger.Open(dir, true)
+	ask := func(q Question, answer string) string {
+		t.Helper()
+		m.lines = append(m.lines, answer)
+		if _, err := a.Answer(context.Background(), q, nil); err != nil {
+			t.Fatalf("question %d: %v", q.ID, err)
+		}
+		return m.prompts[len(m.prompts)-1]
+	}
+	alice := func(id int64) Question {
+		return Question{ID: id, Text: "q", PlayerIndex: player(1), PlayerName: "Alice", Scope: "asker:Alice", Private: true}
+	}
+	bob := func(id int64) Question {
+		return Question{ID: id, Text: "q", PlayerIndex: player(2), PlayerName: "Bob", Scope: "asker:Bob", Private: true}
+	}
+	ask(alice(1), "SECRET-ALICE answer")
+	if prompt := ask(bob(2), "SECRET-BOB answer"); strings.Contains(prompt, "SECRET-ALICE") {
+		t.Errorf("Bob read Alice's transcript:\n%s", prompt)
+	}
+	if prompt := ask(alice(3), "ok"); strings.Contains(prompt, "SECRET-BOB") || !strings.Contains(prompt, "SECRET-ALICE") {
+		t.Errorf("Alice's follow-up lost her session or read Bob's:\n%s", prompt)
+	}
+	// A public question in the open reads neither.
+	if prompt := ask(Question{ID: 4, Text: "q", PlayerIndex: player(3), Scope: "global"}, "ok"); strings.Contains(prompt, "SECRET-") {
+		t.Errorf("a public question read an asker-mode transcript:\n%s", prompt)
+	}
+	// A provider channel that happens to be keyed asker:Bob is Bob's pool.
+	channel := Question{ID: 5, Text: "q", PlayerIndex: player(9), PlayerName: "Zed", Scope: "asker:Bob", Private: true}
+	ask(channel, "ok")
+	a.Ledger.Close()
+	ka, kb, kc := findQuestion(t, dir, 1).SessionKey, findQuestion(t, dir, 2).SessionKey, findQuestion(t, dir, 5).SessionKey
+	if ka == kb {
+		t.Errorf("two askers share session_key %q", ka)
+	}
+	if ka != "private:asker:Alice" || kb != "private:asker:Bob" {
+		t.Errorf("session_keys = %q, %q, want private:asker:<name>", ka, kb)
+	}
+	if kc != kb {
+		t.Errorf("a channel keyed asker:Bob has session_key %q, want Bob's %q (same pool)", kc, kb)
 	}
 }

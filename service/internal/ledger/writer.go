@@ -40,6 +40,18 @@ type Writer struct {
 	file *os.File
 
 	warnOnce sync.Once
+
+	// open is the run each question id's rounds are being written under,
+	// until its question record closes it (stampRound, stampQuestion).
+	open      map[int64]openRun
+	lastRunAt int64
+}
+
+// openRun is one run whose rounds are written and whose question record is
+// not yet.
+type openRun struct {
+	id        string
+	lastRound int
 }
 
 // Open returns a Writer that appends ledger-YYYY-MM-DD.jsonl files under
@@ -72,7 +84,59 @@ func (w *Writer) WriteQuestion(r QuestionRecord) {
 		clipped := clip(*r.ModelError, maxClipBytes)
 		r.ModelError = &clipped
 	}
+	if w.Enabled() {
+		w.stampQuestion(&r)
+	}
 	w.write(r)
+}
+
+// stampRound gives a round the run_id of its question's open run, or opens
+// one. The agent writes a run's rounds, in order, just before its question
+// record and runs questions one at a time, so a round numbered no higher
+// than the last one seen starts another run of the same id.
+func (w *Writer) stampRound(r *RoundRecord) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if r.RunID != "" {
+		return
+	}
+	if w.open == nil {
+		w.open = map[int64]openRun{}
+	}
+	run, ok := w.open[r.QuestionID]
+	if !ok || r.Round <= run.lastRound {
+		run = openRun{id: w.newRunID(r.QuestionID)}
+	}
+	run.lastRound = r.Round
+	w.open[r.QuestionID] = run
+	r.RunID = run.id
+}
+
+// stampQuestion gives a question record its open run's id, or a fresh one
+// for a run with no rounds (a refusal), and closes the run.
+func (w *Writer) stampQuestion(r *QuestionRecord) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if r.RunID == "" {
+		if run, ok := w.open[r.QuestionID]; ok {
+			r.RunID = run.id
+		} else {
+			r.RunID = w.newRunID(r.QuestionID)
+		}
+	}
+	delete(w.open, r.QuestionID)
+}
+
+// newRunID is the start of a run in Unix nanoseconds and its question id,
+// unique within one writer and, by the clock, across restarts. Called with
+// mu held.
+func (w *Writer) newRunID(qid int64) string {
+	at := w.now().UnixNano()
+	if at <= w.lastRunAt {
+		at = w.lastRunAt + 1
+	}
+	w.lastRunAt = at
+	return fmt.Sprintf("%d-%d", at, qid)
 }
 
 // WriteRound appends one per-round record. ToolCalls is normalised here so
@@ -84,6 +148,9 @@ func (w *Writer) WriteQuestion(r QuestionRecord) {
 func (w *Writer) WriteRound(r RoundRecord) {
 	r.ToolCalls = normalizeToolCalls(r.ToolCalls)
 	r.SubmitRefusals = clipRefusals(r.SubmitRefusals)
+	if w.Enabled() {
+		w.stampRound(&r)
+	}
 	w.write(r)
 }
 
@@ -174,13 +241,17 @@ func (w *Writer) fileLocked() (*os.File, error) {
 		w.file.Close()
 		w.file = nil
 	}
-	if err := os.MkdirAll(w.dir, 0o755); err != nil {
+	// Player names and question text: the owner's alone. A directory that
+	// already exists is left as it is (the default is the config's own
+	// directory); a file is narrowed even when an older service made it.
+	if err := os.MkdirAll(w.dir, 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(w.dir, fileName(now)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(filepath.Join(w.dir, fileName(now)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
+	_ = f.Chmod(0o600) // best effort
 	w.file = f
 	w.day = day
 	return f, nil

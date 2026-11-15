@@ -1,8 +1,9 @@
-// Copied from open-discord-bridge/bridge/internal/transport/local.go, unchanged.
+// Copied from open-discord-bridge/bridge/internal/transport/local.go; Head added.
 
 package transport
 
 import (
+	"errors"
 	"io"
 	"os"
 	"time"
@@ -34,7 +35,27 @@ func (l *localReader) Read(offset int64) ([]byte, error) {
 	return io.ReadAll(f)
 }
 
+func (l *localReader) Head(n int) ([]byte, error) {
+	f, err := os.Open(l.path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return readHead(f, n)
+}
+
 func (l *localReader) Close() error { return nil }
+
+// readHead reads up to n bytes from the start of r: fewer only when the file
+// is shorter.
+func readHead(r io.Reader, n int) ([]byte, error) {
+	b := make([]byte, n)
+	got, err := io.ReadFull(r, b)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		err = nil
+	}
+	return b[:got], err
+}
 
 // NewLocal tails a local file by polling.
 func NewLocal(path string, interval time.Duration) *Tailer {

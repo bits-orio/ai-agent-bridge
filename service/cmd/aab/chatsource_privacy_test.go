@@ -151,7 +151,7 @@ func TestAPolledQuestionReadsOnlyWhatItsAudienceMayHear(t *testing.T) {
 			q := c.q
 			q.ID, q.Text, q.PlayerIndex, q.PlayerName = 1, "what has been said", new(int), "Asker"
 			game := append([]tools.Tool{gameTime()}, store.Tools()...)
-			if res := r.run(context.Background(), q, game); res.Rounds != 2 {
+			if res, _ := r.run(context.Background(), q, game); res.Rounds != 2 {
 				t.Fatalf("the question ran %d rounds, want 2 (read everything, then submit): %+v", res.Rounds, res.Artifact)
 			}
 

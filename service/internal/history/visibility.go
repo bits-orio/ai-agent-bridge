@@ -78,6 +78,9 @@ func declared(data json.RawMessage) (visibility, bool) {
 // question was global, and every other event is a fact about the game,
 // public.
 func classify(event, force string, data json.RawMessage) visibility {
+	if v, ok := toAsker(event, data); ok {
+		return v
+	}
 	if v, ok := declared(data); ok {
 		return v
 	}
@@ -85,6 +88,37 @@ func classify(event, force string, data json.RawMessage) visibility {
 		return visibility{scope: force, private: true}
 	}
 	return public
+}
+
+// askerKeyPrefix starts the scope key of a question only its asker heard.
+const askerKeyPrefix = "asker:"
+
+// AskerKey is the private scope key of a question whose answer the companion
+// printed to its asker alone (aab-answer-audience = asker): one key per
+// player name, so no other player's question reads it, and the agent keys
+// that asker's follow-ups under the same one.
+func AskerKey(player string) string { return askerKeyPrefix + player }
+
+// toAsker reads the to_asker flag a companion sets on a question whose
+// answer only its asker sees, whatever scope it states: the question is
+// private to that asker. Like the private flag, any value but false reads as
+// set, the safe side of a writer's mistake; with no player name to key it
+// by, nobody reads it back.
+func toAsker(event string, data json.RawMessage) (visibility, bool) {
+	if event != questionEvent {
+		return visibility{}, false
+	}
+	var d struct {
+		ToAsker json.RawMessage `json:"to_asker"`
+		Player  string          `json:"player"`
+	}
+	if json.Unmarshal(data, &d) != nil || d.ToAsker == nil || string(d.ToAsker) == "false" || string(d.ToAsker) == "null" {
+		return visibility{}, false
+	}
+	if d.Player == "" {
+		return unreadable, true
+	}
+	return visibility{scope: AskerKey(d.Player), private: true}, true
 }
 
 // queryer is what a visibility lookup reads through: the store's own handle
@@ -130,7 +164,13 @@ func answerVisibility(q queryer, epoch, before int64, data json.RawMessage) (vis
 	if err != nil {
 		return visibility{}, err
 	}
-	return visibility{scope: scope.String, private: !private.Valid || private.Int64 != 0}, nil
+	// A held question (guard.go) carries heldOffset; the answer takes its
+	// question's own flag, and is held or not as its own epoch is.
+	flag := private.Int64
+	if flag >= heldOffset {
+		flag -= heldOffset
+	}
+	return visibility{scope: scope.String, private: !private.Valid || flag != 0}, nil
 }
 
 // rowVisibility is the one rule Ingest applies to a new line and the

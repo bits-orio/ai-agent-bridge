@@ -150,6 +150,7 @@ func TestMissingModelIsA404(t *testing.T) {
 // Ollama cuts a prompt that does not fit, from the front, and says nothing.
 func TestCutPromptIsAnError(t *testing.T) {
 	c, _ := serve(t, 200, `{"message":{"content":"There is no secret word."},"done_reason":"stop","prompt_eval_count":258,"eval_count":9}`)
+	c.opts.NumCtx = 512 // the window of the measurement behind the reply
 	_, err := c.Step(context.Background(), strings.Repeat("filler text here. ", 600), nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "ollama.num_ctx") {
 		t.Fatalf("err %v, want one naming ollama.num_ctx", err)
@@ -270,7 +271,7 @@ func TestLeakedCallIsRecovered(t *testing.T) {
 		"submit_answer\nis the tool I would call":                                              "",
 		"unknown_tool\n{\"a\":1}\n</tool_call>":                                                "",
 	} {
-		step := fromResponse(&response{Message: message{Content: content}, PromptEvalCount: 7}, known)
+		step := fromResponse(&response{Message: message{Content: content}, PromptEvalCount: 7}, known, func() string { return "call_x" })
 		uses := model.ToolUses(step.Blocks)
 		switch {
 		case want == "" && (len(uses) != 0 || model.TextOf(step.Blocks) != content || step.StopReason != model.StopEndTurn):
@@ -278,5 +279,54 @@ func TestLeakedCallIsRecovered(t *testing.T) {
 		case want != "" && (len(uses) != 1 || uses[0].Name != want || step.StopReason != model.StopToolUse || model.TextOf(step.Blocks) != ""):
 			t.Errorf("%q: want a call to %s, got %+v", content, want, step)
 		}
+	}
+}
+
+// Two rounds that report the same prompt token count (a cached prefix does
+// that) must not hand out the same call id.
+func TestInventedCallIDsNeverRepeat(t *testing.T) {
+	const reply = `{"message":{"content":"","tool_calls":[{"function":{"name":"get_production","arguments":{}}},{"function":{"name":"get_production","arguments":{}}}]},"prompt_eval_count":40,"eval_count":3}`
+	c, _ := serve(t, 200, reply)
+	seen := map[string]bool{}
+	for round := 0; round < 3; round++ {
+		step, err := c.Step(context.Background(), "", nil, defs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range model.ToolUses(step.Blocks) {
+			if seen[u.ID] {
+				t.Fatalf("id %q handed out twice", u.ID)
+			}
+			seen[u.ID] = true
+		}
+	}
+	if len(seen) != 6 {
+		t.Errorf("got %d distinct ids, want 6", len(seen))
+	}
+}
+
+// Canned replies for the cut check, 10,000 bytes sent and a 4096-token
+// window unless the case says otherwise.
+func TestWasCut(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		bytes int
+		ctx   int
+		r     response
+		want  bool
+	}{
+		{"cut: 40 bytes a token, no cache field, count near the window", 10000, 512, response{PromptEvalCount: 258}, true},
+		{"normal ratio", 10000, 4096, response{PromptEvalCount: 2500}, false},
+		{"small request", 1500, 4096, response{PromptEvalCount: 10}, false},
+		{"server counts only uncached tokens, no cache field: ambiguous", 10000, 32768, response{PromptEvalCount: 60}, false},
+		{"cached count added back: healthy", 10000, 4096, response{PromptEvalCount: 60, PromptCached: 2400}, false},
+		{"cached count added back: still cut", 40000, 4096, response{PromptEvalCount: 60, PromptCached: 200}, true},
+		{"no count at all", 10000, 4096, response{}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if got := wasCut(c.bytes, c.ctx, &c.r); got != c.want {
+				t.Errorf("wasCut = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

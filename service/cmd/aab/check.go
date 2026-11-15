@@ -53,6 +53,7 @@ func runCheck(ctx context.Context, cfg *config.Config, client *rpc.Client) {
 			Host: cfg.Factorio.SFTP.Host, User: cfg.Factorio.SFTP.User,
 			KeyPath: cfg.Factorio.SFTP.KeyPath, Password: cfg.Factorio.SFTP.Password,
 			KnownHostsPath: cfg.Factorio.SFTP.KnownHostsPath,
+			RequireHostKey: !cfg.Factorio.SFTP.IgnoreHostKey(),
 		}, cfg.Factorio.EventsFile)
 	} else {
 		report = transport.CheckLocal(cfg.Factorio.EventsFile)

@@ -148,7 +148,9 @@ func TestSecondRoundReplaysCallsResultsAndReasoning(t *testing.T) {
 	raw, _ := json.Marshal(f.requests[0]["messages"])
 	for _, want := range []string{
 		`{"content":null,"reasoning_details":[{"format":"anthropic-claude-v1","id":"r1","text":"count them","type":"reasoning.text"}],"role":"assistant","tool_calls":[{"function":{"arguments":"{\"force\":\"player\"}","name":"list_forces"},"id":"call_1","type":"function"}]}`,
-		`{"content":"{\"forces\":[]}","role":"tool","tool_call_id":"call_1"}`,
+		// The last message of the request carries the cache breakpoint, so the
+		// final tool result goes out as a parts array.
+		`{"content":[{"cache_control":{"type":"ephemeral"},"text":"{\"forces\":[]}","type":"text"}],"role":"tool","tool_call_id":"call_1"}`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("messages lack %s:\n%s", want, raw)
@@ -239,11 +241,11 @@ func TestTimeoutIsRetriedOnce(t *testing.T) {
 	if _, err := c.Step(context.Background(), "rules", question, oneTool); err != nil {
 		t.Fatalf("one hung request then a reply must succeed: %v", err)
 	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want 2 (the hung request and its retry)", calls)
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Errorf("calls = %d, want 2 (the hung request and its retry)", atomic.LoadInt32(&calls))
 	}
 
-	calls = 0
+	atomic.StoreInt32(&calls, 0)
 	srv2 := hung(2)
 	defer srv2.Close()
 	c2 := New("test-key", Options{Model: "deepseek/deepseek-v4-pro-0813", Endpoint: srv2.URL, Timeout: 100 * time.Millisecond})
@@ -251,11 +253,11 @@ func TestTimeoutIsRetriedOnce(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no reply within 100ms, twice") {
 		t.Errorf("two hung requests = %v, want the timeout named twice", err)
 	}
-	if calls != 2 {
-		t.Errorf("calls = %d, want exactly 2, never a third", calls)
+	if atomic.LoadInt32(&calls) != 2 {
+		t.Errorf("calls = %d, want exactly 2, never a third", atomic.LoadInt32(&calls))
 	}
 
-	calls = 0
+	atomic.StoreInt32(&calls, 0)
 	srv3 := hung(1)
 	defer srv3.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
@@ -323,5 +325,55 @@ func TestProvidersPinTheUpstreamHost(t *testing.T) {
 	}
 	if strings.Contains(body(f), `"provider"`) {
 		t.Errorf("no preference set, yet a provider object was sent:\n%s", body(f))
+	}
+}
+
+const noEndpoints = `{"error":{"message":"No endpoints found that support the provided tool_choice"}}`
+
+func forcedChoice(t *testing.T, req map[string]any) any {
+	t.Helper()
+	return req["tool_choice"]
+}
+
+func TestStepForcedSendsFunctionChoice(t *testing.T) {
+	f := newRouter(t, reply{200, toolCallReply})
+	if _, err := client(f, Options{}).StepForced(context.Background(), "s", question, oneTool, "list_forces"); err != nil {
+		t.Fatal(err)
+	}
+	tc, _ := forcedChoice(t, f.requests[0]).(map[string]any)
+	fn, _ := tc["function"].(map[string]any)
+	if tc["type"] != "function" || fn["name"] != "list_forces" {
+		t.Errorf("tool_choice = %v", tc)
+	}
+}
+
+func TestStepForcedFallsBackOnceAndRemembers(t *testing.T) {
+	f := newRouter(t, reply{400, noEndpoints}, reply{200, toolCallReply}, reply{200, toolCallReply})
+	c := client(f, Options{})
+	st, err := c.StepForced(context.Background(), "s", question, oneTool, "list_forces")
+	if err != nil || len(st.Blocks) == 0 {
+		t.Fatalf("step = %v, err = %v", st, err)
+	}
+	if len(f.requests) != 2 || forcedChoice(t, f.requests[1]) != "auto" {
+		t.Fatalf("want forced then auto, got %d requests, second %v", len(f.requests), forcedChoice(t, f.requests[len(f.requests)-1]))
+	}
+	if _, err := c.StepForced(context.Background(), "s", question, oneTool, "list_forces"); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.requests) != 3 || forcedChoice(t, f.requests[2]) != "auto" {
+		t.Errorf("later forced step should go straight to auto, requests = %d", len(f.requests))
+	}
+}
+
+func TestStepForcedServerErrorIsNotUnsupported(t *testing.T) {
+	f := newRouter(t, reply{500, `{"error":{"message":"boom tool_choice"}}`})
+	c := client(f, Options{})
+	if _, err := c.StepForced(context.Background(), "s", question, oneTool, "list_forces"); err == nil {
+		t.Fatal("a 500 must stay an error")
+	}
+	for i, r := range f.requests {
+		if forcedChoice(t, r) == "auto" {
+			t.Errorf("request %d went auto after a 5xx", i)
+		}
 	}
 }

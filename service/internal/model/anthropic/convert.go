@@ -17,7 +17,11 @@ import (
 func toMessageParams(msgs []model.Message) []sdk.MessageParam {
 	out := make([]sdk.MessageParam, 0, len(msgs))
 	for _, m := range msgs {
-		blocks := toContentBlocks(m.Blocks)
+		src := m.Blocks
+		if m.Role == model.RoleUser {
+			src = resultsFirst(src)
+		}
+		blocks := toContentBlocks(src)
 		if len(blocks) == 0 {
 			continue
 		}
@@ -26,6 +30,27 @@ func toMessageParams(msgs []model.Message) []sdk.MessageParam {
 			continue
 		}
 		out = append(out, sdk.NewUserMessage(blocks...))
+	}
+	return out
+}
+
+// resultsFirst moves tool results ahead of everything else in a user turn,
+// keeping the order within each group. The API rejects a user message whose
+// tool_result blocks do not come first.
+func resultsFirst(blocks []model.Block) []model.Block {
+	out := make([]model.Block, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == model.BlockToolResult {
+			out = append(out, b)
+		}
+	}
+	if len(out) == 0 || len(out) == len(blocks) {
+		return blocks
+	}
+	for _, b := range blocks {
+		if b.Type != model.BlockToolResult {
+			out = append(out, b)
+		}
 	}
 	return out
 }

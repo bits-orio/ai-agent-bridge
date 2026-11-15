@@ -60,3 +60,27 @@ func sameJSON(t *testing.T, got json.RawMessage, want string) bool {
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
 }
+
+// Requires tells the catalog's reserved force, which it always marks
+// required, from a history tool's optional force filter.
+func TestRequiresTellsAReservedArgumentFromAnOptionalFilter(t *testing.T) {
+	catalogShaped := ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}}, "force")
+	historyShaped := ObjectSchema(map[string]any{"force": map[string]any{"type": "string"}, "event": map[string]any{"type": "string"}}, "event")
+	if !Requires(catalogShaped, "force") {
+		t.Error("a required force is required")
+	}
+	if Requires(historyShaped, "force") {
+		t.Error("an optional force filter is not required")
+	}
+	// A schema decoded from JSON carries required as []any, not []string.
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"force":{"type":"string"}},"required":["force"]}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !Requires(decoded, "force") {
+		t.Error("a required list decoded from JSON was not read")
+	}
+	if Requires(nil, "force") || Requires(map[string]any{"required": []string{"force"}}, "force") {
+		t.Error("a property the schema does not declare is never required")
+	}
+}

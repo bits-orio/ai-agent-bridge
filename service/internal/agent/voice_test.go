@@ -176,7 +176,7 @@ func TestAnswerSpeaksInTheQuestionsOwnVoice(t *testing.T) {
 	}
 
 	plain, rec := run(1, "", "off")
-	if rec.Voice != VoiceOff || plain != systemPrompt("") {
+	if rec.Voice != VoiceOff || plain != systemPrompt("", 6) {
 		t.Fatalf("no voice: voice %q, system prompt carries a voice", rec.Voice)
 	}
 	preset, rec := run(2, "factorio", "off")

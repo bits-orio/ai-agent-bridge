@@ -59,3 +59,50 @@ func TestPriceForPrefersTheLongestMatch(t *testing.T) {
 		t.Fatalf("priceFor picked %+v (found %v), want the mini price", p, ok)
 	}
 }
+
+// A prefix match needs a boundary: a family key matches its own id or the id
+// with a date suffix (a dash and eight digits), nothing else.
+func TestPriceForNeedsABoundary(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{"claude-opus-5", true},
+		{"claude-opus-5-20260101", true},
+		{"claude-haiku-4-5-20251001", true},
+		{"claude-opus-50", false},
+		{"claude-opus-5-5", false},
+		{"claude-opus-5-2026010", false},   // seven digits
+		{"claude-opus-5-202601011", false}, // nine digits
+		{"claude-opus-5-abcdefgh", false},
+		{"claude-opus-5-20260101-x", false},
+		{"claude-opus-5x", false},
+		{"", false},
+	} {
+		if _, ok := priceFor(tc.id); ok != tc.want {
+			t.Errorf("priceFor(%q) known = %v, want %v", tc.id, ok, tc.want)
+		}
+	}
+}
+
+// PriceKnown is what the startup check asks: only a direct Anthropic id can
+// be unpriced without anyone noticing, since OpenRouter reports its own cost
+// and the other providers are free.
+func TestPriceKnown(t *testing.T) {
+	for _, tc := range []struct {
+		provider, id string
+		want         bool
+	}{
+		{"anthropic", "claude-opus-5", true},
+		{"anthropic", "claude-haiku-4-5-20251001", true},
+		{"anthropic", "claude-opus-9", false},
+		{"anthropic", "claude-opus-50", false},
+		{"openrouter", "deepseek/deepseek-v4-pro-0813", true},
+		{"ollama", "qwen3:8b", true},
+		{"fake", "fake", true},
+	} {
+		if got := PriceKnown(tc.provider, tc.id); got != tc.want {
+			t.Errorf("PriceKnown(%q, %q) = %v, want %v", tc.provider, tc.id, got, tc.want)
+		}
+	}
+}

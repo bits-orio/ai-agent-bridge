@@ -43,16 +43,35 @@ const (
 	// RefusedLookupCap: the round asked for more lookups than the question
 	// had left, so every call in it was refused, this one too.
 	RefusedLookupCap = "lookup_cap"
+	// RefusedCutOff: the turn stopped on the output limit, so the call may
+	// be half written; nothing in such a turn runs.
+	RefusedCutOff = "cut_off"
+)
+
+// Why a lookup the model asked for never ran: ToolCall.NotRun.
+const (
+	// NotRunRepeat: the same call, same arguments, already answered this
+	// question, or appears twice in one turn.
+	NotRunRepeat = "repeat"
+	// NotRunLastRound: asked for on the question's last round, where no
+	// model would ever read the result.
+	NotRunLastRound = "last_round"
+	// NotRunCutOff: in a turn that stopped on the output limit.
+	NotRunCutOff = "cut_off"
 )
 
 // QuestionRecord is the per-question line: one appended after every
 // question the service finishes with, whatever the ending (a real answer,
 // a refusal, an ask-back, or the model itself failing).
 type QuestionRecord struct {
-	QuestionID int64  `json:"question_id"`
-	Asker      string `json:"asker"`
-	Force      string `json:"force"`
-	Surface    string `json:"surface"`
+	QuestionID int64 `json:"question_id"`
+	// RunID names one run of the question, shared with its rounds: question
+	// ids repeat (a re-run after an outage, a new map), so a reader joins on
+	// this when it is there. Writer fills it; omitted by older services.
+	RunID   string `json:"run_id,omitempty"`
+	Asker   string `json:"asker"`
+	Force   string `json:"force"`
+	Surface string `json:"surface"`
 
 	// SessionKey and SessionFresh are sessionKey's own joined form
 	// ("global", "global#iron", "team-3#iron") and sessions.open's own
@@ -102,6 +121,16 @@ type QuestionRecord struct {
 	// round left to rewrite it, the question ended before a rewrite came
 	// back, or the model answered in prose too long for a summary.
 	Clipped bool `json:"clipped"`
+
+	// Command names the free command a line was instead of a question
+	// (help, top, card, new, sessions, empty), absent for a question. A
+	// command never runs a model round; its lookups are its own tool calls.
+	Command string `json:"command,omitempty"`
+
+	// Toast names the milestone an unprompted toast announced (first_rocket,
+	// rockets, first_tech), absent for anything a player asked. A toast has
+	// no asker and belongs to no session.
+	Toast string `json:"toast,omitempty"`
 }
 
 // NewQuestionRecord returns a QuestionRecord with every not-yet-shipped
@@ -123,10 +152,12 @@ func NewQuestionRecord() QuestionRecord {
 // there is no first-byte moment to measure, and a zero would read as a
 // measurement that never actually happened (Decision 3).
 type RoundRecord struct {
-	QuestionID int64  `json:"question_id"`
-	Round      int    `json:"round"`
-	Model      string `json:"model"`
-	Provider   string `json:"provider"`
+	QuestionID int64 `json:"question_id"`
+	// RunID is the run this round belongs to (QuestionRecord.RunID).
+	RunID    string `json:"run_id,omitempty"`
+	Round    int    `json:"round"`
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
 
 	MsTotal int64 `json:"ms_total"`
 
@@ -149,6 +180,18 @@ type RoundRecord struct {
 	// one did exactly that on an upstream host, and neither the log nor the
 	// ledger could say why.
 	SubmitRefusals []SubmitRefusal `json:"submit_refusals,omitempty"`
+
+	// Salvaged is set on the round whose submit_answer was accepted only
+	// after the service moved its text into the field its shape reads (a
+	// summary's prose sent in text, say). Omitted on every other round.
+	Salvaged *SubmitSalvage `json:"salvaged,omitempty"`
+}
+
+// SubmitSalvage is one submit_answer the service repaired rather than
+// refused: what it did, and the arguments as the model sent them, clipped.
+type SubmitSalvage struct {
+	Note string `json:"note"`
+	Args string `json:"args"`
 }
 
 // SubmitRefusal is one refused submit_answer call: one of the Refused* kinds,
@@ -156,6 +199,9 @@ type RoundRecord struct {
 type SubmitRefusal struct {
 	Kind   string `json:"kind"`
 	Reason string `json:"reason"`
+	// Args is the call's arguments as the model sent them, clipped to about
+	// a kilobyte, so a refusal loop shows what the model actually wrote.
+	Args string `json:"args,omitempty"`
 }
 
 // ToolCall is one entry of a round's tool_calls array.
@@ -179,4 +225,12 @@ type ToolCall struct {
 	// ("logistic", "walk" or "refused"); every other tool leaves it empty,
 	// which omits the key entirely rather than writing an empty string.
 	Path string `json:"path,omitempty"`
+	// NotRun is why a call the model asked for was never dispatched, one of
+	// the NotRun* values; such a call never counts as a lookup. Omitted on
+	// every call that ran.
+	NotRun string `json:"not_run,omitempty"`
+	// Refunded is true for a call that ran but whose result the round's byte
+	// budget refused, so the model never saw it and it was not counted as a
+	// lookup.
+	Refunded bool `json:"refunded,omitempty"`
 }

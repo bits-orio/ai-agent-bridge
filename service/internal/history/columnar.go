@@ -1,18 +1,27 @@
 package history
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // tsvRow joins fields with a tab, the delimiter docs/design/phase4-spec.md
 // section 13 picks because it cannot appear in a Factorio force or player
 // display name: no value here ever needs quoting. Per that section's
-// sanitising rule, any tab already inside a value (a chat message can carry
-// one; nothing else read by this package can) is replaced with a single
+// sanitising rule, any tab already inside a value is replaced with a single
 // space first, so a row never holds more tabs than there are fields minus
-// one.
+// one. Every other control character goes the same way: a newline in a chat
+// message would otherwise start a row of its own, one the player wrote, and
+// an escape sequence would reach whatever terminal prints the result.
 func tsvRow(fields ...string) string {
 	clean := make([]string, len(fields))
 	for i, f := range fields {
-		clean[i] = strings.ReplaceAll(f, "\t", " ")
+		clean[i] = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, f)
 	}
 	return strings.Join(clean, "\t")
 }

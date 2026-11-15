@@ -10,7 +10,13 @@ permissions:
   contents: write # create the GitHub Release + upload assets
 
 jobs:
+  # The same checks as every push (ci.yml): a tag on a commit that fails them
+  # builds nothing and uploads nothing.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: checks
     runs-on: ubuntu-latest
     env:
       FACTORIO_API_KEY: ${{ secrets.FACTORIO_API_KEY }}

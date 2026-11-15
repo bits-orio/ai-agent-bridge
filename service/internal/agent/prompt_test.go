@@ -58,7 +58,7 @@ func TestPromptPlacesTheBriefingAfterTheAskerLineAndBeforeTheQuestion(t *testing
 // table artifact can hold. It lives in the system prompt, the cached prefix,
 // so it must read the same for every question and never vary with the asker.
 func TestSystemPromptCarriesTheSweepReductionRule(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	for _, want := range []string{
 		"A sweep may return more rows than an answer can show.",
@@ -78,7 +78,7 @@ func TestSystemPromptCarriesTheSweepReductionRule(t *testing.T) {
 // current_research for each team's research even though both rode in the
 // briefing on every question (aab stats: zero-lookup 0 of 7).
 func TestSystemPromptTeachesTheBriefingExists(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	for _, want := range []string{
 		"already there for you",
@@ -100,7 +100,7 @@ func TestSystemPromptTeachesTheBriefingExists(t *testing.T) {
 // thing was not available, so "who is online" needs a visible tie to pl
 // rather than sitting in the unconditional list beside uptime and research.
 func TestSystemPromptGatesWhoIsOnlineOnPlBeingPresent(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	if !strings.Contains(pa, "who is online when pl is there") {
 		t.Errorf("system prompt states \"who is online\" as a plain briefing answer instead of gating it on pl being present:\n%s", pa)
@@ -114,7 +114,7 @@ func TestSystemPromptGatesWhoIsOnlineOnPlBeingPresent(t *testing.T) {
 // verified fact, so a player's claim in ch reads to the model as something
 // the game itself reported.
 func TestSystemPromptMarksChatAsPlayerTypedNotGameReported(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	if !strings.Contains(pa, "ch is recent chat, what players said rather than something the game reports") {
 		t.Errorf("system prompt does not mark ch as player-typed rather than game-reported:\n%s", pa)
@@ -127,7 +127,7 @@ func TestSystemPromptMarksChatAsPlayerTypedNotGameReported(t *testing.T) {
 // question at recent_chat regardless. The split has to say which chat a
 // lookup is even for: older than what ch already carries.
 func TestSystemPromptSendsOnlyOlderChatToRecentChat(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	// Both halves matter, and the gate is the half the first version of this
 	// fix missed: ch is absent whenever capToBudget dropped it, no history
@@ -152,7 +152,7 @@ func TestSystemPromptSendsOnlyOlderChatToRecentChat(t *testing.T) {
 // and every route named must still end in taking a tool's own leader, never
 // the model's own comparison.
 func TestSystemPromptAddsTheSweepRouteToTheVerdictRuleWithoutRelaxingIt(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	if !strings.Contains(pa, "Never decide the verdict yourself") {
 		t.Errorf("system prompt dropped the verdict rule itself:\n%s", pa)
@@ -191,7 +191,7 @@ func TestPromptWithNoBriefingRendersNothing(t *testing.T) {
 // with a real list_forces call, had both figures right. So fs must be
 // described as what it is, and the team count must not be advertised as free.
 func TestSystemPromptDoesNotOfferTheTeamCountForFree(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 
 	for _, want := range []string{
 		"fs is one row per force that has ever had a player",
@@ -216,7 +216,7 @@ func TestSystemPromptDoesNotOfferTheTeamCountForFree(t *testing.T) {
 // tool here reads it. A refusal is fine; a false reason teaches the player
 // something untrue about their own game.
 func TestSystemPromptRefusesWhoBuiltWithATrueReason(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"The game does record who last built or changed each entity",
 		"never that the game does not keep it",
@@ -232,7 +232,7 @@ func TestSystemPromptRefusesWhoBuiltWithATrueReason(t *testing.T) {
 // platform is its own surface and its hub is that surface's origin, so the
 // ping is a gps there, and the prompt has to say exactly that.
 func TestSystemPromptForbidsAnInventedGpsAndAGpsOnAPlatform(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"only a position a tool returned: never invent one",
 		"A space platform is its own surface, so its ping is a gps at its hub",
@@ -249,7 +249,7 @@ func TestSystemPromptForbidsAnInventedGpsAndAGpsOnAPlatform(t *testing.T) {
 // line inside a tag, which makes Factorio render the whole line raw. The
 // service labels and colours team names itself, after the answer is built.
 func TestSystemPromptKeepsColourToWarnings(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"colour nothing else: not names, not numbers, not headings",
 		"Team names are labelled and coloured for you after you answer",
@@ -265,7 +265,7 @@ func TestSystemPromptKeepsColourToWarnings(t *testing.T) {
 // so every team name printed plain. The model writes team-2 and the game
 // prints the coloured label for it.
 func TestSystemPromptForbidsCopyingALabelIntoAnAnswer(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"never copy the label into an answer or an argument",
 		"A label you copy prints plain",
@@ -280,7 +280,7 @@ func TestSystemPromptForbidsCopyingALabelIntoAnAnswer(t *testing.T) {
 // in the system prompt and in submit_answer's own description alike, so
 // doubling a cap tells the model the new number without a second edit.
 func TestSystemPromptPrintsTheCapsFromTheConstants(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		fmt.Sprintf("Caps: a summary is at most %d lines, a list %d items, a table %d columns by %d rows, a comparison %d rows, art %d lines of %d characters.",
 			MaxSummaryLines, MaxListItems, MaxTableColumns, MaxTableRows, MaxComparisonRows, MaxArtLines, MaxArtWidth),
@@ -305,7 +305,7 @@ func TestSystemPromptPrintsTheCapsFromTheConstants(t *testing.T) {
 // by colour, so the prompt says which prototype each colour is, and that the
 // green one only exists with Space Age: without it a turbo tag prints raw.
 func TestSystemPromptNamesBeltsByColour(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	want := "Players say yellow, red and blue belt for transport-belt, fast-transport-belt and express-transport-belt, " +
 		"and green belt for turbo-transport-belt, which exists only when Space Age is loaded."
 	if !strings.Contains(pa, want) {
@@ -321,7 +321,7 @@ func TestSystemPromptNamesBeltsByColour(t *testing.T) {
 // model's own arithmetic: question 17 on the live server spent 2,420
 // reasoning tokens working a ratio out from memory.
 func TestSystemPromptSendsWhatItTakesToRecipeNeeds(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"what an item is, a recipe or a technology to look at, write the clickable tag instead",
 		"What it takes to make something, how much or how many inputs, machines or belts, is recipe_needs: never a clickable tag and never your own arithmetic; items still use their sprite tags.",
@@ -338,7 +338,7 @@ func TestSystemPromptSendsWhatItTakesToRecipeNeeds(t *testing.T) {
 // Live answers on the rig said "(set_fastest_ever=3)" and "(restarts=0)": a
 // reply's field names, and a tool's name with them, mean nothing to a player.
 func TestSystemPromptKeepsToolAndFieldNamesOutOfAnswers(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	if want := "Never show the player a tool name or a field name from a reply; say what the value means in plain words."; !strings.Contains(pa, want) {
 		t.Errorf("system prompt is missing %q", want)
 	}
@@ -350,7 +350,7 @@ func TestSystemPromptKeepsToolAndFieldNamesOutOfAnswers(t *testing.T) {
 // carries its speaker's force and a private flag, and the prompt says what
 // both mean, in ch and in the chat tools alike.
 func TestSystemPromptSaysWhatAChatLinesForceAndPrivateFlagMean(t *testing.T) {
-	pa := systemPrompt("")
+	pa := systemPrompt("", 6)
 	for _, want := range []string{
 		"ch is recent chat, what players said rather than something the game reports, each line with its speaker's force as f and private true when it was said in a private channel",
 		"A chat line marked private was said in the private channel this question was asked in",
@@ -358,5 +358,14 @@ func TestSystemPromptSaysWhatAChatLinesForceAndPrivateFlagMean(t *testing.T) {
 		if !strings.Contains(pa, want) {
 			t.Errorf("system prompt is missing %q", want)
 		}
+	}
+}
+
+// A list tool's cut reply names where the next page starts; the prompt has to
+// tell the model so, in one sentence beside the existing cut rule.
+func TestPromptSaysListToolsPageWithOffset(t *testing.T) {
+	p := systemPrompt("", 6)
+	if !strings.Contains(p, "List tools take offset, and a cut reply names next_offset.") {
+		t.Errorf("prompt does not mention paging:\n%s", p)
 	}
 }

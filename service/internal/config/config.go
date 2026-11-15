@@ -56,10 +56,16 @@ const (
 	defaultServerQuestionsHour = 120
 	defaultMaxCostPerDay       = 5.0
 	defaultMaxToolCalls        = 30
-	defaultPollInterval        = time.Second
-	defaultHistoryPath         = "history.sqlite"
-	defaultControlAddr         = "127.0.0.1:8090"
-	defaultControlTokenEnv     = "AAB_CONTROL_TOKEN"
+	defaultQuestionTimeout     = 90 * time.Second
+	// defaultOllamaQuestionTimeout gives a local model room for its own
+	// request timeout (defaultOllamaTimeout) and one retry.
+	defaultOllamaQuestionTimeout = 10 * time.Minute
+	minQuestionTimeout           = 10 * time.Second
+	defaultDailySpendName        = "daily-spend.json"
+	defaultPollInterval          = time.Second
+	defaultHistoryPath           = "history.sqlite"
+	defaultControlAddr           = "127.0.0.1:8090"
+	defaultControlTokenEnv       = "AAB_CONTROL_TOKEN"
 )
 
 // Duration is a time.Duration that unmarshals from a YAML string like "2s".
@@ -95,6 +101,7 @@ type Config struct {
 	ControlAPI   ControlAPIConfig `yaml:"control_api"`
 	Ledger       LedgerConfig     `yaml:"ledger"`
 	Briefing     BriefingConfig   `yaml:"briefing"`
+	Toasts       ToastsConfig     `yaml:"toasts"`
 	LogFile      string           `yaml:"log_file"` // also write logs here (default: aab.log next to events; "-" = stderr only)
 }
 
@@ -116,6 +123,8 @@ type AgentConfig struct {
 	QuestionsPerHour          int      `yaml:"questions_per_hour"`            // the whole server's rolling-hour quota, -1 for none
 	MaxCostPerDay             float64  `yaml:"max_cost_per_day"`              // USD the service may spend in a rolling day, -1 for no cap
 	MaxToolCalls              int      `yaml:"max_tool_calls"`                // tool calls one question may make across its rounds
+	QuestionTimeout           Duration `yaml:"question_timeout"`              // how long one question's agent run may take, briefing, rounds and tools together: 90s (default; 10m for ollama), at least 10s
+	DailySpendPath            string   `yaml:"daily_spend_path"`              // where the rolling day's spend is kept across restarts: daily-spend.json beside the history database (default)
 }
 
 // HistoryConfig points at the SQLite file the service keeps a save's whole
@@ -174,6 +183,17 @@ type SFTPConfig struct {
 	PasswordEnv    string `yaml:"password_env"`
 	Password       string `yaml:"-"` // resolved from env at load time
 	KnownHostsPath string `yaml:"known_hosts_path"`
+	// InsecureIgnoreHostKey says what happens with no known_hosts_path.
+	// Unset or true: any host key is accepted, with a warning at every
+	// connect, as before this key existed. false: the service refuses to
+	// start until known_hosts_path names a file.
+	InsecureIgnoreHostKey *bool `yaml:"insecure_ignore_host_key"`
+}
+
+// IgnoreHostKey is insecure_ignore_host_key after its default: true unless
+// the operator set it false.
+func (s SFTPConfig) IgnoreHostKey() bool {
+	return s.InsecureIgnoreHostKey == nil || *s.InsecureIgnoreHostKey
 }
 
 type RCONConfig struct {
@@ -327,8 +347,10 @@ func load(path string, dump bool) (*Config, error) {
 	}
 	c.applyAgentDefaults()
 	c.History.Path = resolveHistoryPath(c.History.Path, path)
+	c.applyQuestionDefaults(path)
 	c.applyLedgerDefaults(path)
 	c.applyBriefingDefaults()
+	c.applyToastsDefaults()
 	c.applyControlDefaults()
 
 	// Resolve secrets from the environment; never store them in the YAML.
@@ -369,12 +391,51 @@ func (c *Config) validate() error {
 		if s.KeyPath == "" && s.Password == "" {
 			return fmt.Errorf("sftp transport requires factorio.sftp.key_path or a password")
 		}
+		if !s.IgnoreHostKey() && s.KnownHostsPath == "" {
+			return fmt.Errorf("factorio.sftp.insecure_ignore_host_key is false, so factorio.sftp.known_hosts_path is required")
+		}
 	}
 	if c.Factorio.RCON.Address == "" {
 		return fmt.Errorf("factorio.rcon.address is required")
 	}
 	if c.Factorio.RCON.Password == "" {
 		return fmt.Errorf("RCON password is empty; set env var %q", c.Factorio.RCON.PasswordEnv)
+	}
+	if c.PollInterval < 0 {
+		return fmt.Errorf("poll_interval: %s is negative", time.Duration(c.PollInterval))
+	}
+	if d := c.QuestionTimeout(); d < minQuestionTimeout {
+		return fmt.Errorf("agent.question_timeout: %s is under the %s floor", d, minQuestionTimeout)
+	}
+	if err := c.Toasts.check(); err != nil {
+		return err
+	}
+	return c.Agent.checkCaps()
+}
+
+// checkCaps refuses a negative cap. Zero takes the default (applyAgentDefaults),
+// so a negative value is never a setting but a typo, except on the three keys
+// documented with -1 for none: the two hourly quotas and the daily cost cap.
+func (a AgentConfig) checkCaps() error {
+	for _, c := range []struct {
+		key string
+		v   int64
+	}{
+		{"max_rounds", int64(a.MaxRounds)},
+		{"max_tokens_per_question", int64(a.MaxTokensPerQuestion)},
+		{"max_output_tokens", int64(a.MaxOutputTokens)},
+		{"max_tool_result_bytes", int64(a.MaxToolResultBytes)},
+		{"max_round_tool_result_bytes", int64(a.MaxRoundToolResultBytes)},
+		{"session_max_exchanges", int64(a.SessionMaxExchanges)},
+		{"session_max_bytes", int64(a.SessionMaxBytes)},
+		{"max_tool_calls", int64(a.MaxToolCalls)},
+		{"session_idle", int64(a.SessionIdle)},
+		{"named_session_idle", int64(a.NamedSessionIdle)},
+		{"clarify_idle", int64(a.ClarifyIdle)},
+	} {
+		if c.v < 0 {
+			return fmt.Errorf("agent.%s: negative values are not allowed (leave it out for the default)", c.key)
+		}
 	}
 	return nil
 }
@@ -557,6 +618,23 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		}
 		c.Agent.QuestionsPerPlayerPerHour = n
 	}
+	if v := os.Getenv("AAB_QUESTION_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_QUESTION_TIMEOUT: %w", err)
+		}
+		c.Agent.QuestionTimeout = Duration(d)
+	}
+	if v := os.Getenv("AAB_DAILY_SPEND_PATH"); v != "" {
+		c.Agent.DailySpendPath = expandPath(v)
+	}
+	if v := os.Getenv("AAB_SFTP_INSECURE_IGNORE_HOST_KEY"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("AAB_SFTP_INSECURE_IGNORE_HOST_KEY: invalid value %q", v)
+		}
+		c.Factorio.SFTP.InsecureIgnoreHostKey = &b
+	}
 	if v := os.Getenv("AAB_LEDGER_ENABLED"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -574,6 +652,9 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 		}
 		c.Briefing.Enabled = &b
 	}
+	if err := toastsFromEnv(c); err != nil {
+		return nil, err
+	}
 
 	c.applyAgentDefaults()
 	// Env-var mode has no config file to anchor a relative history path, or
@@ -581,12 +662,14 @@ func loadFromEnv(m Meta, dump bool) (*Config, error) {
 	c.History.Path = resolveHistoryPath(c.History.Path, "")
 	c.applyLedgerDefaults("")
 	c.applyBriefingDefaults()
+	c.applyToastsDefaults()
 	c.applyControlDefaults()
 
 	c.applyModelDefaults()
 	if err := c.Model.check(); err != nil {
 		return nil, err
 	}
+	c.applyQuestionDefaults("")
 	return finish(c, m, dump)
 }
 
@@ -639,6 +722,26 @@ func (c *Config) applyAgentDefaults() {
 		c.Agent.MaxToolCalls = defaultMaxToolCalls
 	}
 }
+
+// applyQuestionDefaults fills the two per-question keys whose defaults hang
+// on other settings: the timeout on the provider, the spend file on where
+// history lives. Run after the model defaults and history.path are resolved.
+func (c *Config) applyQuestionDefaults(configPath string) {
+	if c.Agent.QuestionTimeout == 0 {
+		c.Agent.QuestionTimeout = Duration(defaultQuestionTimeout)
+		if c.Model.Provider == "ollama" {
+			c.Agent.QuestionTimeout = Duration(defaultOllamaQuestionTimeout)
+		}
+	}
+	if c.Agent.DailySpendPath == "" {
+		c.Agent.DailySpendPath = filepath.Join(filepath.Dir(c.History.Path), defaultDailySpendName)
+	} else {
+		c.Agent.DailySpendPath = anchorTo(c.Agent.DailySpendPath, configPath)
+	}
+}
+
+// QuestionTimeout is agent.question_timeout as a duration.
+func (c *Config) QuestionTimeout() time.Duration { return time.Duration(c.Agent.QuestionTimeout) }
 
 func (c *Config) applyControlDefaults() {
 	if c.ControlAPI.TokenEnv == "" {

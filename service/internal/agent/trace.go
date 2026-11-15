@@ -39,13 +39,14 @@ func (a *Agent) traceRound(q Question, round int, step model.Step) {
 // traceRefusals logs one line per submit_answer the round refused, with the
 // reason the model was sent back. An upstream once looped on refused answers
 // until its rounds ran out, and nothing said why; this and the round's
-// ledger record (submit_refusals) now do.
+// ledger record (submit_refusals) now do, each with the arguments the model
+// sent, clipped, so the log shows what it wrote instead.
 func (a *Agent) traceRefusals(q Question, round int, refused []ledger.SubmitRefusal) {
 	if a.Trace == nil {
 		return
 	}
 	for _, r := range refused {
-		a.Trace("question %d round %d: %s refused (%s): %s", q.ID, round, SubmitTool, r.Kind, r.Reason)
+		a.Trace("question %d round %d: %s refused (%s): %s; sent %s", q.ID, round, SubmitTool, r.Kind, r.Reason, r.Args)
 	}
 }
 

@@ -73,8 +73,10 @@ func TestDailyBudget(t *testing.T) {
 func TestToolCallCap(t *testing.T) {
 	call := func(id string) model.Step {
 		return model.Step{StopReason: model.StopToolUse, Blocks: []model.Block{
-			{Type: model.BlockToolUse, ID: id + "a", Name: "nothing", Input: json.RawMessage(`{}`)},
-			{Type: model.BlockToolUse, ID: id + "b", Name: "nothing", Input: json.RawMessage(`{}`)},
+			// Two different calls: the same call twice in a turn runs once
+			// and counts once (repeat_test.go).
+			{Type: model.BlockToolUse, ID: id + "a", Name: "nothing", Input: json.RawMessage(`{"n":1}`)},
+			{Type: model.BlockToolUse, ID: id + "b", Name: "nothing", Input: json.RawMessage(`{"n":2}`)},
 		}}
 	}
 	late := submitStep("t", map[string]any{"shape": "summary", "lines": []string{"late"}})
@@ -175,7 +177,10 @@ func TestEnforceRoundBudgetCountsInCallOrder(t *testing.T) {
 		{Type: model.BlockToolResult, ID: "b", Content: strings.Repeat("y", 10)},
 		{Type: model.BlockToolResult, ID: "c", Content: strings.Repeat("z", 10)},
 	}
-	enforceRoundBudget(results, []int{0, 1, 2}, 15)
+	refused := enforceRoundBudget(results, []int{0, 1, 2}, 15)
+	if refused[0] || !refused[1] || !refused[2] || len(refused) != 2 {
+		t.Errorf("refused = %v, want calls 1 and 2: the caller refunds exactly these", refused)
+	}
 	if results[0].Content != strings.Repeat("x", 10) {
 		t.Errorf("first result under budget must be untouched: %+v", results[0])
 	}

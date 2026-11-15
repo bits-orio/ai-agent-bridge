@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
 )
@@ -71,6 +72,8 @@ type ranked struct {
 	Total   *float64 `json:"total,omitempty"`
 	Hours   *float64 `json:"hours,omitempty"`
 	PerHour *float64 `json:"per_hour,omitempty"`
+
+	raw float64 // the unrounded figure; ranking and ties go by this, never by Value
 }
 
 type verdict struct {
@@ -82,7 +85,31 @@ type verdict struct {
 	Note          string   `json:"note,omitempty"`
 }
 
-func round1(v float64) float64 { return math.Round(v*10) / 10 }
+// maxDecimals is the most precision a figure is shown with to tell two
+// different values apart.
+const maxDecimals = 4
+
+func roundTo(v float64, decimals int) float64 {
+	// A figure this large has no fraction left to round, and scaling it
+	// would overflow.
+	if math.Abs(v) >= 1e15 {
+		return v
+	}
+	scale := math.Pow(10, float64(decimals))
+	return math.Round(v*scale) / scale
+}
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+
+// showNum prints v at the given precision without trailing zeros. A figure
+// that rounds to zero but is not zero keeps three significant digits, so a
+// real difference never reads as "0".
+func showNum(v float64, decimals int) string {
+	if r := roundTo(v, decimals); r != 0 || v == 0 {
+		return strconv.FormatFloat(r, 'f', -1, 64)
+	}
+	return strconv.FormatFloat(v, 'g', 3, 64)
+}
 
 func rankByRate(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 	var in struct {
@@ -104,8 +131,13 @@ func rankByRate(_ context.Context, args json.RawMessage) (json.RawMessage, error
 			skipped = append(skipped, r.Name+" (no online hours, so no rate)")
 			continue
 		}
-		total, hours, per := r.Total, r.Hours, round1(r.Total/r.Hours)
-		rows = append(rows, ranked{Name: r.Name, Value: per, Total: &total, Hours: &hours, PerHour: &per})
+		per := r.Total / r.Hours
+		if !finite(per) {
+			skipped = append(skipped, r.Name+" (the hours are too small for a usable rate)")
+			continue
+		}
+		total, hours := r.Total, r.Hours
+		rows = append(rows, ranked{Name: r.Name, raw: per, Total: &total, Hours: &hours, PerHour: new(float64)})
 	}
 	out := order(rows, true)
 	out.Skipped = skipped
@@ -132,23 +164,30 @@ func rank(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
 		if r.Name == "" {
 			return nil, fmt.Errorf("every row needs a name")
 		}
-		rows = append(rows, ranked{Name: r.Name, Value: r.Value})
+		rows = append(rows, ranked{Name: r.Name, raw: r.Value})
 	}
 	higher := in.HigherIsBetter == nil || *in.HigherIsBetter
 	return json.Marshal(order(rows, higher))
 }
 
-// order sorts, numbers the ranks and names the leader with its margin over
-// the runner-up. A tie at the top is said plainly rather than broken.
+// order sorts on the raw figures, numbers the ranks and names the leader
+// with its margin over the runner-up. Only exactly equal figures are tied.
+// Figures are shown to one decimal, or to as many as it takes (up to four)
+// for neighbours that differ to still read differently.
 func order(rows []ranked, higher bool) verdict {
 	sort.SliceStable(rows, func(i, j int) bool {
 		if higher {
-			return rows[i].Value > rows[j].Value
+			return rows[i].raw > rows[j].raw
 		}
-		return rows[i].Value < rows[j].Value
+		return rows[i].raw < rows[j].raw
 	})
+	d := decimalsFor(rows)
 	for i := range rows {
 		rows[i].Rank = i + 1
+		rows[i].Value = roundTo(rows[i].raw, d)
+		if rows[i].PerHour != nil {
+			*rows[i].PerHour = rows[i].Value
+		}
 	}
 	v := verdict{Ranking: rows}
 	if len(rows) == 0 {
@@ -161,16 +200,42 @@ func order(rows []ranked, higher bool) verdict {
 		v.Margin = "the only entry"
 		return v
 	}
-	first, second := rows[0].Value, rows[1].Value
+	first, second := rows[0].raw, rows[1].raw
 	if first == second {
 		v.Leader = rows[0].Name + " and " + rows[1].Name + " tied"
-		v.Margin = "tied at " + fmt.Sprint(first)
+		v.Margin = "tied at " + showNum(first, d)
 		return v
 	}
-	v.Margin = fmt.Sprintf("%v over %s's %v", round1(math.Abs(first-second)), rows[1].Name, second)
+	diff := math.Abs(first - second)
+	if !finite(diff) {
+		v.Margin = "too large to state"
+		return v
+	}
+	v.Margin = fmt.Sprintf("%s over %s's %s", showNum(diff, d), rows[1].Name, showNum(second, d))
 	if second != 0 {
-		p := round1(math.Abs(first-second) / math.Abs(second) * 100)
-		v.MarginPercent = &p
+		if p := diff / math.Abs(second) * 100; finite(p) {
+			p = roundTo(p, d)
+			v.MarginPercent = &p
+		}
 	}
 	return v
+}
+
+// decimalsFor picks the fewest decimals, from one up to maxDecimals, at
+// which every neighbouring pair of different figures shows as different.
+func decimalsFor(rows []ranked) int {
+	for d := 1; d < maxDecimals; d++ {
+		ok := true
+		for i := 1; i < len(rows); i++ {
+			a, b := rows[i-1].raw, rows[i].raw
+			if a != b && roundTo(a, d) == roundTo(b, d) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return d
+		}
+	}
+	return maxDecimals
 }

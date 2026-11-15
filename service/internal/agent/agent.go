@@ -6,9 +6,13 @@
 // ends by calling submit_answer in a round of its own: an answer written
 // beside a read it has not seen yet is refused, and so is an answer over a
 // cap, at most twice, while a round is left to rewrite it in; after that it
-// goes out cut. Anything else that can end a question, a model that stops
-// talking or fails, a round cap, a token budget, a quota, ends it with an
-// artifact too, so a player always gets an answer.
+// goes out cut. The round before the last is told so after its tool results.
+// The last round runs no read, since nobody would see the result, and takes
+// an answer even beside reads. A read the question already answered is not
+// run again. Anything else that can end a question, a model that stops
+// talking or fails, the same unshowable answer twice, a round cap, a token
+// budget, a quota, ends it with an artifact too, so a player always gets an
+// answer.
 package agent
 
 import (
@@ -67,12 +71,34 @@ type Question struct {
 	Surface         string       // the surface the asker was looking at, "" when unknown
 	PhysicalSurface string       // where their character stood, when that differs
 	Personality     string       // the map's voice setting when the question was asked, "" when none came (voice.go)
+
+	// Toast names the milestone when nobody asked: the service wants one
+	// line from the model for an unprompted toast (cmd/aab, toasts.go). Such
+	// a question spends no hourly quota, since no player asked it, but is
+	// paid for from the day's budget; it reads no briefing, takes no command
+	// words, and is never part of a session, so no follow-up reads it back.
+	Toast string
 }
 
 // ForceLabel is a force name and what players call it.
 type ForceLabel struct {
 	Name  string
 	Label string
+}
+
+// sessionLabel names the question's session pool to the ledger's
+// session_key: the scope key for a public question, and the
+// same marked "private:" for a private one, so the ledger can tell a private
+// session from the public one of the same name. pool's own NUL marker never
+// leaves the process; the key itself is the one session_key always carried.
+func (q Question) sessionLabel() string {
+	if !q.Private {
+		return q.scope()
+	}
+	if key, ok := q.chatScope().PrivateKey(); ok {
+		return "private:" + key
+	}
+	return "private:asker " + q.key()
 }
 
 // scope is the question's scope key, "global" when the companion sent none.
@@ -226,6 +252,40 @@ type Result struct {
 	Usage    model.Usage
 	CostUSD  float64
 	Session  SessionMark // which session the question ran in
+
+	// exchange is the session exchange this answer recorded, nil when it
+	// recorded none (a command, a refusal, a model error), so AmendSession
+	// can correct it once delivery says what the player actually saw.
+	exchange *exchangeRef
+}
+
+// exchangeRef finds one recorded exchange again.
+type exchangeRef struct {
+	pool, name string
+	qid        int64
+	at         time.Time
+}
+
+// AmendSession makes the session hold what the player actually saw of res,
+// once delivery has settled it: finish records the answer before it is
+// sent, and a follow-up must not read an answer nobody saw. shown nil drops
+// the exchange (the delivery failed or was given up); otherwise its answer
+// becomes shown as rendered (the companion refused the artifact and a notice
+// went out instead). Reports whether res's exchange was still there to
+// amend: false for a result that recorded none, or a session that has
+// since ended.
+func (a *Agent) AmendSession(res Result, shown *Artifact) bool {
+	ref := res.exchange
+	if ref == nil {
+		return false
+	}
+	var text *string
+	awaiting := false
+	if shown != nil {
+		plain := shown.Plain()
+		text, awaiting = &plain, isAskBack(*shown)
+	}
+	return a.sess.amend(ref.pool, ref.name, ref.qid, ref.at, text, awaiting)
 }
 
 // SessionMark says which session a question ran in and whether it started
@@ -327,7 +387,14 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// whichever of the nine endings this question hits.
 	rawText := q.Text
 	req := parse(q.Text)
+	toast := q.Toast != ""
+	if toast {
+		req = Request{Question: strings.TrimSpace(q.Text)}
+	}
 	mark := SessionMark{Key: sessionKey(q.scope(), req.Name), Name: req.Name}
+	if res, ok := a.freeCommand(ctx, q, req, mark, now, rawText, ts); ok {
+		return res, nil
+	}
 	if req.Command != "" {
 		res := a.command(q, req, mark, now)
 		var reason *string
@@ -349,23 +416,27 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 		// never runs sess.record ("new" ends the session outright, and
 		// "sessions" only lists), so neither is this path's to claim,
 		// whatever level its own Notice happens to carry.
-		a.writeQuestion(a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
+		rec := a.questionRecord(q, rawText, ledgerSession, res.Artifact.Shape, 0, 0, 0, 0, 0, refused, reason, nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false)
+		rec.Command = req.Command
+		a.writeQuestion(rec)
 		return res, nil
 	}
-	if !a.quota.take(q.key(), now) {
+	if !toast && !a.quota.take(q.key(), now) {
 		res := Result{Artifact: refusal(quotaNotice), Session: mark}
 		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(quotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
-	if !a.server.take(serverKey, now) {
+	if !toast && !a.server.take(serverKey, now) {
 		a.quota.refund(q.key(), now)
 		res := Result{Artifact: refusal(serverQuotaNotice), Session: mark}
 		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(serverQuotaNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
 	}
 	if a.budget.exhausted(now) {
-		a.quota.refund(q.key(), now)
-		a.server.refund(serverKey, now)
+		if !toast {
+			a.quota.refund(q.key(), now)
+			a.server.refund(serverKey, now)
+		}
 		res := Result{Artifact: refusal(budgetNotice), Session: mark}
 		a.writeQuestion(a.questionRecord(q, rawText, res.Session, res.Artifact.Shape, 0, 0, 0, 0, 0, true, strPtr(budgetNotice), nil, zeroLookupFor(0, 0, res.Artifact), ledger.BriefingOff, 0, 0, 0, false, false))
 		return res, nil
@@ -375,14 +446,18 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// open has already cleared the flag, since this question's arrival
 	// resolves that wait whatever it turns out to ask. It rides through
 	// every ending below as the ledger's awaiting_reply_resolved.
-	earlier, fresh, wasAwaiting := a.sess.open(q.pool(), req.Name, now, req.Fresh)
+	var earlier []Exchange
+	var fresh, wasAwaiting bool
+	if !toast {
+		earlier, fresh, wasAwaiting = a.sess.open(q.pool(), req.Name, now, req.Fresh)
+	}
 	mark.Fresh = fresh
 	q.Text = substituteLabels(req.Question, q.Labels)
 
 	ctx = catalog.WithForce(ctx, q.force())
 	byName := index(ts)
 	defs := defsFor(ts)
-	system := systemPrompt(a.voiceFor(q).text)
+	system := systemPrompt(a.voiceFor(q).text, a.caps.maxRounds())
 
 	var msModel, msRCON int64
 	// The briefing runs once per question, before round 1, on its own budget
@@ -396,7 +471,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	var briefingBytes, briefingTokens int
 	var briefingMs int64
 	briefingText := ""
-	if a.BriefingEnabled {
+	if a.BriefingEnabled && !toast {
 		res := Assemble(ctx, byName, q, mark, a.Chat, BriefingBudget)
 		briefingStatus = res.Status
 		// briefing_ms is recorded whether or not the briefing landed. A
@@ -423,13 +498,26 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// there was nothing to add, so this is a no-op on "off" or "failed".
 	msRCON += briefingMs
 
+	userTurn := prompt(q, earlier, briefingText)
 	msgs := []model.Message{{
 		Role:   model.RoleUser,
-		Blocks: []model.Block{{Type: model.BlockText, Text: prompt(q, earlier, briefingText)}},
+		Blocks: []model.Block{{Type: model.BlockText, Text: userTurn}},
 	}}
 
 	var usage model.Usage
+	// meter is the per-question token budget, charged with the fixed prefix
+	// taken out of every cold round (tokens.go); usage stays the raw count
+	// the ledger and the price table read.
+	meter := newTokenMeter(a.caps.MaxTokensPerQuestion, userTurnTokens(userTurn))
 	toolCalls := 0
+	// answered is every read that already came back to the model this
+	// question, by call key, with the round it came back in: an identical
+	// call is answered from there and never dispatched again (F1).
+	answered := map[string]int{}
+	// invalid counts the rounds in a row whose submission was refused for
+	// the same reason as the round before's: a host that sends the same
+	// unshowable answer twice sends it every round until they run out.
+	var invalid invalidStreak
 	// ledgerOn is tested once per round rather than letting each round
 	// build a RoundRecord and every tool call clip its own args only for
 	// Writer.write to discard them: a disabled ledger (or none wired) must
@@ -453,9 +541,21 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 	// model is sent back at most maxOverCapRefusals times.
 	var pending *Artifact
 	overCapRounds := 0
-	for round := 1; round <= a.caps.maxRounds(); round++ {
+	maxRounds := a.caps.maxRounds()
+	for round := 1; round <= maxRounds; round++ {
 		modelStart := time.Now()
-		step, err := a.mdl.Step(ctx, system, msgs, defs)
+		// The final round is the one chance to get an answer, so a route
+		// that can force the submit tool is made to. So is the round after
+		// the token budget passed its warning mark: that round was told one
+		// turn is left, and a model that reads again there would end the
+		// question on the token notice with nothing to show for it.
+		var step model.Step
+		var err error
+		if forcer, ok := a.mdl.(model.ToolForcer); ok && (round == maxRounds || meter.nearlyOver()) {
+			step, err = forcer.StepForced(ctx, system, msgs, defs, SubmitTool)
+		} else {
+			step, err = a.mdl.Step(ctx, system, msgs, defs)
+		}
 		roundModelMs := time.Since(modelStart).Milliseconds()
 		if err != nil {
 			msModel += roundModelMs
@@ -471,7 +571,9 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// outage must not spend anyone's hourly allowance. The rounds
 			// before the failure were paid for all the same, so they count
 			// toward the day's budget.
-			a.quota.refund(q.key(), now)
+			if !toast {
+				a.quota.refund(q.key(), now)
+			}
 			res := Result{Rounds: round, Usage: usage, CostUSD: CostUSD(a.mdl.Name(), usage), Session: mark}
 			a.budget.spend(res.CostUSD, a.now())
 			a.flushRounds(rounds)
@@ -490,6 +592,7 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			return res, err
 		}
 		usage.Add(step.Usage)
+		meter.add(step.Usage)
 		msModel += roundModelMs
 		a.traceRound(q, round, step)
 		msgs = append(msgs, model.Message{Role: model.RoleAssistant, Blocks: step.Blocks})
@@ -504,31 +607,41 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			answer, _ := fromText(step)
 			return a.finish(q, a.fallback(q, answer, pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
-		// cutNow is a round that may not refuse an answer for its length: no
-		// round can follow it, the round cap or a token budget this round has
-		// already spent, which ends the question as soon as its results are
-		// in (below); or the model has been sent back maxOverCapRefusals
-		// times already. An answer over a cap in such a round goes out cut
-		// instead of refused, since a refusal there would end the question
-		// with a notice in place of an answer the model has already written,
-		// or send it round again.
-		cutNow := round == a.caps.maxRounds() || a.overTokenBudget(usage) || overCapRounds >= maxOverCapRefusals
+		// lastRound is a round no round can follow: the round cap, or a token
+		// budget this round has already spent. Its reads are never run, since
+		// no model would read what they return, and an answer it sends is
+		// taken even beside them (plan). cutNow is a round that may not refuse
+		// an answer for its length: the last round, or one after the model
+		// has been sent back maxOverCapRefusals times already. An answer over
+		// a cap in such a round goes out cut instead of refused, since a
+		// refusal there would end the question with a notice in place of an
+		// answer the model has already written, or send it round again.
+		lastRound := round == maxRounds || meter.over()
+		cutNow := lastRound || overCapRounds >= maxOverCapRefusals
+		turnsLeft := maxRounds - round
+		switch {
+		case lastRound:
+			turnsLeft = 0
+		case meter.nearlyOver():
+			turnsLeft = 1
+		}
+		p := plan(calls, byName, q.force(), answered, step.StopReason == model.StopMaxTokens, lastRound)
 		var out roundResult
 		var roundToolMs int64
-		if reads, left := countReads(calls), a.caps.maxToolCalls()-toolCalls; reads > left {
+		if fresh, left := p.fresh(), a.caps.maxToolCalls()-toolCalls; fresh > left {
 			// The round is refused, not the question: the model is told what
 			// is left and answers from what it has, or asks for less. Every
 			// refused call still gets a ledger.ToolCall of its own (ms:0,
 			// the refusal text as its error), so a round the cap refused
 			// still shows up in the repeat-count report instead of leaving
 			// it blind in exactly the case that motivates it.
-			results, calledTools := refuseLookups(calls, reads, left, toolCalls, a.caps.maxToolCalls(), a.caps.toolResultBytes(), ledgerOn)
+			results, calledTools := refuseLookups(calls, fresh, left, toolCalls, a.caps.maxToolCalls(), a.caps.toolResultBytes(), ledgerOn)
 			out = roundResult{results: results, calledTools: calledTools, refused: lookupCapRefusals(calls, results)}
 			if a.Trace != nil {
-				a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, reads, toolCalls, a.caps.maxToolCalls())
+				a.Trace("question %d round %d: refused %d lookups, %d of %d used", q.ID, round, fresh, toolCalls, a.caps.maxToolCalls())
 			}
 		} else {
-			toolCalls += reads
+			toolCalls += fresh
 			// A round's reads run concurrently (runReads fans them out over
 			// goroutines), so the tool phase's own wall clock, not the sum
 			// of each call's own ms, is what a round actually spent on
@@ -536,18 +649,31 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			// wall clock that actually passed, inflating the RCON side of
 			// the one report the ledger exists to settle.
 			toolStart := time.Now()
-			out = runCalls(ctx, calls, byName, q.force(), a.caps.toolResultBytes(), a.caps.roundToolResultBytes(), a.Floor, ledgerOn, cutNow)
+			out = runCalls(ctx, calls, p, byName, q.force(), roundLimits{
+				result: a.caps.toolResultBytes(), round: a.caps.roundToolResultBytes(), turnsLeft: turnsLeft,
+			}, a.Floor, ledgerOn, cutNow)
 			roundToolMs = time.Since(toolStart).Milliseconds()
-			if reads > 0 {
-				// A round that was nothing but a submission never dispatched
-				// a read: the wall clock just measured is local (parsing the
-				// submission), not RCON, so it must not bill to ms_rcon.
+			if fresh > 0 {
+				// A round that dispatched no read (a submission, repeats,
+				// reads the last round skipped) spent its wall clock here
+				// locally, not on RCON, so it must not bill to ms_rcon.
 				msRCON += roundToolMs
+			}
+			// A read the round's byte budget refused never reached the
+			// model, so it spends no lookup: the model may ask again.
+			toolCalls -= out.refunded
+			for _, key := range out.answeredKeys {
+				answered[key] = round
 			}
 		}
 		a.traceRefusals(q, round, out.refused)
+		if out.salvaged != nil && a.Trace != nil {
+			a.Trace("question %d round %d: %s salvaged (%s): %s", q.ID, round, SubmitTool, out.salvaged.Note, out.salvaged.Args)
+		}
 		if ledgerOn {
-			rounds = append(rounds, a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, out.calledTools, out.refused))
+			rec := a.roundRecord(q.ID, round, step, roundModelMs, roundToolMs, out.calledTools, out.refused)
+			rec.Salvaged = out.salvaged
+			rounds = append(rounds, rec)
 		}
 		if out.answer != nil {
 			return a.finish(q, *out.answer, round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
@@ -556,20 +682,73 @@ func (a *Agent) Answer(ctx context.Context, q Question, ts []tools.Tool) (Result
 			pending = out.pending
 			overCapRounds++
 		}
-		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: out.results})
-
-		if a.overTokenBudget(usage) {
-			return a.finish(q, a.fallback(q, Notice(LevelWarning, tokenNotice), pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+		if invalid.note(out) >= maxInvalidRefusals {
+			if a.Trace != nil {
+				a.Trace("question %d round %d: the same answer was refused %d rounds running, ending the question: %s", q.ID, round, maxInvalidRefusals, invalid.reason)
+			}
+			return a.finish(q, a.fallback(q, Notice(LevelWarning, unshowableNotice), pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 		}
+		if lastRound {
+			notice := roundsNotice
+			if meter.over() {
+				notice = tokenNotice
+			}
+			return a.finish(q, a.fallback(q, Notice(LevelWarning, notice), pending), round, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+		}
+		if turnsLeft == 1 {
+			// After the tool results, never before: the Anthropic API refuses
+			// a user turn whose tool results do not come first, and every
+			// converter keeps text after them in order.
+			out.results = append(out.results, model.Block{Type: model.BlockText, Text: lastTurnLine})
+		}
+		msgs = append(msgs, model.Message{Role: model.RoleUser, Blocks: out.results})
 	}
-	return a.finish(q, a.fallback(q, Notice(LevelWarning, roundsNotice), pending), a.caps.maxRounds(), usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
+	// Unreachable while every last round finishes above; kept so a change
+	// to the loop can never end a question without an answer.
+	return a.finish(q, a.fallback(q, Notice(LevelWarning, roundsNotice), pending), maxRounds, usage, mark, toolCalls, msModel, msRCON, rawText, rounds, briefingStatus, briefingBytes, briefingTokens, briefingMs, wasAwaiting), nil
 }
 
-// overTokenBudget reports whether the question has spent its token budget.
-// The loop ends after any round that leaves it so.
-func (a *Agent) overTokenBudget(usage model.Usage) bool {
-	budget := a.caps.MaxTokensPerQuestion
-	return budget > 0 && usage.Budgeted() >= budget
+// lastTurnLine follows the tool results when the next round is the last one,
+// by the round cap or the token budget. Without it the model spent its last
+// round on reads nobody would ever see.
+var lastTurnLine = "One turn is left. Call " + SubmitTool + " now with what you have, and say what you could not check; any other tool call in that turn will not run."
+
+// maxInvalidRefusals is how many rounds in a row may have a submission
+// refused for the same reason before the question ends.
+const maxInvalidRefusals = 2
+
+// invalidStreak tracks invalid refusals in a row with the same reason. Only
+// rounds that submitted something move it: a round of reads between two
+// identical refusals does not mean the model fixed anything.
+type invalidStreak struct {
+	reason string
+	count  int
+}
+
+// note folds one round in and returns the streak.
+func (s *invalidStreak) note(out roundResult) int {
+	switch {
+	case len(out.invalid) > 0:
+		if out.invalid[0] == s.reason {
+			s.count++
+		} else {
+			s.reason, s.count = out.invalid[0], 1
+		}
+	case out.submitted:
+		s.reason, s.count = "", 0
+	}
+	return s.count
+}
+
+// turnsLeftText is how many rounds are left, as the refusal tells the model.
+func turnsLeftText(n int) string {
+	switch {
+	case n <= 0:
+		return "No turns are left."
+	case n == 1:
+		return "1 turn left: send the fixed answer now."
+	}
+	return fmt.Sprintf("%d turns left.", n)
 }
 
 // maxOverCapRefusals is how many rounds may send an answer back for being
@@ -596,45 +775,254 @@ func (a *Agent) fallback(q Question, instead Artifact, pending *Artifact) Artifa
 
 // roundResult is what one round's tool calls came to.
 type roundResult struct {
-	results     []model.Block          // one per call, in the order the model made them: what it reads next round
-	answer      *Artifact              // the submission that ends the question, as the model wrote it
-	pending     *Artifact              // the round's first submission refused only for being over a cap
-	refused     []ledger.SubmitRefusal // every submit_answer the round refused, and why
-	calledTools []ledger.ToolCall      // the ledger entry of every lookup the round ran
+	results      []model.Block          // one per call, in the order the model made them: what it reads next round
+	answer       *Artifact              // the submission that ends the question, as the model wrote it
+	pending      *Artifact              // the round's first submission refused only for being over a cap
+	refused      []ledger.SubmitRefusal // every submit_answer the round refused, and why
+	calledTools  []ledger.ToolCall      // the ledger entry of every lookup the model asked for, run or not
+	salvaged     *ledger.SubmitSalvage  // set when the answer was taken only after salvage moved its text
+	invalid      []string               // the bare reason of every submission refused as no artifact, in order
+	submitted    bool                   // a submission was weighed on its own merits: taken, over a cap or invalid
+	refunded     int                    // dispatched reads the round byte budget refused, given back as lookups
+	answeredKeys []string               // call keys of the reads whose result reached the model intact
 }
 
 // refuse turns call i's result into a refusal the model reads back, and
-// records why.
-func (r *roundResult) refuse(i int, id, kind, reason string) {
-	r.results[i] = failed(id, errors.New(reason))
-	r.refused = append(r.refused, ledger.SubmitRefusal{Kind: kind, Reason: reason})
+// records why, with the arguments the model sent, clipped.
+func (r *roundResult) refuse(i int, call model.Block, kind, reason string) {
+	r.results[i] = failed(call.ID, errors.New(reason))
+	r.refused = append(r.refused, ledger.SubmitRefusal{Kind: kind, Reason: reason, Args: content(call.Input, refusedArgsBytes)})
 }
 
-// runCalls executes one round's tool calls and reports whether the round
-// answered. submit_answer is handled here rather than as a tool, because it
-// ends the loop: a round that mixes it with reads is refused, and a round
-// that submits more than once answers with the first submission in block
-// order fit to send (pickSubmission), so which answer reaches the player
-// never depends on which goroutine finished first. A submission over a cap is
-// sent back with what is over, and kept as the round's pending answer, unless
-// the round may not refuse one (cutNow) and has nothing better: then it is
-// taken as it is, to be cut in finish. calledTools is this round's ledger
-// entries, one per lookup it actually ran; a pure submit_answer round runs no
-// lookups and has none. ledgerOn false skips building those entries at all,
-// down through runReads and read: the calls still run, only the ledger side
-// of them is left out. roundBudget is the round-wide byte cap on top of
-// limit's per-result one (docs/design/phase4-spec.md section 13): limit
-// bounds one result, roundBudget bounds what every result in the round adds
-// up to.
-func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn, cutNow bool) roundResult {
+// refusedArgsBytes bounds the arguments a submit refusal records: enough to
+// see which field the prose went into, not a second copy of a long answer.
+const refusedArgsBytes = 1024
+
+// What a read the service did not dispatch reads back, by why.
+const (
+	cutOffRefusal  = "your call was cut off by the output limit; send it again, shorter"
+	lastRoundNote  = "not run: this was the last turn"
+	sameTurnRepeat = "Same call as another in this turn: its result is beside this one."
+)
+
+// repeatNote is what an identical call to one already answered reads back.
+func repeatNote(round int) string {
+	return fmt.Sprintf("Same call as turn %d: you already have this result above. Answer from it, or change the arguments.", round)
+}
+
+// unshowableNotice ends a question whose model sent the same unshowable
+// answer twice running: the rounds notice would tell the player to ask
+// something narrower, which is not what went wrong.
+const unshowableNotice = "I could not put that answer into a form the game can show. Try asking again."
+
+// How plan sorts one round's calls.
+const (
+	callSubmit    = iota // submit_answer
+	callRead             // a read to dispatch
+	callRepeat           // the same call as one answered in an earlier round
+	callSameTurn         // the same call as an earlier one in this round
+	callLastRound        // a read on the last round, never run
+	callCutOff           // in a turn stopped by the output limit, never run
+)
+
+// roundPlan is what becomes of each of a round's calls, decided before
+// anything runs, so the lookup cap counts only what will actually be
+// dispatched.
+type roundPlan struct {
+	kind   []int    // one of the call* values per call
+	key    []string // the call key of every read, "" for a submission
+	repeat []int    // for a callRepeat, the round that answered it
+}
+
+// plan sorts a round's calls. A turn stopped on the output limit runs
+// nothing: any call in it may be half written, and a provider that could
+// not parse one hands it over as {}. On the last round no read runs. A read
+// identical to one that already reached the model this question is answered
+// from there, and one identical to an earlier read in the same round shares
+// that one's result.
+func plan(calls []model.Block, byName map[string]tools.Tool, force string, answered map[string]int, cutOff, lastRound bool) roundPlan {
+	p := roundPlan{kind: make([]int, len(calls)), key: make([]string, len(calls)), repeat: make([]int, len(calls))}
+	inRound := map[string]bool{}
+	for i, call := range calls {
+		switch {
+		case cutOff:
+			p.kind[i] = callCutOff
+			continue
+		case call.Name == SubmitTool:
+			p.kind[i] = callSubmit
+			continue
+		case lastRound:
+			p.kind[i] = callLastRound
+			continue
+		}
+		key := callKey(call, byName, force)
+		p.key[i] = key
+		switch r, ok := answered[key]; {
+		case ok:
+			p.kind[i], p.repeat[i] = callRepeat, r
+		case inRound[key]:
+			p.kind[i] = callSameTurn
+		default:
+			p.kind[i] = callRead
+			inRound[key] = true
+		}
+	}
+	return p
+}
+
+// fresh is how many of the round's reads will be dispatched: the lookups it
+// spends.
+func (p roundPlan) fresh() int {
+	n := 0
+	for _, k := range p.kind {
+		if k == callRead {
+			n++
+		}
+	}
+	return n
+}
+
+// callKey is what makes two calls the same call: the tool that would run,
+// after a slip in its name is corrected, and its arguments as the tool would
+// get them, the asker's force filled in where it would be, in canonical JSON
+// so key order and spacing do not matter.
+func callKey(call model.Block, byName map[string]tools.Tool, force string) string {
+	name := call.Name
+	if _, ok := byName[name]; !ok {
+		if did := didYouMean(name, byName); did != "" {
+			name = did
+		}
+	}
+	args := call.Input
+	if t, ok := byName[name]; ok {
+		args = fillForce(t, args, force)
+	}
+	return name + "\x00" + canonicalJSON(args)
+}
+
+// canonicalJSON is raw re-encoded with sorted keys and no spacing, or raw
+// itself when it is not JSON. No arguments at all and an empty object are
+// the same call.
+func canonicalJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "{}"
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return string(raw)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return string(raw)
+	}
+	return string(out)
+}
+
+// fillForce fills the asker's force into a call to a tool that takes the
+// reserved force parameter, the catalog's required one, when the model left
+// it out. A tool that offers force only as an optional filter, as every
+// history tool does, is left alone: there, leaving it out means every force,
+// and filling the asker's in narrowed a history count to their own team and
+// answered zero (review finding F2).
+func fillForce(t tools.Tool, args json.RawMessage, force string) json.RawMessage {
+	if tools.Requires(t.Schema, catalog.ForceParam) {
+		return tools.FillString(args, catalog.ForceParam, force)
+	}
+	return args
+}
+
+// roundLimits are the byte caps a round's reads run under, and how many
+// rounds are left for a refusal to say.
+type roundLimits struct {
+	result    int // one result's cut (Caps.toolResultBytes)
+	round     int // every result in the round added up (Caps.roundToolResultBytes)
+	turnsLeft int
+}
+
+// runCalls executes one round's tool calls as plan sorted them and reports
+// whether the round answered. submit_answer is handled here rather than as a
+// tool, because it ends the loop: a round that mixes it with reads to
+// dispatch is refused, and a round that submits more than once answers with
+// the first submission in block order fit to send (pickSubmission), so which
+// answer reaches the player never depends on which goroutine finished first.
+// Reads that will not be dispatched (repeats, the last round's, a cut-off
+// turn's) do not count against a submission: everything it could need is
+// already in the conversation, or nothing more ever will be. A submission
+// over a cap is sent back with what is over, and kept as the round's pending
+// answer, unless the round may not refuse one (cutNow) and has nothing
+// better: then it is taken as it is, to be cut in finish. calledTools is this
+// round's ledger entries, one per read the model asked for, whether it ran
+// or not; a pure submit_answer round has none. ledgerOn false skips building
+// those entries at all, down through runReads and read: the calls still run,
+// only the ledger side of them is left out.
+func runCalls(ctx context.Context, calls []model.Block, p roundPlan, byName map[string]tools.Tool, force string, lim roundLimits, floor func() time.Duration, ledgerOn, cutNow bool) roundResult {
 	out := roundResult{results: make([]model.Block, len(calls))}
-	submits, reads := partition(calls)
+	var submits, reads []int
+	for i, k := range p.kind {
+		switch k {
+		case callSubmit:
+			submits = append(submits, i)
+		case callRead:
+			reads = append(reads, i)
+		}
+	}
+
+	// Every read the model asked for gets its ledger entry in call order;
+	// runReads fills the ones it dispatches.
+	var entry map[int]int // call index to its calledTools slot
+	if ledgerOn {
+		entry = map[int]int{}
+		for i, call := range calls {
+			if p.kind[i] != callSubmit && call.Name != SubmitTool {
+				entry[i] = len(out.calledTools)
+				out.calledTools = append(out.calledTools, ledger.ToolCall{})
+			}
+		}
+	}
+	notRun := func(i int, why, text string, isErr bool) {
+		out.results[i] = model.Block{Type: model.BlockToolResult, ID: calls[i].ID, Content: text, IsError: isErr}
+		if slot, ok := entry[i]; ok {
+			out.calledTools[slot] = ledger.ToolCall{
+				Name: calls[i].Name, Args: content(calls[i].Input, lim.result), Error: strPtr(text), NotRun: why,
+			}
+		}
+	}
+	for i, k := range p.kind {
+		switch k {
+		case callCutOff:
+			if calls[i].Name == SubmitTool {
+				out.refuse(i, calls[i], ledger.RefusedCutOff, cutOffRefusal)
+				continue
+			}
+			notRun(i, ledger.NotRunCutOff, cutOffRefusal, true)
+		case callLastRound:
+			notRun(i, ledger.NotRunLastRound, lastRoundNote, true)
+		case callRepeat:
+			notRun(i, ledger.NotRunRepeat, repeatNote(p.repeat[i]), false)
+		case callSameTurn:
+			notRun(i, ledger.NotRunRepeat, sameTurnRepeat, false)
+		}
+	}
 
 	if len(reads) > 0 {
 		for _, i := range submits {
-			out.refuse(i, calls[i].ID, ledger.RefusedBesideReads, besideReadsRefusal)
+			out.refuse(i, calls[i], ledger.RefusedBesideReads, besideReadsRefusal)
 		}
-		out.calledTools = runReads(ctx, calls, reads, out.results, byName, force, limit, roundBudget, floor, ledgerOn)
+		done := runReads(ctx, calls, reads, out.results, byName, force, lim.result, floor, ledgerOn)
+		refused := enforceRoundBudget(out.results, reads, lim.round)
+		for n, i := range reads {
+			if ledgerOn {
+				tc := done[n]
+				tc.Refunded = refused[i]
+				out.calledTools[entry[i]] = tc
+			}
+			switch {
+			case refused[i]:
+				out.refunded++
+			case !out.results[i].IsError:
+				out.answeredKeys = append(out.answeredKeys, p.key[i])
+			}
+		}
 		return out
 	}
 
@@ -646,16 +1034,23 @@ func runCalls(ctx context.Context, calls []model.Block, byName map[string]tools.
 	for n, i := range submits {
 		switch sub := subs[n]; {
 		case n == chosen:
+			out.submitted = true
 			out.results[i] = model.Block{Type: model.BlockToolResult, ID: calls[i].ID, Content: "sent"}
 			out.answer = &subs[n].artifact
+			if sub.salvaged != "" {
+				out.salvaged = &ledger.SubmitSalvage{Note: sub.salvaged, Args: content(calls[i].Input, refusedArgsBytes)}
+			}
 		case chosen >= 0 && n > chosen:
-			out.refuse(i, calls[i].ID, ledger.RefusedSecondSubmit, secondSubmitRefusal)
+			out.refuse(i, calls[i], ledger.RefusedSecondSubmit, secondSubmitRefusal)
 		case sub.err != nil:
-			out.refuse(i, calls[i].ID, ledger.RefusedInvalid, sub.err.Error())
+			out.submitted = true
+			out.invalid = append(out.invalid, sub.err.Error())
+			out.refuse(i, calls[i], ledger.RefusedInvalid, sub.err.Error()+". "+turnsLeftText(lim.turnsLeft))
 		default:
 			// Over a cap, with a rewrite still allowed or a better answer
 			// beside it in this round.
-			out.refuse(i, calls[i].ID, ledger.RefusedOverCap, overCapsRefusal(sub.over))
+			out.submitted = true
+			out.refuse(i, calls[i], ledger.RefusedOverCap, overCapsRefusal(sub.over))
 			if out.pending == nil {
 				out.pending = &subs[n].artifact
 			}
@@ -690,32 +1085,24 @@ func lookupCapRefusals(calls, results []model.Block) []ledger.SubmitRefusal {
 	var out []ledger.SubmitRefusal
 	for i, call := range calls {
 		if call.Name == SubmitTool {
-			out = append(out, ledger.SubmitRefusal{Kind: ledger.RefusedLookupCap, Reason: results[i].Content})
+			out = append(out, ledger.SubmitRefusal{Kind: ledger.RefusedLookupCap, Reason: results[i].Content, Args: content(call.Input, refusedArgsBytes)})
 		}
 	}
 	return out
-}
-
-// countReads is how many of a round's calls are lookups; a submission is
-// not one, so a model that has used its lookups can still answer.
-func countReads(calls []model.Block) int {
-	_, reads := partition(calls)
-	return len(reads)
 }
 
 // refuseLookups is a round's results when its reads would pass the cap: every
 // call gets the same refusal, which says what is left, so the model answers
 // from what it has or asks for less. A submission beside the reads is refused
 // with them, as it would have been anyway, but it is not a lookup and never
-// gets a ledger.ToolCall of its own: partition puts it in the same slice as
-// the reads, and the reports built from tool_calls read it by name, so a
-// phantom submit_answer entry would misreport what actually ran. The second
-// return is the refusal recorded as a ledger.ToolCall per refused read
-// (clipped args, ok:false, ms:0, the refusal text as error): the call never
-// ran, but the model asked for it, and the repeat-count report needs to see
-// that it asked. Built with append, not indexed by i, so a skipped
-// submission never leaves a zero-value gap. ledgerOn false skips building
-// any of them.
+// gets a ledger.ToolCall of its own: the reports built from tool_calls read
+// it by name, so a phantom submit_answer entry would misreport what actually
+// ran. The second return is the refusal recorded as a ledger.ToolCall per
+// refused read (clipped args, ok:false, ms:0, the refusal text as error):
+// the call never ran, but the model asked for it, and the repeat-count report
+// needs to see that it asked. Built with append, not indexed by i, so a
+// skipped submission never leaves a zero-value gap. ledgerOn false skips
+// building any of them.
 func refuseLookups(calls []model.Block, asked, left, used, cap, limit int, ledgerOn bool) ([]model.Block, []ledger.ToolCall) {
 	text := fmt.Sprintf("Refused: this round asked for %d lookups but only %d remain for this question (%d of %d used). "+
 		"Answer now from what you already have, saying what you could not check, or ask for at most %d.", asked, left, used, cap, left)
@@ -740,29 +1127,12 @@ func refuseLookups(calls []model.Block, asked, left, used, cap, limit int, ledge
 	return results, calledTools
 }
 
-// partition splits one round's calls into submissions and reads, keeping the
-// order the model produced them in.
-func partition(calls []model.Block) (submits, reads []int) {
-	for i, call := range calls {
-		if call.Name == SubmitTool {
-			submits = append(submits, i)
-			continue
-		}
-		reads = append(reads, i)
-	}
-	return submits, reads
-}
-
-// runReads runs a round's reads at once and writes each result into its own
-// slot, so the results come back in the order the model asked for them. The
-// ledger entry for each read is built in the same slot order. ledgerOn false
-// leaves calledTools nil: every read still runs, only its ledger entry is
-// skipped. Once every read is in, enforceRoundBudget walks them in that same
-// call order and refuses whichever ones would push the round's total bytes
-// past roundBudget; every call still ran, so the ledger's own record of it
-// (calledTools) is left exactly as read built it, and only the block the
-// model sees is replaced.
-func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit, roundBudget int, floor func() time.Duration, ledgerOn bool) []ledger.ToolCall {
+// runReads runs the reads at once and writes each result into its own slot,
+// so the results come back in the order the model asked for them. The
+// ledger entry for each read is returned in the same order as reads.
+// ledgerOn false leaves those entries nil: every read still runs, only its
+// ledger entry is skipped.
+func runReads(ctx context.Context, calls []model.Block, reads []int, results []model.Block, byName map[string]tools.Tool, force string, limit int, floor func() time.Duration, ledgerOn bool) []ledger.ToolCall {
 	var calledTools []ledger.ToolCall
 	if ledgerOn {
 		calledTools = make([]ledger.ToolCall, len(reads))
@@ -772,6 +1142,14 @@ func runReads(ctx context.Context, calls []model.Block, reads []int, results []m
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// A panic in one tool must not take the whole service down with
+			// it: the read comes back as a failed result and the question
+			// goes on.
+			defer func() {
+				if p := recover(); p != nil {
+					results[i] = failed(calls[i].ID, fmt.Errorf("the tool failed unexpectedly: %v", p))
+				}
+			}()
 			block, tc := read(ctx, calls[i], byName, force, limit, floor, ledgerOn)
 			results[i] = block
 			if ledgerOn {
@@ -780,7 +1158,6 @@ func runReads(ctx context.Context, calls []model.Block, reads []int, results []m
 		}()
 	}
 	wg.Wait()
-	enforceRoundBudget(results, reads, roundBudget)
 	return calledTools
 }
 
@@ -791,12 +1168,18 @@ func runReads(ctx context.Context, calls []model.Block, reads []int, results []m
 // is kept exactly as the tool returned it, and the moment one more result
 // would push the total past cap, that result is refused instead, in the
 // same {refused, why} voice as the tier 2 needs_anchor refusal (section 11).
-// A cap of zero or less (Caps.roundToolResultBytes never actually produces
-// one, but a directly built Caps{} might) turns the check off rather than
-// refusing every read outright.
-func enforceRoundBudget(results []model.Block, reads []int, cap int) {
+// It reports which call indexes it refused: those reads ran, but the model
+// never sees what they returned, so the caller gives their lookups back.
+// Every read runs before this check, concurrently, because a result's size is
+// only known once it is back; RCON serialises the trips anyway, so the cost
+// of a refused read is its own trip, which the refund cannot give back. A cap
+// of zero or less (Caps.roundToolResultBytes never actually produces one, but
+// a directly built Caps{} might) turns the check off rather than refusing
+// every read outright.
+func enforceRoundBudget(results []model.Block, reads []int, cap int) map[int]bool {
+	refused := map[int]bool{}
 	if cap <= 0 {
-		return
+		return refused
 	}
 	spent := 0
 	for _, i := range reads {
@@ -805,6 +1188,7 @@ func enforceRoundBudget(results []model.Block, reads []int, cap int) {
 			spent += n
 			continue
 		}
+		refused[i] = true
 		results[i] = model.Block{
 			Type: model.BlockToolResult,
 			ID:   results[i].ID,
@@ -813,6 +1197,7 @@ func enforceRoundBudget(results []model.Block, reads []int, cap int) {
 				spent, cap, cap-spent),
 		}
 	}
+	return refused
 }
 
 // didYouMean names the tool the model meant by a name that is no tool, or ""
@@ -914,9 +1299,10 @@ func editsApart(a, b string, limit int) int {
 	return prev[len(b)]
 }
 
-// read runs one tool. Every tool that declares force gets the asker's force
-// filled in when the model left it out, game tools and history tools alike,
-// which is what the system prompt promises the model. Alongside the model's
+// read runs one tool. A game tool, one that takes the catalog's reserved
+// force parameter, gets the asker's force filled in when the model left it
+// out, which is what the system prompt promises the model; a history tool's
+// optional force filter is left as the model wrote it (fillForce). Alongside the model's
 // own result, it always returns this call's ledger entry, known tool or not,
 // so every lookup the model asked for shows up in the ledger exactly once;
 // ledgerOn false makes that second return the zero value instead, skipping
@@ -944,10 +1330,7 @@ func read(ctx context.Context, call model.Block, byName map[string]tools.Tool, f
 		correctedFrom, name = name, did
 		t = byName[name]
 	}
-	args := call.Input
-	if tools.Declares(t.Schema, catalog.ForceParam) {
-		args = tools.FillString(args, catalog.ForceParam, force)
-	}
+	args := fillForce(t, call.Input, force)
 	out, err := t.Call(ctx, args)
 	ms := time.Since(started)
 	if err != nil {
@@ -1002,9 +1385,16 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 	// cleared it on the way in) otherwise: record always takes the current
 	// answer's own verdict, never leaves the flag as open left it.
 	askedBack := isAskBack(clipped)
-	a.sess.record(q.pool(), mark.Name, Exchange{
-		Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: a.now(),
-	}, askedBack)
+	// Recorded now, before delivery: the companion's reply comes later, in
+	// the caller, which corrects this through AmendSession when the player
+	// saw something else or nothing.
+	var ref *exchangeRef
+	if q.Toast == "" {
+		ref = &exchangeRef{pool: q.pool(), name: mark.Name, qid: q.ID, at: a.now()}
+		a.sess.record(ref.pool, ref.name, Exchange{
+			Asker: q.askerName(), Question: q.Text, Answer: clipped.Plain(), At: ref.at, qid: q.ID,
+		}, askedBack)
+	}
 	a.flushRounds(roundRecords)
 	rec := a.questionRecord(q, rawText, mark, clipped.Shape, rounds, lookups, cost, msModel, msRCON, false, nil, nil, zeroLookupFor(rounds, lookups, clipped), briefingStatus, briefingBytes, briefingTokens, briefingMs, askedBack, awaitingReplyResolved)
 	rec.Clipped = len(over) > 0
@@ -1015,6 +1405,7 @@ func (a *Agent) finish(q Question, artifact Artifact, rounds int, usage model.Us
 		Usage:    usage,
 		CostUSD:  cost,
 		Session:  mark,
+		exchange: ref,
 	}
 }
 
@@ -1069,11 +1460,13 @@ func written(lines []string) []string {
 }
 
 // submission is one submit_answer call, read: the artifact as the model wrote
-// it and whatever in it is over a cap, or err when it is no artifact the game
-// can show at all.
+// it, its blank entries dropped and its text moved where its shape reads it
+// when salvage could (salvaged says what moved), whatever in it is over a
+// cap, or err when it is no artifact the game can show at all.
 type submission struct {
 	artifact Artifact
 	over     []string
+	salvaged string
 	err      error
 }
 
@@ -1082,10 +1475,17 @@ func parseSubmission(input json.RawMessage) submission {
 	if err := json.Unmarshal(input, &artifact); err != nil {
 		return submission{err: fmt.Errorf("that is not a valid artifact: %v", err)}
 	}
+	// Blank entries go first, so the cap counts below and the emptiness
+	// checks in validate see what would actually print (visible.go).
+	artifact = dropBlank(artifact)
+	fixed, note, ok := salvage(artifact)
+	if ok {
+		artifact = fixed
+	}
 	if _, err := validate(artifact); err != nil {
 		return submission{err: err}
 	}
-	return submission{artifact: artifact, over: overCaps(artifact)}
+	return submission{artifact: artifact, over: overCaps(artifact), salvaged: note}
 }
 
 func failed(id string, err error) model.Block {
@@ -1096,7 +1496,7 @@ func failed(id string, err error) model.Block {
 // shown as null rather than as nothing at all, which reads as a broken tool.
 // content is the text the model reads for one tool result: the JSON as the
 // tool returned it, cut at limit bytes. The cut lands on a rune boundary and
-// says what it did, so the model asks for fewer rows instead of guessing at
+// says what it did, so the model asks for fewer rows, or pages with offset, instead of guessing at
 // what fell off the end. Every token here is paid for on every later round.
 func content(out json.RawMessage, limit int) string {
 	if len(out) == 0 {
@@ -1109,7 +1509,7 @@ func content(out json.RawMessage, limit int) string {
 	for cut > 0 && !utf8.RuneStart(out[cut]) {
 		cut--
 	}
-	return fmt.Sprintf("%s\n[cut: %d of %d bytes shown; ask for fewer rows]", out[:cut], cut, len(out))
+	return fmt.Sprintf("%s\n[cut: %d of %d bytes shown; ask for fewer rows or page with offset]", out[:cut], cut, len(out))
 }
 
 func index(ts []tools.Tool) map[string]tools.Tool {

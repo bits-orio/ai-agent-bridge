@@ -31,8 +31,11 @@ package catalog
 import (
 	"context"
 	"encoding/json"
+	"log"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/rpc"
 	"github.com/bits-orio/ai-agent-bridge/service/internal/tools"
@@ -50,25 +53,70 @@ var paramTypes = map[string]string{
 	"boolean": "boolean",
 }
 
+// Provider manifests are untrusted text that goes to the model API on every
+// round, so each part of one is bounded here, the same way ToolName bounds
+// the tool's name.
+const (
+	maxToolDescBytes  = 600
+	maxParamDescBytes = 300
+	// maxProviderSchemaBytes bounds one provider's tools together: name,
+	// description and schema as sent.
+	maxProviderSchemaBytes = 32 * 1024
+)
+
+// paramKey is what a property name may look like: the characters the model
+// API accepts in one, at most 64.
+var paramKey = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
+
+// clip cuts s to at most max bytes, on a UTF-8 boundary, ending in an
+// ellipsis when it had to cut.
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	const ellipsis = "..."
+	cut := max - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
+}
+
 // schema builds the JSON Schema for one tool's arguments, with force added as
-// a required string.
-func schema(manifest rpc.ToolManifest) map[string]any {
+// a required string. ok is false when the tool cannot be offered: a required
+// parameter had a name the model API would reject, so the tool could no
+// longer be called correctly. Each dropped parameter is logged with its
+// provider, tool and key.
+func schema(iface, fn string, manifest rpc.ToolManifest) (sch map[string]any, ok bool) {
 	props := map[string]any{
 		ForceParam: map[string]any{"type": "string", "description": forceDesc},
 	}
 	required := []string{ForceParam}
-	for name, spec := range manifest.Params {
+	names := make([]string, 0, len(manifest.Params))
+	for name := range manifest.Params {
+		names = append(names, name)
+	}
+	sort.Strings(names) // so the log lines come in one order every time
+	for _, name := range names {
 		if name == ForceParam {
 			continue // reserved: the provider's own declaration never wins
 		}
-		prop, req := parseParam(spec)
+		prop, req := parseParam(manifest.Params[name])
+		if !paramKey.MatchString(name) {
+			if req {
+				log.Printf("catalog: %s.%s: required parameter %q has an unusable name: dropping the tool", iface, fn, name)
+				return nil, false
+			}
+			log.Printf("catalog: %s.%s: dropping parameter %q: its name is not 1 to 64 of letters, digits, _ . -", iface, fn, name)
+			continue
+		}
 		props[name] = prop
 		if req {
 			required = append(required, name)
 		}
 	}
 	sort.Strings(required)
-	return tools.ObjectSchema(props, required...)
+	return tools.ObjectSchema(props, required...), true
 }
 
 // parseParam turns one "<type>[!] <description>" line into a schema property
@@ -79,10 +127,10 @@ func parseParam(spec string) (map[string]any, bool) {
 	word := strings.TrimSuffix(head, "!")
 
 	if items, ok := listItemSchema(word); ok {
-		return map[string]any{"type": "array", "items": items, "description": strings.TrimSpace(rest)}, required
+		return map[string]any{"type": "array", "items": items, "description": clip(strings.TrimSpace(rest), maxParamDescBytes)}, required
 	}
 	if values, ok := enumValues(word); ok {
-		return map[string]any{"type": "string", "enum": values, "description": strings.TrimSpace(rest)}, required
+		return map[string]any{"type": "string", "enum": values, "description": clip(strings.TrimSpace(rest), maxParamDescBytes)}, required
 	}
 	kind, known := paramTypes[word]
 	if !known {
@@ -91,9 +139,9 @@ func parseParam(spec string) (map[string]any, bool) {
 		// hits: it degrades to a plain string instead of failing the whole
 		// entry, which is what lets the grammar ship ahead of the tools that
 		// use it (phase4-spec.md §5).
-		return map[string]any{"type": "string", "description": strings.TrimSpace(spec)}, false
+		return map[string]any{"type": "string", "description": clip(strings.TrimSpace(spec), maxParamDescBytes)}, false
 	}
-	return map[string]any{"type": kind, "description": strings.TrimSpace(rest)}, required
+	return map[string]any{"type": kind, "description": clip(strings.TrimSpace(rest), maxParamDescBytes)}, required
 }
 
 // typeWord splits a spec into its leading type word and the description
@@ -164,8 +212,10 @@ func enumValues(word string) ([]string, bool) {
 	}
 	inner := word[len(prefix) : len(word)-len(suffix)]
 	var values []string
+	seen := map[string]bool{}
 	for _, v := range strings.Split(inner, ",") {
-		if v = strings.TrimSpace(v); v != "" {
+		if v = strings.TrimSpace(v); v != "" && !seen[v] {
+			seen[v] = true
 			values = append(values, v)
 		}
 	}
@@ -180,7 +230,7 @@ func enumValues(word string) ([]string, bool) {
 // sit in the tool's name, and every word here is sent on every round of every
 // question, so nothing else is appended.
 func describe(manifest rpc.ToolManifest) string {
-	desc := manifest.Desc
+	desc := clip(manifest.Desc, maxToolDescBytes)
 	if desc == "" {
 		desc = "No description supplied by the provider."
 	}

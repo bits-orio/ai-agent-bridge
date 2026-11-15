@@ -80,6 +80,11 @@ SFTP_PASSWORD=<the SFTP password>
 OPENROUTER_API_KEY=<your key>
 ```
 
+The service checks the SFTP host's key against `known_hosts_path`. With no
+such file it accepts any key and logs a warning at every connect, as earlier
+versions did. Set `insecure_ignore_host_key: false` and it refuses to start
+until `known_hosts_path` names a file.
+
 ### On AleForge
 
 AleForge shows both pieces in the panel. Under **Startup** are the RCON port
@@ -194,7 +199,8 @@ from environment variables, which is what hosting panels want:
 | `factorio.sftp.host` | `AAB_SFTP_HOST` | |
 | `factorio.sftp.user` | `AAB_SFTP_USER` | |
 | `factorio.sftp.key_path` | `AAB_SFTP_KEY_PATH` | |
-| `factorio.sftp.known_hosts_path` | `AAB_SFTP_KNOWN_HOSTS` | (omit to skip host-key checks, logged) |
+| `factorio.sftp.known_hosts_path` | `AAB_SFTP_KNOWN_HOSTS` | (omit to skip host-key checks, with a warning at every connect) |
+| `factorio.sftp.insecure_ignore_host_key` | `AAB_SFTP_INSECURE_IGNORE_HOST_KEY` | `true`; `false` refuses to start without `known_hosts_path` |
 | `transport` | `AAB_TRANSPORT` | `local` |
 | `poll_interval` | `AAB_POLL_INTERVAL` | `1s` |
 | `model.provider` | `AAB_MODEL_PROVIDER` | `openrouter` |
@@ -204,6 +210,7 @@ from environment variables, which is what hosting panels want:
 | `model.reasoning` | `AAB_REASONING` | `low` |
 | `model.cache_ttl` | `AAB_CACHE_TTL` | `1h` |
 | `model.data_collection` | `AAB_DATA_COLLECTION` | `deny` |
+| `model.timeout` | `AAB_MODEL_TIMEOUT` | `120s` (`5m` for ollama), at least `10s` |
 | `ollama.base_url` | `AAB_OLLAMA_URL` | `http://localhost:11434` |
 | `ollama.num_ctx` | `AAB_OLLAMA_NUM_CTX` | `16384` |
 | `ollama.keep_alive` | `AAB_OLLAMA_KEEP_ALIVE` | `30m` |
@@ -222,13 +229,24 @@ from environment variables, which is what hosting panels want:
 | `agent.questions_per_player_per_hour` | `AAB_QUESTIONS_PER_PLAYER_PER_HOUR` | `20` |
 | `agent.questions_per_hour` | `AAB_QUESTIONS_PER_HOUR` | `120` |
 | `agent.max_cost_per_day` | `AAB_MAX_COST_PER_DAY` | `5.0` |
+| `agent.question_timeout` | `AAB_QUESTION_TIMEOUT` | `90s` (`10m` for ollama), at least `10s` |
+| `agent.daily_spend_path` | `AAB_DAILY_SPEND_PATH` | `daily-spend.json` beside `history.path` |
 | `history.path` | `AAB_HISTORY_PATH` | `history.sqlite` |
 | `control_api.addr` | `AAB_CONTROL_ADDR` | `127.0.0.1:8090` |
 | `control_api.token_env` | `AAB_CONTROL_TOKEN_ENV` | `AAB_CONTROL_TOKEN` |
 | `ledger.enabled` | `AAB_LEDGER_ENABLED` | `true` |
 | `ledger.dir` | `AAB_LEDGER_DIR` | the directory holding the config file |
 | `briefing.enabled` | `AAB_BRIEFING_ENABLED` | `true` |
+| `toasts.mode` | `AAB_TOASTS_MODE` | `plain` (see Milestone toasts) |
+| `toasts.max_per_hour` | `AAB_TOASTS_MAX_PER_HOUR` | `6` |
+| `toasts.technologies` | `AAB_TOASTS_TECHNOLOGIES` (comma-separated) | the science packs, the rocket silo, space platforms and planet discoveries |
+| `toasts.when_empty` | `AAB_TOASTS_WHEN_EMPTY` | `false` |
 | `log_file` | `AAB_LOG_FILE` | `aab.log` next to the events file |
+
+A negative cap is refused at start, with the key named: leave a key out for
+its default. The exceptions are `agent.questions_per_player_per_hour`,
+`agent.questions_per_hour` and `agent.max_cost_per_day`, where `-1` means no
+limit.
 
 Secrets keep their own names in both modes and never sit in the YAML:
 `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `FACTORIO_RCON_PASSWORD`,
@@ -261,7 +279,12 @@ a time, so changing it costs one cache write, not one per question.
 ### History
 
 The service keeps the event log in `history.path`, one SQLite file, and the
-history tools read it. One file outlives the map it started on, so every row
+history tools read it. On a start, the tail of `events.jsonl` begins at the
+file's current end, so a restart does not replay what the service already
+stored. It begins at byte 0 only for a file that does not exist yet, so the
+session line a new file opens with is read. It starts again from the top
+when the file shrinks, or when its first line changes, which is how a new game
+session shows itself even if the file has grown back past the old size. One file outlives the map it started on, so every row
 records its map epoch, and every read covers the current map only: the
 epoch of the newest row. An earlier map's rows, chat included, are never
 read again, even when a force or a player has the same name. When the
@@ -297,6 +320,19 @@ status is judged against history as it stood before the status call went
 out, so a line the service stored while the call was out never makes the
 status look like a drop.
 
+Two guards keep another map's lines out of the epoch a status started. Lines
+the tail still owed from before the status call are stored unreadable until the
+epoch's own `session` line arrives or the tail has caught up to the point the
+status was taken: they are lost to every read, the price of not knowing whose
+they are. And a `session` line in the file that names a different map than the
+status did, while no line has yet named the status's map, is held: its rows
+stay unreadable until a status confirms that map. A status that names any
+other map leaves them unreadable for good.
+
+A question asked while `aab-answer-audience` is `asker` is stored private to
+that player, under the scope key `asker:<name>`, and its follow-ups stay in a
+session of their own. No other player's question reads it.
+
 A file from an older service is migrated on the first start, in place: every
 row gets its epoch and who may read it. The 21,554 rows of a
 live server's month took about 0.4 seconds. A chat line logged before lines
@@ -306,6 +342,19 @@ public. An answer row is as private as its question in the same epoch, and
 unreadable when that question is not there. No tool reply carries a row id
 or a question id: both count up across every channel, so their gaps would
 count another channel's private rows.
+
+The history tools are `recent_events`, `last_event`, `count_events`,
+`recent_chat` and `catch_up`. `recent_events` takes `event` (one kind, or
+several separated by commas), `player`, `force`, `since_minutes` or
+`since_tick`, and `limit`. `count_events` takes `event`, `player`, `force`
+and `since_tick`. On the event tools `force` is an optional filter, and
+leaving it out covers every force; on a game tool the service fills the
+asker's force in. A kind that has no rows on this map comes back as an error
+that lists the kinds the map has, with counts, so a misspelling is plain.
+When a `force` filter hides some of a player's rows, the reply says so. The
+kinds are `player_joined`, `player_left`, `player_died`, `research_finished`,
+`rocket_launched`, `console_chat`, `question`, `answer`, `question_dropped`
+and `session`.
 
 ## What the log says
 
@@ -396,6 +445,58 @@ lines to look at when a question cost more than expected.
   for any tool call over 100 ms.
 - `idle, 12 questions answered` every five minutes with nothing to do.
 
+## Deadlines, spend and shutdown
+
+- **One question has a deadline.** `agent.question_timeout` covers the
+  briefing, every model round and every tool together: 90 seconds, or 10
+  minutes with Ollama, and at least 10 seconds. Past it the asker gets "That
+  took too long, so I stopped", and the next question starts on time. One slow
+  question never holds the queue behind it.
+- **The daily spend survives a restart.** `agent.max_cost_per_day` counts a
+  rolling day, and the service writes that spend to `agent.daily_spend_path`
+  after every question, so a restart does not give the day's budget back. The
+  hourly quotas are not saved: they start again at every start.
+- **A model with no price is a loud warning.** With `model.provider:
+  anthropic` and a `model.id` this build has no price for, every question
+  counts as $0 and `max_cost_per_day` cannot stop anything. The service says
+  so in a `WARNING` line at every start rather than refusing to run. Route the
+  model through OpenRouter, which reports its own cost, or use an id the
+  build knows. A direct Anthropic model honours `model.timeout`.
+- **A question that crashes is not retried for ever.** A panic while
+  answering is recovered, logged with its stack, and the asker gets a notice.
+  A question lost to an outage is run again at most twice, then answered with
+  a notice instead.
+- **Shutdown finishes what is paid for.** On a stop the service delivers an
+  answer it has already paid for and starts no new question.
+- **A dropped question is loud.** When the companion's ring is full of
+  unanswered questions, it drops the oldest and writes `question_dropped`;
+  the service logs a `WARNING`, which means it fell far behind.
+- **Player text is quoted in the log**, so a name or question cannot forge a
+  line.
+
+### What it writes, and who can read it
+
+| file | holds | mode |
+|---|---|---|
+| `history.path` (SQLite) | every chat line, question and event of the maps it has seen, private ones included | `0600` |
+| `agent.daily_spend_path` | the rolling day's spend | `0600` |
+| the log file (`log_file`) | what the log says above | `0600` |
+| the ledger, `ledger.dir`, one file a day | one record per question and per round | `0600`, a new directory `0700` |
+
+A ledger question record also carries `command` when the line was a command
+instead of a question (`help`, `top`, `card`, `new`, `sessions` or `empty`),
+and `toast` (`first_rocket`, `rockets` or `first_tech`) when it was a model
+toast that nobody asked. A command runs no model round, and a toast has no
+asker and belongs to no session.
+
+A ledger question record carries a `run_id` that its rounds share, because
+question ids repeat across re-runs and maps. A round carries
+`submit_refusals`, each with the `args` the model sent, clipped to about a
+kilobyte, and `salvaged` when an answer was taken after its text was moved to
+the right field. A tool call carries `not_run` (`repeat`, `last_round` or
+`cut_off`) when it was never dispatched, and `refunded` when it ran but the
+round's byte budget refused the result. `aab stats` reads these files.
+
 ## Other subcommands
 
 ```sh
@@ -440,6 +541,81 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
 }
 ```
 
+## What a player can type
+
+The service reads the line, so the grammar can grow without a mod release.
+
+| line | what it does |
+|---|---|
+| `/ask <question>` | asks, in the session for its scope |
+| `/ask new [question]` | starts a fresh session, and asks in it when a question follows |
+| `/ask #name <question>` | asks in a named session others can join |
+| `/ask sessions` | lists the open sessions in the asker's scope |
+| `/ask help`, `?` or `commands` | lists what can be typed, to the asker alone |
+| `/ask top <metric> [item]` | ranks a metric across forces, for example `top rockets` or `top item_made iron-plate` |
+| `/ask card [force]` | one force at a glance; your own force when none is named |
+
+`help`, `top` and `card` are free commands: no model round, no cost. A line
+must be exactly one of these forms, so `top 5 reasons my base is slow` and
+`help me find iron` go to the model as questions. A line after `new` is
+always a question.
+
+`top` calls the companion's `sweep` tool with a limit of 10 and shows the
+rows it returns as a table, with the metric, subject and unit in the title. A
+metric name it does not know is retried once against the metrics the
+companion listed (two words joined, a hyphen for an underscore, a plural for a
+singular); if that fails the player gets the companion's reason and the list
+of metrics. `card` calls `force_card`. It needs a companion with that tool and
+`sweep`; against an older one the player is told the server's mod is too old
+for the command.
+
+`top` and `card` each take one slot from the asker's hourly quota and one from
+the server's (`agent.questions_per_player_per_hour`,
+`agent.questions_per_hour`), because they make the game do work. `help` reads
+nothing and takes no slot. Each writes one ledger question record with
+`command` set.
+
+## Milestone toasts
+
+A toast is one unprompted line for the whole server, with no question, asker
+or session. The service sends one when a force launches its first rocket, or
+its 10th, 100th or 1,000th, or when a force is the first on the map to
+finish a headline technology.
+
+| Key | Env var | Default |
+|---|---|---|
+| `toasts.mode` | `AAB_TOASTS_MODE` | `plain` |
+| `toasts.max_per_hour` | `AAB_TOASTS_MAX_PER_HOUR` | `6` |
+| `toasts.technologies` | `AAB_TOASTS_TECHNOLOGIES` (comma-separated) | `*-science-pack`, `rocket-silo`, `space-platform`, `planet-discovery-*` |
+| `toasts.when_empty` | `AAB_TOASTS_WHEN_EMPTY` | `false` |
+
+- `mode: plain` sends a fixed sentence, such as `<force> launched its first
+  rocket.` `mode: model` asks the model for one line in the server's voice,
+  and sends the plain sentence when the model fails, takes more than 15
+  seconds, or answers with anything but one line. `mode: off` sends none.
+- A model toast is paid from `agent.max_cost_per_day` like any other round,
+  and is refused when the day's budget is spent, in which case the plain
+  sentence goes out. It does not count against the hourly question quotas.
+- `technologies` are glob patterns on technology names. An empty list turns
+  the technology toasts off and keeps the rocket ones.
+- `max_per_hour` is a rolling hour; a toast over it is dropped with a log
+  line. `0` means the default, and a negative value is refused.
+- `when_empty: true` toasts with nobody online. It is for checking a test
+  server.
+
+The service stays silent, and says why in one `toast: dropped ...` log line,
+when the event is older than five game minutes, belongs to another map than
+the one history reads, nobody is online, the companion is out of reach, or the
+hourly cap is reached. It never announces something that happened before it
+started: only events that arrive after the history tailer has caught up
+count, so a restart repeats nothing. At most one toast goes out per poll
+tick.
+
+A toast needs a companion with the `say` op, and prints only while the
+in-game setting `aab-allow-say` is on. Turn it off in Settings, Mod settings,
+Map, to silence the bot until someone asks. The service sees `bad_op`, logs
+that it is staying quiet, and stops trying until it reconnects.
+
 ## How a question is answered
 
 1. The poll loop picks up a question with its force, its scope and the
@@ -460,7 +636,9 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
    before the model is asked anything, on its own two-second budget
    (docs/design/phase4-spec.md section 3). It rides in the user turn beside
    the question, so a good share of questions ("who's online", "what time is
-   it") never need a tool call at all. A slow or failed attempt is best
+   it") never need a tool call at all. The companion pages its lists, and
+   the briefing follows `next_offset` for up to four pages a section; a section
+   still cut after that is left out. A slow or failed attempt is best
    effort: the question answers exactly as it would without one. Chat, here
    and in every history tool, is only what the question's scope may read: a
    private channel's lines reach a question asked in that same channel and
@@ -470,14 +648,28 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
 5. The model gets the rules, every tool the server exposes plus
    `submit_answer`, the session so far, the briefing and the question. It
    calls tools; a round's calls run at once. A tool that fails becomes a
-   failed tool result, never a failed question. A call to a name that is no
+   failed tool result, never a failed question, and a tool that panics fails
+   only its own read. A result longer than `max_tool_result_bytes` is cut and
+   ends with a `[cut: ...]` line that says how much was shown. The model is
+   told to ask for fewer rows or to page with `offset`. A read identical to one
+   already answered in the same question is not run again: the model is
+   pointed at the earlier result. A turn the model's output limit cut off
+   runs nothing, since a call in it may be half written. A call to a name that is no
    tool runs the one tool it can only mean: a prefix invented, doubled,
    dropped or wrong, or a name within two typed characters of exactly one
    tool. The ledger keeps the name asked for as `corrected_from`. A round whose results
    together would pass `max_round_tool_result_bytes` refuses whichever
    result would push it over, not the round: the results that already fit
-   are kept exactly as their tools returned them.
-6. `submit_answer` ends the loop. The artifact is checked against the
+   are kept exactly as their tools returned them, and a refused read does not
+   count against `max_tool_calls`. A `force` the model leaves out is filled
+   in with the asker's on game tools only.
+6. The last round is announced. After the results of the round before it, the
+   model reads "One turn is left" and is asked to answer with what it has.
+   On the final round the service forces `submit_answer` where the route
+   supports it, runs no read, and takes an answer sent beside reads. The
+   token budget counts what the question adds, not the fixed rules and tool
+   list on a cold cache.
+7. `submit_answer` ends the loop. The artifact is checked against the
    caps: a summary of 3 lines, a list of 10 items, a table of 5 columns by
    8 rows, a comparison of 5 rows, 320 characters a cell and 12,000 bytes
    in all. An answer over a cap goes back to the model, naming what is
@@ -494,20 +686,28 @@ curl -s -H "Authorization: Bearer $AAB_CONTROL_TOKEN" http://127.0.0.1:8090/v1/s
    awaiting the player's reply: its idle window widens to `clarify_idle`
    until the next question lands in it, so the follow-up is not left
    talking to a session that already closed.
-7. Anything else that can end a question ends it with an artifact too: a
-   round cap, a token budget, a tool-call cap, a quota, a model that stops
-   talking or fails. A refusal prints to the asker alone. A model that
+   An answer whose text arrived in the wrong field of its shape is repaired,
+   and the ledger notes it as `salvaged`. If the model sends the same answer
+   twice, refused for the same reason, the question ends with a notice that
+   says the answer could not be put into a form the game can show.
+8. Anything else that can end a question ends it with an artifact too: a
+   round cap, a token budget, a tool-call cap, a quota, the question deadline,
+   a model that stops talking or fails. A refusal prints to the asker alone. A model that
    fails with no answer in hand gives the asker's hourly slot back, but the
    rounds it already ran still count toward `max_cost_per_day`.
-8. The rendered answer is what the session keeps for the next question.
+9. The session keeps what the player actually saw. The service records the
+   answer when it is made, and corrects it once delivery says what came out:
+   an answer the companion refused is replaced by the notice sent instead, and
+   one that was never delivered is dropped.
 
 ## Building and testing
 
 ```sh
 make service     # build service/aab in Docker
-make test        # gofmt, go vet, go test in Docker
+make test        # gofmt (fails on any unformatted file), go vet, go test in Docker
 make lua-test    # the companion's fake-game suites
 make e2e         # a real headless server, the service on the fake model, every scenario
+python3 tests/realsave/run.py --save <your save>   # checks against a real save, see tests/realsave/README.md
 ```
 
 `CGO_ENABLED=0` throughout: the history store is pure-Go SQLite, so the

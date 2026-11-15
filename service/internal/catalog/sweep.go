@@ -58,14 +58,15 @@ func mustFindRankTool() func(context.Context, json.RawMessage) (json.RawMessage,
 // already carried survives untouched. On anything that does not clear the
 // gate below, rankSweep returns raw exactly as it received it.
 func rankSweep(ctx context.Context, raw json.RawMessage) json.RawMessage {
-	rows, ok := sweepRankableRows(raw)
+	rows, better, ok := sweepRankableRows(raw)
 	if !ok {
 		return raw
 	}
 
 	args, err := json.Marshal(struct {
-		Rows []rankRow `json:"rows"`
-	}{rows})
+		Rows           []rankRow `json:"rows"`
+		HigherIsBetter bool      `json:"higher_is_better"`
+	}{rows, better != "lower"})
 	if err != nil {
 		return raw
 	}
@@ -93,7 +94,13 @@ func rankSweep(ctx context.Context, raw json.RawMessage) json.RawMessage {
 	if err != nil {
 		return raw
 	}
-	marginJSON, err := marshalNoEscape(verdict.Margin)
+	margin := verdict.Margin
+	if strings.HasSuffix(verdict.Leader, " tied") {
+		// The companion rounds a figure before it ships, so equal cells may
+		// differ underneath. Say that instead of claiming a true tie.
+		margin += " as reported; the figures were rounded for the reply"
+	}
+	marginJSON, err := marshalNoEscape(margin)
 	if err != nil {
 		return raw
 	}
@@ -150,51 +157,61 @@ type rankRow struct {
 //     per the contract, with no rows: "A refusal is
 //     {"sweep_v":1, "found": false, ...} with no rows")
 //   - cols is exactly ["name", "value"]
+//   - better is absent, "higher" or "lower" (absent means higher; the
+//     companion may say "lower" for a metric where less is better)
 //   - rows is non-empty and every row is a two-element array of one
 //     non-empty string followed by one number
 //
 // Anything else, including a reply that decodes fine but fails just one of
 // these, reports false and rankSweep leaves the reply exactly as it arrived.
-func sweepRankableRows(raw json.RawMessage) ([]rankRow, bool) {
+func sweepRankableRows(raw json.RawMessage) ([]rankRow, string, bool) {
 	var env struct {
 		SweepV *int              `json:"sweep_v"`
 		Found  *bool             `json:"found"`
+		Better *string           `json:"better"`
 		Cols   []string          `json:"cols"`
 		Rows   []json.RawMessage `json:"rows"`
 	}
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, false
+		return nil, "", false
 	}
 	if env.SweepV == nil || *env.SweepV != 1 {
-		return nil, false
+		return nil, "", false
 	}
 	if env.Found != nil && !*env.Found {
-		return nil, false
+		return nil, "", false
 	}
 	if !sameCols(env.Cols, sweepCols) {
-		return nil, false
+		return nil, "", false
+	}
+	better := "higher"
+	if env.Better != nil {
+		better = *env.Better
+		if better != "higher" && better != "lower" {
+			return nil, "", false
+		}
 	}
 	if len(env.Rows) == 0 {
-		return nil, false
+		return nil, "", false
 	}
 
 	rows := make([]rankRow, 0, len(env.Rows))
 	for _, r := range env.Rows {
 		var cells []json.RawMessage
 		if err := json.Unmarshal(r, &cells); err != nil || len(cells) != 2 {
-			return nil, false
+			return nil, "", false
 		}
 		var name string
 		if err := json.Unmarshal(cells[0], &name); err != nil || name == "" {
-			return nil, false
+			return nil, "", false
 		}
 		value, ok := numberCell(cells[1])
 		if !ok {
-			return nil, false
+			return nil, "", false
 		}
 		rows = append(rows, rankRow{Name: name, Value: value})
 	}
-	return rows, true
+	return rows, better, true
 }
 
 func sameCols(got, want []string) bool {

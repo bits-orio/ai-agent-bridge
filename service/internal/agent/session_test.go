@@ -1,9 +1,14 @@
 package agent
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/bits-orio/ai-agent-bridge/service/internal/chatscope"
+	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
 )
 
 var t0 = time.Date(2026, 9, 10, 18, 0, 0, 0, time.UTC)
@@ -177,5 +182,92 @@ func TestASessionNameNeverJoinsTheScopeKey(t *testing.T) {
 	}
 	if got, fresh, _ := s.open("guild", "iron", t0.Add(3*time.Minute), false); fresh || len(got) != 1 {
 		t.Errorf("ending the other channel's session ended guild's #iron: fresh=%v got=%+v", fresh, got)
+	}
+}
+
+// A16 (review findings). record makes a session when open never did (the
+// question's session idled out or was ended while it ran), and that path
+// must hold the live-session cap too, not just open.
+func TestRecordHoldsTheLiveSessionCap(t *testing.T) {
+	s := newSessions(SessionCaps{})
+	for i := 0; i < maxLiveSessions+25; i++ {
+		at := t0.Add(time.Duration(i) * time.Second)
+		s.record("global", "n"+strings.Repeat("x", i), ex("Alice", "q", "a", at), false)
+	}
+	if n := len(s.byKey); n > maxLiveSessions {
+		t.Errorf("live sessions = %d, want at most %d", n, maxLiveSessions)
+	}
+	if _, ok := s.byKey[sessionID{"global", "n"}]; ok {
+		t.Error("the longest-idle session should have gone first")
+	}
+}
+
+// A11 (review findings). The session holds what the player saw. When the
+// answer never reached them, the exchange goes; when the companion refused
+// it and a notice went out instead, the notice is what the session keeps.
+func TestAmendSessionForgetsOrReplacesTheExchange(t *testing.T) {
+	answer := func(a *Agent, id int64, lines ...string) Result {
+		t.Helper()
+		a.mdl = &scriptedModel{steps: []model.Step{submitStep("s", map[string]any{"shape": "summary", "lines": lines})}}
+		res, err := a.Answer(context.Background(), Question{ID: id, Text: fmt.Sprintf("question %d", id), PlayerIndex: player(1)}, nil)
+		if err != nil {
+			t.Fatalf("answer: %v", err)
+		}
+		return res
+	}
+	earlier := func(a *Agent) []Exchange {
+		got, _, _ := a.sess.open(chatscope.GlobalKey, "", a.now(), false)
+		return got
+	}
+
+	a := New(nil, caps())
+	kept := answer(a, 1, "first answer")
+	lost := answer(a, 2, "never delivered")
+	if !a.AmendSession(lost, nil) {
+		t.Fatal("AmendSession found no exchange for a question that recorded one")
+	}
+	got := earlier(a)
+	if len(got) != 1 || got[0].Answer != "first answer" {
+		t.Fatalf("session = %+v, want only the delivered exchange", got)
+	}
+
+	refused := answer(a, 3, "the companion refused this")
+	shown := Notice(LevelWarning, "That answer could not be shown.")
+	if !a.AmendSession(refused, &shown) {
+		t.Fatal("AmendSession found no exchange to amend")
+	}
+	got = earlier(a)
+	if len(got) != 2 || got[1].Answer != shown.Plain() || got[1].Question != "question 3" {
+		t.Fatalf("session = %+v, want the notice recorded as the answer to question 3", got)
+	}
+
+	// The exchange is found by question, not by position: amending one that
+	// is no longer last touches only it, and amending twice is harmless.
+	if !a.AmendSession(kept, nil) || a.AmendSession(kept, nil) {
+		t.Error("AmendSession should forget the exchange once and then find nothing")
+	}
+	if got = earlier(a); len(got) != 1 || got[0].Question != "question 3" {
+		t.Errorf("session = %+v, want question 3 alone", got)
+	}
+
+	// A result that never recorded an exchange, a command or a refusal, is a
+	// no-op.
+	if a.AmendSession(Result{}, nil) {
+		t.Error("AmendSession amended something for a result with no exchange")
+	}
+}
+
+// An ask-back the player never saw must not hold the session open waiting
+// for their reply.
+func TestAmendSessionClearsAnUnseenAskBack(t *testing.T) {
+	a := New(&scriptedModel{steps: []model.Step{submitStep("s", map[string]any{"shape": "notice", "text": "Which surface?", "level": "confirmation"})}}, caps())
+	res, err := a.Answer(context.Background(), Question{ID: 1, Text: "where is it", PlayerIndex: player(1)}, nil)
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	a.AmendSession(res, nil)
+	live := a.sess.byKey[sessionID{chatscope.GlobalKey, ""}]
+	if live == nil || live.awaitingReply {
+		t.Errorf("session = %+v, want it live and not awaiting a reply to a question nobody saw", live)
 	}
 }

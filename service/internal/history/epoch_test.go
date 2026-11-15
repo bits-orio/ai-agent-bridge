@@ -258,8 +258,11 @@ func TestEveryHistoryReadStaysInTheCurrentEpoch(t *testing.T) {
 	if out := call(context.Background(), "catch_up", `{"since_tick":1}`); !strings.Contains(out, "NEW-tech") {
 		t.Errorf("catch_up since tick 1 = %q, want this map's research", out)
 	}
-	if got := call(context.Background(), "last_event", `{"event":"player_left"}`); got != "none recorded" {
-		t.Errorf("last_event(player_left) = %q, want none recorded: the only one is the old map's", got)
+	// The only player_left is the old map's, so on this map the kind was
+	// never recorded at all, and the kinds listed are this map's alone.
+	_, err := findTool(t, ts, "last_event").Call(context.Background(), json.RawMessage(`{"event":"player_left"}`))
+	if err == nil || !strings.Contains(err.Error(), `no events of kind "player_left"`) || strings.Contains(err.Error(), "player_left 1") {
+		t.Errorf("last_event(player_left) err = %v, want none recorded on this map: the only one is the old map's", err)
 	}
 }
 
@@ -278,7 +281,12 @@ func TestAnAnswerWithNoQuestionInItsEpochIsUnreadable(t *testing.T) {
 	for _, ctx := range []context.Context{context.Background(), scoped("team-4", true), scoped("team-9", true)} {
 		out, err := findTool(t, s.Tools(), "recent_events").Call(ctx, json.RawMessage(`{"event":"answer"}`))
 		if err != nil {
-			t.Fatalf("recent_events: %v", err)
+			// No answer this question may read: the kind reads as never
+			// recorded, which is the same zero rows.
+			if !strings.Contains(err.Error(), `no events of kind "answer"`) {
+				t.Fatalf("recent_events: %v", err)
+			}
+			continue
 		}
 		if _, rows := splitColumnar(t, out); len(rows) != 0 {
 			t.Errorf("scope %+v read an answer no question of this map owns: %v", chatscope.From(ctx), rows)

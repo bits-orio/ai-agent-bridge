@@ -3,12 +3,12 @@
 //
 // Prices are USD per million tokens, from the published list. A model this
 // table does not know prices at zero: a made-up number would be worse than an
-// obvious blank, and "fake" costs nothing by definition.
+// obvious blank, and "fake" costs nothing by definition. PriceKnown lets the
+// startup check refuse that blank where a daily budget depends on it.
 
 package agent
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -36,7 +36,8 @@ var prices = map[string]price{
 }
 
 // CostUSD prices one question's usage for one model id. Ids carrying a date
-// suffix, claude-haiku-4-5-20251001 for instance, match by prefix.
+// suffix, claude-haiku-4-5-20251001 for instance, match their family; any
+// other extension of a key (claude-opus-50) does not.
 //
 // The four counters are disjoint: the API reports a cached prefix only in
 // the cache counters, never in InputTokens as well, so each is priced once.
@@ -63,21 +64,39 @@ func CostUSD(name string, u model.Usage) float64 {
 	return (in + out + cached) / 1e6
 }
 
+// PriceKnown says whether CostUSD can price this provider's model. A
+// direct Anthropic id missing from the table costs zero, which blinds the
+// daily budget, so the startup check asks. OpenRouter reports what it
+// charged, and Ollama and the fake model cost nothing.
+func PriceKnown(provider, modelID string) bool {
+	if provider != "anthropic" {
+		return true
+	}
+	_, ok := priceFor(modelID)
+	return ok
+}
+
 func priceFor(name string) (price, bool) {
 	if p, ok := prices[name]; ok {
 		return p, true
 	}
-	// Longest prefix wins, so a longer id never matches a shorter family by
-	// accident.
-	keys := make([]string, 0, len(prices))
-	for k := range prices {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool { return len(keys[i]) > len(keys[j]) })
-	for _, k := range keys {
-		if strings.HasPrefix(name, k) {
-			return prices[k], true
+	for k, p := range prices {
+		if rest, found := strings.CutPrefix(name, k+"-"); found && isDate(rest) {
+			return p, true
 		}
 	}
 	return price{}, false
+}
+
+// isDate is the snapshot suffix of a dated model id: eight digits.
+func isDate(s string) bool {
+	if len(s) != 8 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

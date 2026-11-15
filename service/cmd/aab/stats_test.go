@@ -271,15 +271,15 @@ func TestQuestionTokenTotalsJoinsRoundsByQuestionID(t *testing.T) {
 		{QuestionID: 2, InputTokens: 50, CacheReadTokens: 50},
 	}
 	totals := questionTokenTotals(rounds)
-	ratio1, ok := totals[1].cacheHitRatio()
+	ratio1, ok := totals[runOf("", 1)].cacheHitRatio()
 	if !ok || round2(ratio1) != 0.75 { // 300/(100+300)
 		t.Errorf("question 1 ratio = %v ok=%v, want 0.75 true", ratio1, ok)
 	}
-	ratio2, ok := totals[2].cacheHitRatio()
+	ratio2, ok := totals[runOf("", 2)].cacheHitRatio()
 	if !ok || round2(ratio2) != 0.5 {
 		t.Errorf("question 2 ratio = %v ok=%v, want 0.5 true", ratio2, ok)
 	}
-	if _, ok := totals[3].cacheHitRatio(); ok {
+	if _, ok := totals[runOf("", 3)].cacheHitRatio(); ok {
 		t.Error("question with no rounds at all must report ok=false, not a zero ratio")
 	}
 }
@@ -612,4 +612,21 @@ func round2(f float64) float64 {
 
 func round4(f float64) float64 {
 	return float64(int(f*10000+0.5)) / 10000
+}
+
+// Two runs of one question id, a re-run after an outage: each question row
+// takes its own run's rounds when the ledger names the run, and falls back
+// to the question id for a ledger that does not.
+func TestQuestionRowsJoinRoundsByRunID(t *testing.T) {
+	qs := []ledger.QuestionRecord{{QuestionID: 3, RunID: "a-3"}, {QuestionID: 3, RunID: "b-3"}, {QuestionID: 4}}
+	rounds := []ledger.RoundRecord{
+		{QuestionID: 3, RunID: "a-3", InputTokens: 100, CacheReadTokens: 0},
+		{QuestionID: 3, RunID: "b-3", InputTokens: 0, CacheReadTokens: 100},
+		{QuestionID: 4, InputTokens: 50, CacheReadTokens: 50},
+	}
+	rows := questionRows(qs, rounds)
+	got := []float64{rows[0].CacheHit, rows[1].CacheHit, rows[2].CacheHit}
+	if !(got[0] == 0 && got[1] == 1 || got[0] == 1 && got[1] == 0) || got[2] != 0.5 {
+		t.Errorf("cache hits = %v, want 0 and 1 for the two runs of 3, 0.5 for 4", got)
+	}
 }

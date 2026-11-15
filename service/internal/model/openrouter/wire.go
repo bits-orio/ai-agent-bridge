@@ -15,7 +15,7 @@ type request struct {
 	Models            []string   `json:"models,omitempty"`
 	Messages          []message  `json:"messages"`
 	Tools             []toolDef  `json:"tools,omitempty"`
-	ToolChoice        string     `json:"tool_choice,omitempty"`
+	ToolChoice        any        `json:"tool_choice,omitempty"` // "auto", or an object naming a forced function
 	ParallelToolCalls *bool      `json:"parallel_tool_calls,omitempty"`
 	MaxTokens         int        `json:"max_tokens"`
 	Reasoning         *reasoning `json:"reasoning,omitempty"`
@@ -170,8 +170,10 @@ func (c *Client) systemCache() *cacheControl {
 
 // toMessages converts the conversation. A user turn's text becomes one
 // user message; each tool result becomes its own tool message, in order,
-// which is how the chat format wants results delivered. The last user text
-// part carries the per-round breakpoint.
+// which is how the chat format wants results delivered, and any text in the
+// same turn follows them as a user message. The last message of the request
+// carries the per-round breakpoint: the last user text part, or the last
+// tool message when the turn is only results.
 func toMessages(msgs []model.Message) []message {
 	var out []message
 	lastUser := -1
@@ -201,6 +203,15 @@ func toMessages(msgs []model.Message) []message {
 				text[len(text)-1].CacheControl = &cacheControl{Type: "ephemeral"}
 			}
 			out = append(out, message{Role: "user", Content: text})
+		} else if i == lastUser && len(out) > 0 && out[len(out)-1].Role == "tool" {
+			// From round 2 on the last user turn is only tool results, so
+			// there is no text part to mark. A tool message's content may be
+			// a parts array on routes that cache, which carries the
+			// breakpoint; every other tool message stays a plain string.
+			last := &out[len(out)-1]
+			if s, ok := last.Content.(string); ok && s != "" {
+				last.Content = []part{{Type: "text", Text: s, CacheControl: &cacheControl{Type: "ephemeral"}}}
+			}
 		}
 	}
 	return out

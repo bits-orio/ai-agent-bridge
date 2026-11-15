@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -69,6 +70,14 @@ type Options struct {
 type Client struct {
 	http *http.Client
 	opts Options
+	seq  atomic.Uint64 // numbers the call ids this client invents
+}
+
+// newCallID invents an id for a tool call the server sent without one. The
+// counter only grows, so no two calls of one client share an id, whatever
+// the rounds' token counts were.
+func (c *Client) newCallID() string {
+	return fmt.Sprintf("call_%d", c.seq.Add(1))
 }
 
 func New(opts Options) *Client {
@@ -106,7 +115,7 @@ func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, 
 		var resp response
 		status, err := c.do(ctx, http.MethodPost, "/api/chat", body, &resp)
 		if err == nil && status/100 == 2 && resp.Error == "" {
-			if wasCut(len(body), &resp) {
+			if wasCut(len(body), c.opts.NumCtx, &resp) {
 				return model.Step{}, fmt.Errorf("ollama: %s: the prompt (%d bytes) did not fit the %d-token context and Ollama cut it; raise ollama.num_ctx",
 					c.opts.Model, len(body), c.opts.NumCtx)
 			}
@@ -114,7 +123,7 @@ func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, 
 			for name, short := range shortNames(defs) {
 				full[short] = name
 			}
-			return fromResponse(&resp, full), nil
+			return fromResponse(&resp, full, c.newCallID), nil
 		}
 		timedOut := err != nil && ctx.Err() == nil && isTimeout(err)
 		retryable := timedOut || (err == nil && status/100 == 5)

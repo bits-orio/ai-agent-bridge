@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bits-orio/ai-agent-bridge/service/internal/model"
@@ -94,6 +95,9 @@ type Client struct {
 	http *http.Client
 	key  string
 	opts Options
+	// noForce is set once an upstream has refused a forced tool choice, so
+	// later questions send auto at once instead of paying the failed attempt.
+	noForce atomic.Bool
 }
 
 func New(apiKey string, opts Options) *Client {
@@ -116,7 +120,11 @@ func (c *Client) Name() string { return c.opts.Model }
 // tried once more after a second; anything else is the error, with
 // OpenRouter's own message in it.
 func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef) (model.Step, error) {
-	body, err := json.Marshal(c.request(system, msgs, defs))
+	return c.step(ctx, c.request(system, msgs, defs))
+}
+
+func (c *Client) step(ctx context.Context, req request) (model.Step, error) {
+	body, err := json.Marshal(req)
 	if err != nil {
 		return model.Step{}, fmt.Errorf("openrouter: %s: encode: %w", c.opts.Model, err)
 	}
@@ -125,6 +133,43 @@ func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, 
 		return model.Step{}, err
 	}
 	return fromResponse(resp), nil
+}
+
+// StepForced is Step with the named tool forced. Not every upstream behind a
+// route accepts a forced choice: when one refuses it the step is retried once
+// with auto, and this client stops forcing, since the refusal is a property of
+// the route and would be paid again on every question. Only a 400, 404 or 422
+// that names the tool choice (or says no endpoint supports it) counts; a 429
+// or 5xx says nothing about support and stays an error.
+func (c *Client) StepForced(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef, tool string) (model.Step, error) {
+	req := c.request(system, msgs, defs)
+	if tool == "" || len(defs) == 0 || c.noForce.Load() {
+		return c.step(ctx, req)
+	}
+	req.ToolChoice = map[string]any{"type": "function", "function": map[string]any{"name": tool}}
+	st, err := c.step(ctx, req)
+	if err != nil && refusesForcing(err) {
+		c.noForce.Store(true)
+		req.ToolChoice = "auto"
+		return c.step(ctx, req)
+	}
+	return st, err
+}
+
+// refusesForcing says whether err is an upstream declining a forced tool
+// choice rather than failing for some other reason.
+func refusesForcing(err error) bool {
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		return false
+	}
+	switch he.Status {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+	default:
+		return false
+	}
+	text := strings.ToLower(he.Text)
+	return strings.Contains(text, "tool_choice") || strings.Contains(text, "no endpoints found that support")
 }
 
 func (c *Client) send(ctx context.Context, body []byte) (*response, error) {

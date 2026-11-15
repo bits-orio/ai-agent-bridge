@@ -148,8 +148,11 @@ func TestAnswerReportsUnknownTool(t *testing.T) {
 }
 
 // A model that never submits runs out of rounds and answers with a notice.
+// It keeps asking the same thing, so the read runs once: every later ask is
+// answered from the first result, and the last round runs nothing.
 func TestAnswerExhaustsRounds(t *testing.T) {
-	ts := []tools.Tool{stubTool("probe", `{"ok":true}`, nil)}
+	rec := &recordingTool{}
+	ts := []tools.Tool{rec.tool("probe", tools.ObjectSchema(map[string]any{}), `{"ok":true}`)}
 	m := &scriptedModel{steps: []model.Step{toolStep("t1", "probe", map[string]any{})}}
 	c := caps()
 	c.MaxRounds = 3
@@ -164,6 +167,9 @@ func TestAnswerExhaustsRounds(t *testing.T) {
 	}
 	if res.Rounds != 3 || m.calls != 3 {
 		t.Errorf("rounds = %d and model calls = %d, want 3 and 3", res.Rounds, m.calls)
+	}
+	if _, runs := rec.seen(); runs != 1 {
+		t.Errorf("the repeated read ran %d times, want 1", runs)
 	}
 }
 
@@ -479,7 +485,7 @@ func TestSubmitToolIsAlwaysOffered(t *testing.T) {
 // are untrusted, and the answer goes through submit_answer.
 func TestSystemPromptWarnsAboutUntrustedResults(t *testing.T) {
 	q := Question{Text: "x", Force: "enemy", Asker: "player 1"}
-	system := systemPrompt("")
+	system := systemPrompt("", 6)
 	for _, want := range []string{"untrusted", SubmitTool} {
 		if !strings.Contains(system, want) {
 			t.Errorf("system prompt is missing %q:\n%s", want, system)

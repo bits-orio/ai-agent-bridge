@@ -75,6 +75,9 @@ func (r *runner) startAgain(st rpc.StatusReply, statusErr error) {
 	r.reset()
 	r.lost = false
 	r.pollFailing = false
+	if r.toasts != nil {
+		r.toasts.unsupported = false // a new connection may reach a companion that says
+	}
 	r.stats.SetConnected(true)
 }
 
@@ -120,6 +123,12 @@ func (r *runner) reset() {
 	r.after = 0
 	r.inFlight = map[int64]*delivery{}
 	r.agent.ForgetSessions()
+	// A toast queued before belongs to what the game was then.
+	if r.toasts != nil {
+		if n := r.toasts.feed.drop(); n > 0 {
+			log.Printf("toast: dropped %d waiting toast(s) with the rest of what the service held", n)
+		}
+	}
 }
 
 // reconnected reports whether the latest reply came over another RCON
@@ -140,7 +149,7 @@ func (r *runner) reconnected() bool {
 // reply that names no map leaves the last map named: a companion too old to
 // send one says nothing about which map the game is on.
 func (r *runner) see(st rpc.StatusReply) {
-	r.lastID, r.lastTick = st.LastID, st.Tick
+	r.lastID, r.lastTick, r.lastPlayers = st.LastID, st.Tick, st.PlayerCount
 	if st.ModVersion != "" {
 		r.modVersion = st.ModVersion
 	}

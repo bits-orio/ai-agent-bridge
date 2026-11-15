@@ -13,6 +13,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -31,18 +32,19 @@ func validate(a Artifact) (Artifact, error) {
 // clipToCaps is validate without the byte budget: the shape checked, every
 // cell flattened to one line, and every count and cell cut to its cap.
 func clipToCaps(a Artifact) (Artifact, error) {
+	a = dropBlank(a)
 	out := Artifact{Shape: a.Shape, Title: cell(a.Title), ToAsker: a.ToAsker}
 	switch a.Shape {
 	case ShapeSummary:
 		out.Lines = cells(a.Lines, MaxSummaryLines)
 		if len(out.Lines) == 0 {
-			return Artifact{}, fmt.Errorf("a summary needs at least one entry in lines")
+			return Artifact{}, errors.New(emptySummary)
 		}
 	case ShapeNotice:
 		out.Text = cell(a.Text)
 		out.Level = a.Level
-		if out.Text == "" {
-			return Artifact{}, fmt.Errorf("a notice needs text")
+		if !visible(out.Text) {
+			return Artifact{}, errors.New(emptyNotice)
 		}
 		if out.Level != "" && out.Level != LevelWarning && out.Level != LevelConfirmation {
 			return Artifact{}, fmt.Errorf("level %q is not a level, use warning or confirmation or leave it out", a.Level)
@@ -50,7 +52,7 @@ func clipToCaps(a Artifact) (Artifact, error) {
 	case ShapeList:
 		out.Items = cells(a.Items, MaxListItems)
 		if len(out.Items) == 0 {
-			return Artifact{}, fmt.Errorf("a list needs at least one entry in items")
+			return Artifact{}, errors.New(emptyList)
 		}
 	case ShapeTable:
 		out.Columns = cells(a.Columns, MaxTableColumns)
@@ -58,7 +60,7 @@ func clipToCaps(a Artifact) (Artifact, error) {
 			return Artifact{}, fmt.Errorf("a table needs at least one column name in columns")
 		}
 		for _, name := range out.Columns {
-			if name == "" {
+			if !visible(name) {
 				return Artifact{}, fmt.Errorf("every table column needs a name; one of them is empty")
 			}
 		}
@@ -71,7 +73,7 @@ func clipToCaps(a Artifact) (Artifact, error) {
 		if len(out.Columns) != 2 {
 			return Artifact{}, fmt.Errorf("a comparison needs exactly two column names in columns")
 		}
-		if out.Columns[0] == "" || out.Columns[1] == "" {
+		if !visible(out.Columns[0]) || !visible(out.Columns[1]) {
 			return Artifact{}, fmt.Errorf("a comparison's two column names must not be empty: name the two things compared, force names for forces")
 		}
 		out.Pairs = pairs(a.Pairs)
@@ -80,7 +82,7 @@ func clipToCaps(a Artifact) (Artifact, error) {
 		}
 	case ShapeArt:
 		out.Lines = artLines(a.Lines, MaxArtLines)
-		if len(out.Lines) == 0 {
+		if len(shown(out.Lines)) == 0 {
 			return Artifact{}, fmt.Errorf("art needs at least one line with something on it in lines")
 		}
 	default:
@@ -88,6 +90,15 @@ func clipToCaps(a Artifact) (Artifact, error) {
 	}
 	return out, nil
 }
+
+// The refusals for the three slips a weaker host makes most, each saying
+// exactly which field to fill and with what: "a summary needs at least one
+// entry in lines" alone was sent back six rounds running.
+const (
+	emptySummary = "a summary needs at least one entry in lines: put your sentences in `lines`, an array of strings, one sentence or two per entry"
+	emptyNotice  = "a notice needs text: put the one line to show in `text`, a string"
+	emptyList    = "a list needs at least one entry in items: put one entry per thing in `items`, an array of strings"
+)
 
 // tableRows cuts to the row cap and squares every row off against the
 // columns, padding short rows so the companion never indexes past the end.

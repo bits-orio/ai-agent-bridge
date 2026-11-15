@@ -13,6 +13,7 @@ package anthropic
 import (
 	"context"
 	"fmt"
+	"time"
 
 	sdk "github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -27,13 +28,19 @@ import (
 // budget in the config is the wider one.
 const DefaultMaxOutputTokens = 4096
 
+// DefaultTimeout bounds one request when the operator sets none; it is the
+// same figure the OpenRouter client defaults to.
+const DefaultTimeout = 120 * time.Second
+
 // Options is what the operator chose for the model, beyond the key.
 type Options struct {
 	Model     string
-	MaxOutput int    // output tokens per turn; zero or less means DefaultMaxOutputTokens
-	Thinking  string // "off" sends thinking disabled, "adaptive" sends adaptive, "model" or "" sends nothing
-	Effort    string // "" sends nothing; otherwise output_config.effort as given
-	CacheTTL  string // "1h" or "5m" for the rules-and-tools cache entry; "" means 5m
+	MaxOutput int           // output tokens per turn; zero or less means DefaultMaxOutputTokens
+	Thinking  string        // "off" sends thinking disabled, "adaptive" sends adaptive, "model" or "" sends nothing
+	Effort    string        // "" sends nothing; otherwise output_config.effort as given
+	CacheTTL  string        // "1h" or "5m" for the rules-and-tools cache entry; "" means 5m
+	Timeout   time.Duration // one request attempt; zero or less means DefaultTimeout
+	Endpoint  string        // API base URL; empty means the SDK default, set by tests
 }
 
 // Client answers one agent round through the Anthropic Messages API.
@@ -49,14 +56,32 @@ func New(apiKey string, opts Options) *Client {
 	if opts.MaxOutput <= 0 {
 		opts.MaxOutput = DefaultMaxOutputTokens
 	}
-	return &Client{api: sdk.NewClient(option.WithAPIKey(apiKey)), opts: opts}
+	if opts.Timeout <= 0 {
+		opts.Timeout = DefaultTimeout
+	}
+	// The SDK retries a timed-out request twice by default, which would
+	// make one hung server cost three timeouts. One retry matches the
+	// OpenRouter client.
+	reqOpts := []option.RequestOption{
+		option.WithAPIKey(apiKey),
+		option.WithRequestTimeout(opts.Timeout),
+		option.WithMaxRetries(1),
+	}
+	if opts.Endpoint != "" {
+		reqOpts = append(reqOpts, option.WithBaseURL(opts.Endpoint))
+	}
+	return &Client{api: sdk.NewClient(reqOpts...), opts: opts}
 }
 
 func (c *Client) Name() string { return c.opts.Model }
 
 // Step sends the whole conversation and returns the next assistant turn.
 func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef) (model.Step, error) {
-	resp, err := c.api.Messages.New(ctx, c.params(system, msgs, defs))
+	return c.send(ctx, c.params(system, msgs, defs))
+}
+
+func (c *Client) send(ctx context.Context, params sdk.MessageNewParams) (model.Step, error) {
+	resp, err := c.api.Messages.New(ctx, params)
 	if err != nil {
 		return model.Step{}, fmt.Errorf("anthropic: %s: %w", c.opts.Model, err)
 	}
@@ -65,6 +90,19 @@ func (c *Client) Step(ctx context.Context, system string, msgs []model.Message, 
 		StopReason: string(resp.StopReason),
 		Usage:      fromUsage(resp.Usage),
 	}, nil
+}
+
+// StepForced is Step with the named tool forced. The API rejects a forced
+// tool choice while thinking is on, and a Claude 5 model thinks when the
+// field is left out, so only Thinking "off" can force; every other setting
+// falls back to an ordinary step.
+func (c *Client) StepForced(ctx context.Context, system string, msgs []model.Message, defs []model.ToolDef, tool string) (model.Step, error) {
+	if c.opts.Thinking != "off" || tool == "" {
+		return c.Step(ctx, system, msgs, defs)
+	}
+	params := c.params(system, msgs, defs)
+	params.ToolChoice = sdk.ToolChoiceParamOfTool(tool)
+	return c.send(ctx, params)
 }
 
 // params is the whole request for one round.
