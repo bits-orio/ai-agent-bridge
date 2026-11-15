@@ -105,19 +105,32 @@ def write_config(run_root: Path, server: "rig.Server") -> Path:
           max_tokens_per_question: 20000
           session_idle: 3m
           questions_per_player_per_hour: 20
+          daily_spend_path: %s
 
         history:
           path: %s
 
+        ledger:
+          enabled: true
+          dir: %s
+
         control_api:
           addr: %s
+
+        # A headless run has nobody online, and a toast waits for someone to
+        # hear it; when_empty lets the toast scenario see one anyway.
+        toasts:
+          mode: plain
+          when_empty: true
         """
     ) % (
         time.strftime("%Y-%m-%dT%H:%M:%S"),
         server.rcon_port,
         server.events_file,
         POLL_INTERVAL_YAML,
+        run_root / "daily-spend.json",
         history_path,
+        run_root,
         CONTROL_API_ADDR,
     )
     cfg_path.write_text(content, encoding="utf-8")
@@ -135,6 +148,13 @@ def reset_history(run_root: Path) -> None:
     removed = []
     for suffix in ("", "-journal", "-wal", "-shm"):
         p = Path(str(base) + suffix)
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+    # The rolling day's spend and the ledger are run state too: a spend left
+    # by the last run would count against this one, and the ledger scenarios
+    # read their rows back from files this run alone wrote.
+    for p in [run_root / "daily-spend.json", *run_root.glob("daily-spend.json.*"), *run_root.glob("ledger-*.jsonl")]:
         if p.exists():
             p.unlink()
             removed.append(p.name)
@@ -331,6 +351,7 @@ def main() -> int:
         mods_dir,
         {"aab-chat-prefix": rig.CHAT_PREFIX},
         version=rig.binary_version(headless_bin),
+        startup=rig.STARTUP_SETTINGS,
     )
     print("run.py: mods dir %s: %s" % (mods_dir, ", ".join("%s %s" % (m.name, m.version) for m in mods)))
     if provider is None:
@@ -376,6 +397,8 @@ def main() -> int:
             provider_iface=provider_iface,
             answer_timeout=args.answer_timeout,
             events_file=server.events_file,
+            ledger_dir=RUN_ROOT,
+            service_log=RUN_ROOT / "service.log",
             # scenario_last_death: once events.jsonl carries the death, give
             # the tailer and the poll loop (two independent tickers, both on
             # this same interval) a full interval plus margin to both catch

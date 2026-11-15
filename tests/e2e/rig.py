@@ -126,6 +126,12 @@ def ensure_mods_dir(mods_dir: Path, mods: List[ModLink]) -> Path:
 CHAT_PREFIX = "!ask "
 
 
+# Startup settings the harness runs with. aab-selftest-ops turns on the
+# companion's Phase 0 diagnostic ops (ping, big, write, pcall_test), which are
+# off in a real game and answer bad_op; a test rig is what they exist for.
+STARTUP_SETTINGS = {"aab-selftest-ops": True}
+
+
 def binary_version(binary: Path) -> tuple:
     """(main, major, minor) of a Factorio binary, from its own --version line
     ("Version: 2.0.77 (build ...)"). Falls back to 2.0.0 if that line ever
@@ -174,14 +180,15 @@ def _pt(value) -> bytes:
     raise TypeError("no PropertyTree encoding for %r" % (value,))
 
 
-def write_mod_settings(mods_dir: Path, runtime_global: dict, version: tuple = (2, 0, 0)) -> Path:
-    """Writes mods_dir/mod-settings.dat with runtime_global's {name: value}
-    pairs, the file a fresh map takes its runtime-global mod settings from.
-    Startup and per-user sections are written empty; every setting not named
-    here keeps its prototype default."""
+def write_mod_settings(mods_dir: Path, runtime_global: dict, version: tuple = (2, 0, 0),
+                       startup: Optional[dict] = None) -> Path:
+    """Writes mods_dir/mod-settings.dat with runtime_global's and startup's
+    {name: value} pairs, the file a fresh map takes its mod settings from.
+    The per-user section is written empty; every setting not named here keeps
+    its prototype default."""
     main, major, minor = (list(version) + [0, 0, 0])[:3]
     tree = {
-        "startup": {},
+        "startup": {name: {"value": value} for name, value in (startup or {}).items()},
         "runtime-global": {name: {"value": value} for name, value in runtime_global.items()},
         "runtime-per-user": {},
     }

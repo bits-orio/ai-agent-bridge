@@ -64,10 +64,15 @@ class Ctx:
     # events.jsonl for this run (rig.Server.events_file), or None if the
     # caller never set one; scenario_last_death falls back to a fixed settle
     # window when it's absent.
+    ledger_dir: Optional[object] = None  # pathlib.Path holding the service's
+    # ledger-YYYY-MM-DD.jsonl files for this run (run.py points ledger.dir at
+    # its run root and clears it first), for the loop scenarios.
     tailer_settle_seconds: float = 0.9  # see scenario_last_death: how long
     # to wait, once events.jsonl carries the death, for the file tailer and
     # the poll loop (independent tickers, both on poll_interval) to both
     # catch up. run.py sets this from the interval it actually configured.
+    service_log: Optional[object] = None  # pathlib.Path of the service's
+    # own log for this run, for the toast scenario's "toast: said" line.
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +121,36 @@ def ask_via_remote(conn, text: str, player_index: Optional[int] = None, force: O
     if scope_lua is not None:
         fields.append("scope=%s" % scope_lua)
     lua = 'rcon.print(tostring(remote.call("ai-agent-bridge-v1","ask",{%s})))' % ", ".join(fields)
-    reply = conn.command("/sc " + lua)
-    return int(reply.strip())
+    return _ask_with_cap_wait(conn, lua, text)
+
+
+# The remote interface allows 60 asks per game minute, server-wide, and
+# answers nil over that (companion-mod/scripts/ask_rate.lua). The buckets are
+# whole game minutes, floor(tick / 3600), so a nil is cured by waiting for
+# the next one.
+GAME_MINUTE_TICKS = 3600
+ASK_CAP_RETRIES = 3
+ASK_CAP_WAIT_LIMIT = 150.0
+
+
+def _game_minute(conn) -> int:
+    return int(sc(conn, "rcon.print(game.tick)").strip()) // GAME_MINUTE_TICKS
+
+
+def _ask_with_cap_wait(conn, lua: str, text: str) -> int:
+    """Runs the ask call; on nil (the per-minute cap) waits for the next game
+    minute and tries again, a bounded number of times, then raises."""
+    for _ in range(ASK_CAP_RETRIES + 1):
+        reply = conn.command("/sc " + lua).strip()
+        if reply != "nil":
+            return int(reply)
+        minute = _game_minute(conn)
+        deadline = time.monotonic() + ASK_CAP_WAIT_LIMIT
+        while _game_minute(conn) == minute:
+            if time.monotonic() > deadline:
+                raise RpcError("remote ask of %r still refused: the game minute did not advance within %ss" % (text, ASK_CAP_WAIT_LIMIT))
+            time.sleep(1.0)
+    raise RpcError("remote ask of %r answered nil after %d waits for a new game minute" % (text, ASK_CAP_RETRIES))
 
 
 def latest_known_qid(conn) -> int:
@@ -1085,6 +1118,532 @@ def scenario_answer_large_table(ctx: Ctx) -> Tuple[Status, str]:
     ) % (command_len, qid, title)
 
 
+# ---------------------------------------------------------------------------
+# The review-fix round: setting-gated diagnostics, recipe_needs on another
+# planet, paging, remote-ask hardening, and the loop's own handling of what a
+# model sends.
+
+
+def scenario_selftest_ops_enabled(ctx: Ctx) -> Tuple[Status, str]:
+    """The Phase 0 diagnostic ops answer bad_op unless the startup setting
+    aab-selftest-ops is on. This rig turns it on (rig.STARTUP_SETTINGS), so a
+    ping must work and the setting must read back true. The setting-off case
+    needs a second server start and is covered by the Lua unit suite."""
+    value = sc(ctx.server_rcon, 'rcon.print(tostring(settings.startup["aab-selftest-ops"].value))').strip()
+    if value != "true":
+        return "FAIL", "settings.startup[aab-selftest-ops] reads %r, want true: mod-settings.dat did not take" % value
+    env = aab_rpc(ctx.server_rcon, "ping")
+    if not env.get("ok") or "tick" not in (env.get("r") or {}):
+        return "FAIL", "ping with aab-selftest-ops on did not answer: %r" % (env,)
+    return "PASS", "aab-selftest-ops reads true and ping answered %r" % (env.get("r"),)
+
+
+def _recipe_call(conn, iface: str, **args) -> dict:
+    env = aab_rpc(conn, "call", i=iface, f="recipe_needs", a=dict(force="player", **args))
+    if not env.get("ok"):
+        raise RpcError("recipe_needs %r failed: %r" % (args, env))
+    return env.get("r") or {}
+
+
+def scenario_recipe_needs_assumed(ctx: Ctx) -> Tuple[Status, str]:
+    """recipe_needs with neither per_min nor machines assumes one machine
+    each and says so in `assumed`, and a reply with a rate has no such key.
+    Iron plate on a fresh force is one stone furnace: speed 1 on a 3.2 s
+    recipe, 18.75 plates a minute and as much iron ore."""
+    conn = ctx.server_rcon
+    iface = _companion_iface(conn)
+    if iface is None:
+        return "FAIL", "no provider in the providers reply lists recipe_needs"
+    try:
+        bare = _recipe_call(conn, iface, items=["iron-plate"])
+        rated = _recipe_call(conn, iface, items=["iron-plate"], per_min=[60])
+    except RpcError as e:
+        return "FAIL", str(e)
+    if not bare.get("assumed"):
+        return "FAIL", "a call with no rate carries no \"assumed\": %r" % (bare,)
+    if bare.get("mode") != "machines":
+        return "FAIL", "a call with no rate should work in machines mode, got mode=%r: %r" % (bare.get("mode"), bare)
+    target = (bare.get("targets") or [{}])[0]
+    if target.get("item") != "iron-plate" or _figure(target.get("machines")) != 1.0:
+        return "FAIL", "the assumed target is not one machine of iron plate: %r" % (target,)
+    if "no_modules_or_beacons" not in (bare.get("approx") or []):
+        return "FAIL", "approx lacks no_modules_or_beacons: %r" % (bare.get("approx"),)
+    ore = _figure((_item_row(bare.get("raw"), "iron-ore") or {}).get("per_min"))
+    if ore is None or abs(ore - 18.75) > 1e-6:
+        return "FAIL", "one stone furnace should take 18.75 iron ore a minute, got %r: %r" % (ore, bare.get("raw"))
+    if "assumed" in rated:
+        return "FAIL", "a call with per_min still carries \"assumed\": %r" % (rated,)
+    if "no_modules_or_beacons" not in (rated.get("approx") or []):
+        return "FAIL", "approx lacks no_modules_or_beacons on a rated call: %r" % (rated.get("approx"),)
+    return "PASS", "no rate: assumed=%r mode=machines, one furnace, 18.75 iron ore a minute; with per_min: no assumed key; approx=%r" % (
+        bare.get("assumed"), bare.get("approx"))
+
+
+def _json_text(value) -> str:
+    return json.dumps(value, sort_keys=True)
+
+
+def scenario_recipe_needs_vulcanus(ctx: Ctx) -> Tuple[Status, str]:
+    """The surface-aware pick (recipe_reach.lua): Vulcanus mines no iron ore
+    and its crushers cannot run (gravity), so 60 iron plates a minute there
+    go by the foundry and lava, never asteroid crushing; the same call on
+    Nauvis stays on the furnace and mined iron ore.
+
+    Creates the planet's surface (LuaPlanet::create_surface) and enables every
+    recipe for the player force, since a fresh force has neither foundry nor
+    casting; both are put back however the checks went."""
+    conn = ctx.server_rcon
+    iface = _companion_iface(conn)
+    if iface is None:
+        return "FAIL", "no provider in the providers reply lists recipe_needs"
+    before = _enabled_recipes(conn)
+    made = sc(conn, 'if game.surfaces["vulcanus"] then rcon.print("had") else '
+                    'rcon.print(tostring(game.planets["vulcanus"].create_surface() ~= nil)) end').strip()
+    if made not in ("true", "had"):
+        return "FAIL", "could not create the vulcanus surface: %r" % made
+    sc(conn, "game.forces.player.enable_all_recipes()")
+    problem = None
+    try:
+        args = dict(items=["iron-plate"], per_min=[60])
+        vul = _recipe_call(conn, iface, surface="vulcanus", **args)
+        nau = _recipe_call(conn, iface, surface="nauvis", **args)
+        vtext, ntext = _json_text(vul), _json_text(nau)
+        for banned in ("crusher", "metallic-asteroid-crushing"):
+            if banned in vtext:
+                problem = "on vulcanus the plan uses %s: %s" % (banned, vtext)
+                break
+        else:
+            machines = {r.get("machine") for r in as_list(vul.get("rows"))}
+            recipes = {str(r.get("recipe")) for r in as_list(vul.get("rows"))}
+            if "foundry" not in machines or not any(name.startswith("casting") for name in recipes):
+                problem = "on vulcanus the plan is not the foundry casting route (machines %r, recipes %r): %s" % (sorted(machines, key=str), sorted(recipes), vtext)
+            elif _item_row(vul.get("raw"), "lava") is None:
+                problem = "on vulcanus lava is not among the raw inputs: %s" % vtext
+            elif _item_row(vul.get("raw"), "iron-ore") is not None:
+                problem = "on vulcanus iron ore is still a raw input, and none is mined there: %s" % vtext
+        if problem is None:
+            nrows = as_list(nau.get("rows"))
+            furnaces = ("stone-furnace", "steel-furnace", "electric-furnace")
+            if not any(r.get("item") == "iron-plate" and r.get("machine") in furnaces and r.get("recipe") == "iron-plate" for r in nrows):
+                problem = "on nauvis iron plate is not made in a furnace by its own recipe: %s" % ntext
+            elif _item_row(nau.get("raw"), "iron-ore") is None or "foundry" in ntext:
+                problem = "on nauvis the plan is not furnaces on mined iron ore: %s" % ntext
+    finally:
+        restored = _restore_recipes(conn, before)
+        sc(conn, 'if game.surfaces["vulcanus"] and "%s" == "true" then game.delete_surface("vulcanus") end' % ("true" if made == "true" else "false"))
+    if restored:
+        return "FAIL", "the player force's recipes were not put back: %s" % restored
+    if problem:
+        return "FAIL", problem
+    return "PASS", "vulcanus: foundry and casting from lava, no crushing, no iron ore; nauvis: furnace on mined iron ore"
+
+
+def _surfaces_call(conn, iface: str, **args) -> dict:
+    env = aab_rpc(conn, "call", i=iface, f="list_surfaces", a=dict(force="player", **args))
+    if not env.get("ok"):
+        raise RpcError("list_surfaces %r failed: %r" % (args, env))
+    return env.get("r") or {}
+
+
+def scenario_list_surfaces_paging(ctx: Ctx) -> Tuple[Status, str]:
+    """Lists are fitted to 3,800 bytes and paged. With 60 long-named surfaces
+    added, the default call must fit the budget and say where it stopped
+    (next_offset), and following next_offset must walk every surface exactly
+    once. A limit of 5 cuts at 5 and the last page has no next_offset."""
+    conn = ctx.server_rcon
+    iface = _companion_iface(conn)
+    if iface is None:
+        return "FAIL", "no provider in the providers reply lists list_surfaces"
+    prefix = "aab-e2e-paging-surface-with-a-long-name-"
+    sc(conn, 'for i = 1, 60 do game.create_surface("%s" .. string.format("%%02d", i)) end' % prefix)
+    try:
+        first = _surfaces_call(conn, iface)
+        size = len(json.dumps(first, separators=(",", ":")))
+        total = first.get("total")
+        if size > 3800:
+            return "FAIL", "the default reply is %d bytes, over the 3800-byte budget" % size
+        if not isinstance(total, int) or total < 61:
+            return "FAIL", "total is %r, want at least 61 surfaces (nauvis and the 60 added): %r" % (total, {k: v for k, v in first.items() if k != "surfaces"})
+        if not first.get("next_offset") or first.get("shown") != len(as_list(first.get("surfaces"))) or first["shown"] >= total:
+            return "FAIL", "a %d-surface list fits no more than 3800 bytes, so it must be cut with next_offset: %r" % (
+                total, {k: v for k, v in first.items() if k != "surfaces"})
+        seen, page, pages = [], first, 0
+        while True:
+            pages += 1
+            seen += [row["name"] for row in as_list(page.get("surfaces"))]
+            if not page.get("next_offset"):
+                break
+            if pages > 20:
+                return "FAIL", "paging did not end after 20 pages"
+            page = _surfaces_call(conn, iface, offset=page["next_offset"])
+        if len(seen) != total or len(set(seen)) != total:
+            return "FAIL", "following next_offset gave %d rows (%d distinct), want each of the %d surfaces once" % (len(seen), len(set(seen)), total)
+        if seen != sorted(seen):
+            return "FAIL", "pages do not continue in name order: %r" % seen[:10]
+        small = _surfaces_call(conn, iface, limit=5)
+        if small.get("shown") != 5 or small.get("next_offset") != 5:
+            return "FAIL", "limit=5 should show 5 and point at offset 5: %r" % ({k: v for k, v in small.items() if k != "surfaces"},)
+        tail = _surfaces_call(conn, iface, limit=5, offset=total - 2)
+        if tail.get("shown") != 2 or "next_offset" in tail:
+            return "FAIL", "the last page should hold the 2 remaining rows and no next_offset: %r" % ({k: v for k, v in tail.items() if k != "surfaces"},)
+    finally:
+        sc(conn, 'for i = 1, 60 do game.delete_surface("%s" .. string.format("%%02d", i)) end' % prefix)
+    return "PASS", "%d surfaces: first page %d rows in %d bytes with next_offset=%r; %d pages cover all of them once, in order; limit=5 and the short last page behave" % (
+        total, first["shown"], size, first["next_offset"], pages)
+
+
+def _remote_ask_raw(conn, fields_lua: str) -> str:
+    """The raw print of one remote ask, "nil" when it was refused."""
+    return sc(conn, 'rcon.print(tostring(remote.call("ai-agent-bridge-v1","ask",{%s})))' % fields_lua).strip()
+
+
+def scenario_remote_ask_hardening(ctx: Ctx) -> Tuple[Status, str]:
+    """A hostile mod's asks: a 100 KB force and a 100 KB scope key, and a
+    100 KB audience force, must not leave `poll` unable to answer, and the
+    question must still be answered. A private audience listing player
+    indexes -1 and 100000 (outside what the engine takes) must let the answer
+    through instead of bad_artifact. The strings are built inside the game, so
+    the RCON command stays short."""
+    conn = ctx.server_rcon
+    qids = []
+    for label, fields in (
+        ("force and key of 100 KB", 'text="hardening probe one", force=string.rep("f", 100000), '
+                                    'scope={key=string.rep("k", 100000), private=true}'),
+        ("audience force of 100 KB", 'text="hardening probe two", force="player", '
+                                     'scope={key="hardening-two", private=true, audience={force=string.rep("a", 100000)}}'),
+    ):
+        raw = _remote_ask_raw(conn, fields)
+        if raw == "nil":
+            return "FAIL", "the ask with a %s was refused outright (nil)" % label
+        qid = int(raw)
+        poll = aab_rpc(conn, "poll", after=qid - 1)
+        if not poll.get("ok"):
+            return "FAIL", "poll stopped answering after an ask with a %s: %r" % (label, str(poll)[:300])
+        if len(json.dumps(poll)) > 6000:
+            return "FAIL", "poll after an ask with a %s is %d bytes, the oversized field got through" % (label, len(json.dumps(poll)))
+        qids.append((label, qid))
+    for label, qid in qids:
+        try:
+            poll_for_answer(conn, qid, ctx.answer_timeout, ctx.poll_interval)
+        except (TimeoutError, RpcError) as e:
+            return "FAIL", "the question with a %s was never answered: %s" % (label, e)
+    again = aab_rpc(conn, "poll", after=0)
+    if not again.get("ok"):
+        return "FAIL", "poll after both answers is not ok: %r" % (str(again)[:300],)
+
+    raw = _remote_ask_raw(conn, 'text="hardening probe three", force="player", '
+                                'scope={key="hardening-three", private=true, audience={players={-1, 100000}}}')
+    if raw == "nil":
+        return "FAIL", "the ask with out-of-range audience indexes was refused (nil)"
+    qid = int(raw)
+    mine = "audience indexes outside the engine's range were accepted"
+    env = aab_rpc(conn, "answer", qid=qid, artifact={"shape": "summary", "lines": [mine]})
+    if not env.get("ok"):
+        return "FAIL", "answering a question whose audience lists -1 and 100000 was refused: %r" % (env,)
+    try:
+        entry = poll_for_answer(conn, qid, ctx.answer_timeout, ctx.poll_interval)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    return "PASS", "100 KB force, scope key and audience force: poll answered and both questions got answers; audience [-1, 100000]: answer accepted (qid=%d, lines=%r)" % (
+        qid, entry.get("lines"))
+
+
+def _ledger_rows(ctx: Ctx, qid: int, timeout: float = 8.0) -> Tuple[Optional[dict], List[dict]]:
+    """(question row, round rows) for one question id from this run's ledger.
+    The question row is written when the question ends, so this waits for it.
+    Question ids are unique within a run: the map and the ledger both start
+    fresh."""
+    import glob
+    import os
+    deadline = time.monotonic() + timeout
+    while True:
+        question, rounds = None, []
+        for path in sorted(glob.glob(os.path.join(str(ctx.ledger_dir), "ledger-*.jsonl"))):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue
+                    if row.get("question_id") != qid:
+                        continue
+                    if "round" in row:
+                        rounds.append(row)
+                    else:
+                        question = row
+        if question is not None or time.monotonic() > deadline:
+            return question, sorted(rounds, key=lambda r: r["round"])
+        time.sleep(0.2)
+
+
+def _loop_ask(ctx: Ctx, text: str, index: int) -> Tuple[int, dict]:
+    """Asks as a synthetic player of the player force, one index per loop
+    scenario, so no cooldown or hourly allowance is shared between them."""
+    qid = ask_via_remote(ctx.server_rcon, text, player_index=index, force="player")
+    return qid, poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+
+
+def scenario_loop_repeat(ctx: Ctx) -> Tuple[Status, str]:
+    """The model sends the same tool call on two rounds running. The second
+    is not run (the ledger marks it not_run: repeat), the model is told it
+    already has the result, and the question is still answered."""
+    if ctx.ledger_dir is None:
+        return "SKIP", "no ledger directory in this run"
+    try:
+        qid, entry = _loop_ask(ctx, "loop repeat what forces are there", 900011)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    question, rounds = _ledger_rows(ctx, qid)
+    calls = [(r["round"], c) for r in rounds for c in r.get("tool_calls") or []]
+    ran = [x for x in calls if not x[1].get("not_run")]
+    repeats = [x for x in calls if x[1].get("not_run") == "repeat"]
+    if len(ran) != 1 or len(repeats) != 1:
+        return "FAIL", "qid=%d wanted one call run and one marked not_run=repeat, got %r" % (qid, calls)
+    if repeats[0][0] <= ran[0][0] or repeats[0][1].get("name") != ran[0][1].get("name"):
+        return "FAIL", "qid=%d the repeat is not the same tool on a later round: %r" % (qid, calls)
+    lines = " | ".join(entry.get("lines") or [])
+    if "Same call as turn" not in lines:
+        return "FAIL", "qid=%d the answer does not carry the repeat note the model was given: %r" % (qid, entry)
+    if question is None or question.get("lookups") != 1:
+        return "FAIL", "qid=%d the question row should count one lookup, not two: %r" % (qid, question)
+    return "PASS", "qid=%d round %d ran %s, round %d was not_run=repeat, one lookup counted, answered %r" % (
+        qid, ran[0][0], ran[0][1].get("name"), repeats[0][0], entry.get("lines"))
+
+
+def scenario_loop_salvage(ctx: Ctx) -> Tuple[Status, str]:
+    """The model puts a summary's prose in text and sends no lines. The
+    player still gets that text, and the ledger round says it was salvaged."""
+    if ctx.ledger_dir is None:
+        return "SKIP", "no ledger directory in this run"
+    try:
+        qid, entry = _loop_ask(ctx, "loop salvage", 900012)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    if entry.get("shape") != "summary" or entry.get("lines") != [SALVAGE_TEXT]:
+        return "FAIL", "qid=%d the player should get exactly %r as a summary: %r" % (qid, SALVAGE_TEXT, entry)
+    question, rounds = _ledger_rows(ctx, qid)
+    salvaged = [r.get("salvaged") for r in rounds if r.get("salvaged")]
+    if len(salvaged) != 1 or "text" not in (salvaged[0].get("note") or ""):
+        return "FAIL", "qid=%d the ledger should carry one salvaged round noting text: %r" % (qid, rounds)
+    if question is None or question.get("rounds") != 1:
+        return "FAIL", "qid=%d the question should end in one round: %r" % (qid, question)
+    return "PASS", "qid=%d got %r; ledger salvaged note %r" % (qid, entry.get("lines"), salvaged[0].get("note"))
+
+
+def scenario_loop_unshowable(ctx: Ctx) -> Tuple[Status, str]:
+    """The model submits an empty summary twice. The question ends after two
+    rounds with the notice that names what went wrong, not after all six with
+    the generic rounds notice."""
+    if ctx.ledger_dir is None:
+        return "SKIP", "no ledger directory in this run"
+    try:
+        qid, entry = _loop_ask(ctx, "loop empty", 900013)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    lines = " ".join(entry.get("lines") or [])
+    if entry.get("shape") != "notice" or "could not put that answer into a form the game can show" not in lines:
+        return "FAIL", "qid=%d expected the unshowable-answer notice, got %r" % (qid, entry)
+    question, rounds = _ledger_rows(ctx, qid)
+    refusals = sum(len(r.get("submit_refusals") or []) for r in rounds)
+    if question is None or question.get("rounds") != 2 or len(rounds) != 2 or refusals != 2:
+        return "FAIL", "qid=%d expected 2 rounds with 2 refusals, got rounds=%r refusals=%d" % (
+            qid, (question or {}).get("rounds"), refusals)
+    return "PASS", "qid=%d ended after 2 rounds (agent.max_rounds is 6) with %r" % (qid, entry.get("lines"))
+
+
+def scenario_history_unknown_kind(ctx: Ctx) -> Tuple[Status, str]:
+    """count_events for a kind no map records answers with the kinds there
+    are, instead of a count of 0 the model would read as a fact."""
+    try:
+        qid, entry = _loop_ask(ctx, "unknown kind of event: how many restarts", 900014)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    problem = real_answer_problem(entry)
+    if problem:
+        return "FAIL", "qid=%d answer is not real tool data: %s: %r" % (qid, problem, entry)
+    lines = " ".join(entry.get("lines") or [])
+    if 'no events of kind "%s"' % UNKNOWN_KIND_EVENT not in lines:
+        return "FAIL", "qid=%d the answer does not say the kind is not recorded: %r" % (qid, entry)
+    if not re.search(r"kinds: (question|answer|session|player_joined|player_left|player_died|research_finished|rocket_launched|console_chat)\b", lines):
+        return "FAIL", "qid=%d the answer does not list the kinds there are: %r" % (qid, entry)
+    return "PASS", "qid=%d answered %r" % (qid, entry.get("lines"))
+
+
+# ---------------------------------------------------------------------------
+# Free commands (top, card, help) and milestone toasts. The commands never
+# reach the model, so each asks as its own synthetic player index (they still
+# count against the hourly quota) and checks the ledger says zero rounds.
+
+
+def _command_ask(ctx: Ctx, text: str, index: int) -> Tuple[int, dict, Optional[dict]]:
+    qid = ask_via_remote(ctx.server_rcon, text, player_index=index, force="player")
+    entry = poll_for_answer(ctx.server_rcon, qid, ctx.answer_timeout, ctx.poll_interval)
+    question = None
+    if ctx.ledger_dir is not None:
+        question, _ = _ledger_rows(ctx, qid)
+    return qid, entry, question
+
+
+def _command_ledger_problem(question: Optional[dict], command: str) -> Optional[str]:
+    if question is None:
+        return "no ledger row"
+    if question.get("command") != command or question.get("rounds") != 0 or question.get("cost") not in (0, 0.0):
+        return "ledger row should be command %r with 0 rounds and no cost: %r" % (command, question)
+    return None
+
+
+def _table_rows(entry: dict) -> List[List[str]]:
+    """A rendered table's data rows as cells: the title line, the column
+    line and a rule of dashes come first, then one line per row."""
+    lines = entry.get("lines") or []
+    rows = [_table_cells(line) for line in lines[2:]]
+    return [r for r in rows if not all(set(c) <= set("-+") for c in r)]
+
+
+def scenario_command_top_rockets(ctx: Ctx) -> Tuple[Status, str]:
+    """`top rockets` is a sweep the service makes itself: a table whose first
+    data row names a force, and no model round. A headless map has no player
+    on any force, so the player force is given a launch count first
+    (LuaForce::rockets_launched is writable; it raises no event, so no
+    toast), which puts it on the rockets sweep, and put back afterwards."""
+    conn = ctx.server_rcon
+    before = sc(conn, "rcon.print(game.forces.player.rockets_launched)").strip()
+    sc(conn, "game.forces.player.rockets_launched = 3")
+    try:
+        qid, entry, question = _command_ask(ctx, "top rockets", 900021)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    finally:
+        sc(conn, "game.forces.player.rockets_launched = %d" % int(before or 0))
+    if entry.get("shape") != "table":
+        return "FAIL", "qid=%d expected a table, got %r" % (qid, entry)
+    rows = _table_rows(entry)
+    if not rows or len(rows[0]) < 3 or rows[0][0] != "1" or rows[0][1] != "player" or rows[0][2] != "3":
+        return "FAIL", "qid=%d first data row should be 1 | player | 3: %r" % (qid, entry.get("lines"))
+    problem = _command_ledger_problem(question, "top")
+    if problem:
+        return "FAIL", "qid=%d %s" % (qid, problem)
+    return "PASS", "qid=%d first row %r, ledger rounds=0 lookups=%s" % (qid, rows[0], question.get("lookups"))
+
+
+def scenario_command_card(ctx: Ctx) -> Tuple[Status, str]:
+    """`card` is the asker's force at a glance; its technologies-researched
+    row must be the count the console reads for that force."""
+    conn = ctx.server_rcon
+    want = sc(conn, "local n = 0 for _, t in pairs(game.forces.player.technologies) do if t.researched then n = n + 1 end end rcon.print(n)").strip()
+    try:
+        qid, entry, question = _command_ask(ctx, "card", 900022)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    if entry.get("shape") != "table":
+        return "FAIL", "qid=%d expected a table, got %r" % (qid, entry)
+    row = next((r for r in _table_rows(entry) if r and r[0] == "technologies researched"), None)
+    if row is None or len(row) < 2 or row[1] != want:
+        return "FAIL", "qid=%d technologies researched should be %s: %r" % (qid, want, entry.get("lines"))
+    problem = _command_ledger_problem(question, "card")
+    if problem:
+        return "FAIL", "qid=%d %s" % (qid, problem)
+    return "PASS", "qid=%d technologies researched %s, as the console counts" % (qid, want)
+
+
+def scenario_command_help(ctx: Ctx) -> Tuple[Status, str]:
+    try:
+        qid, entry, question = _command_ask(ctx, "help", 900023)
+    except (TimeoutError, RpcError) as e:
+        return "FAIL", str(e)
+    lines = " | ".join(entry.get("lines") or [])
+    if entry.get("shape") != "list" or "top" not in lines or "card" not in lines:
+        return "FAIL", "qid=%d expected a list naming top and card, got %r" % (qid, entry)
+    problem = _command_ledger_problem(question, "help")
+    if problem:
+        return "FAIL", "qid=%d %s" % (qid, problem)
+    return "PASS", "qid=%d %d help lines" % (qid, len(entry.get("lines") or []))
+
+
+def _events_after(ctx: Ctx, offset: int) -> List[dict]:
+    rows = []
+    with open(str(ctx.events_file), "rb") as f:
+        f.seek(offset)
+        for line in f.read().decode("utf-8", "replace").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    return rows
+
+
+def _wait_event(ctx: Ctx, offset: int, match, timeout: float) -> Optional[dict]:
+    deadline = time.monotonic() + timeout
+    while True:
+        for row in _events_after(ctx, offset):
+            if match(row):
+                return row
+        if time.monotonic() > deadline:
+            return None
+        time.sleep(0.2)
+
+
+TOAST_TECH = "logistic-science-pack"
+QUIET_TECHS = ["automation", "logistics", "electronics", "turrets"]
+
+
+def scenario_toast_first_research(ctx: Ctx) -> Tuple[Status, str]:
+    """The first force to finish a headline technology gets one toast: the
+    companion's say op logs a say line in its event file, and the service
+    logs what it said. A technology outside the headline list gets none.
+    Set from the console with LuaTechnology::researched = true, which raises
+    on_research_finished (by_script true); the companion logs that event,
+    the tailer ingests it live, and the next tick sends the toast. The
+    harness config sets toasts.when_empty, since nobody is online here."""
+    if ctx.events_file is None:
+        return "SKIP", "no events file in this run"
+    conn = ctx.server_rcon
+    quiet = next((t for t in QUIET_TECHS if sc(conn, "rcon.print(tostring(game.forces.player.technologies[%s].researched))" % lua_str(t)).strip() == "false"), None)
+    if sc(conn, "rcon.print(tostring(game.forces.player.technologies[%s].researched))" % lua_str(TOAST_TECH)).strip() != "false":
+        return "FAIL", "%s is already researched on the player force; the scenario needs it fresh" % TOAST_TECH
+    if quiet is None:
+        return "FAIL", "every quiet technology %r is already researched" % QUIET_TECHS
+    offset = ctx.events_file.stat().st_size
+    try:
+        sc(conn, "game.forces.player.technologies[%s].researched = true" % lua_str(TOAST_TECH))
+        finished = _wait_event(ctx, offset, lambda r: r.get("event") == "research_finished" and (r.get("data") or {}).get("tech") == TOAST_TECH, 5.0)
+        if finished is None:
+            return "FAIL", "setting researched raised no research_finished line for %s in the event file" % TOAST_TECH
+        said = _wait_event(ctx, offset, lambda r: r.get("event") == "say", ctx.answer_timeout)
+        if said is None:
+            return "FAIL", "no say line in the event file after %s was researched" % TOAST_TECH
+        log_line = None
+        if ctx.service_log is not None:
+            deadline = time.monotonic() + 5.0
+            while log_line is None and time.monotonic() < deadline:
+                text = ctx.service_log.read_text(encoding="utf-8", errors="replace")
+                log_line = next((l for l in text.splitlines() if "toast: said first_tech" in l and TOAST_TECH in l), None)
+                time.sleep(0.2)
+            if log_line is None:
+                return "FAIL", "the event file has a say line but the service log has no 'toast: said first_tech' line for %s" % TOAST_TECH
+
+        offset2 = ctx.events_file.stat().st_size
+        sc(conn, "game.forces.player.technologies[%s].researched = true" % lua_str(quiet))
+        if _wait_event(ctx, offset2, lambda r: r.get("event") == "research_finished" and (r.get("data") or {}).get("tech") == quiet, 5.0) is None:
+            return "FAIL", "no research_finished line for %s" % quiet
+        # Several polls of both tickers: a toast would have gone out by now.
+        time.sleep(max(3.0, ctx.tailer_settle_seconds * 4))
+        extra = [r for r in _events_after(ctx, offset2) if r.get("event") == "say"]
+        if extra:
+            return "FAIL", "%s is no headline technology but a say followed it: %r" % (quiet, extra)
+    finally:
+        sc(conn, "game.forces.player.technologies[%s].researched = false" % lua_str(TOAST_TECH))
+        if quiet is not None:
+            sc(conn, "game.forces.player.technologies[%s].researched = false" % lua_str(quiet))
+    return "PASS", "say %r after %s; service logged %r; nothing after %s" % (
+        said.get("data"), TOAST_TECH, (log_line or "").split("toast: ", 1)[-1], quiet)
+
+
+# These two mirror the fake model's script.go constants.
+SALVAGE_TEXT = "Salvaged by the loop from the text field."
+UNKNOWN_KIND_EVENT = "restart"
+
+
 @dataclass
 class Scenario:
     name: str
@@ -1210,6 +1769,15 @@ SCENARIOS: List[Scenario] = [
     Scenario("ask: where are the labs on nauvis", scenario_find_entities),
     Scenario("recipe_needs: 60 red science a minute, oracle and ask", scenario_recipe_needs),
     Scenario("recipe_needs: science belts, Pirion's three packs by machine count", scenario_recipe_needs_science_belts),
+    Scenario("selftest ops: on under aab-selftest-ops", scenario_selftest_ops_enabled),
+    Scenario("recipe_needs: no rate answers with assumed", scenario_recipe_needs_assumed),
+    Scenario("recipe_needs: iron plate on vulcanus and nauvis", scenario_recipe_needs_vulcanus),
+    Scenario("list_surfaces: fitted and paged", scenario_list_surfaces_paging),
+    Scenario("remote ask: 100 KB fields and odd audience indexes", scenario_remote_ask_hardening),
+    Scenario("loop: repeated tool call is not run", scenario_loop_repeat),
+    Scenario("loop: summary text in the wrong field is salvaged", scenario_loop_salvage),
+    Scenario("loop: empty answer twice ends in 2 rounds", scenario_loop_unshowable),
+    Scenario("history: unknown event kind lists the kinds", scenario_history_unknown_kind),
     Scenario("answer op: malformed artifact -> bad_artifact", scenario_answer_bad_artifact),
     Scenario("answer op: large table artifact accepted", scenario_answer_large_table),
     Scenario("chat prefix creates a question", scenario_chat_prefix, needs_client=True),
@@ -1220,6 +1788,10 @@ SCENARIOS: List[Scenario] = [
     Scenario("sessions: #named session", scenario_named_session),
     Scenario("chat scope: private question stays private", scenario_private_scope),
     Scenario("force labels: labels op and list_forces", scenario_labels),
+    Scenario("command: top rockets, no model round", scenario_command_top_rockets),
+    Scenario("command: card, technologies researched", scenario_command_card),
+    Scenario("command: help lists top and card", scenario_command_help),
+    Scenario("toast: first headline research, none for another", scenario_toast_first_research),
 ]
 
 

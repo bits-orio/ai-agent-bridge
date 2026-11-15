@@ -31,3 +31,7 @@ aab.effective.yaml
 # mods dir/mod-list, the generated aab.e2e.yaml and history.sqlite
 /tests/e2e/.run/
 /tests/e2e/__pycache__/
+
+# tests/realsave: the private server state for runs against a real save
+/tests/realsave/.run/
+/tests/realsave/__pycache__/
