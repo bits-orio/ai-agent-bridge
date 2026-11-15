@@ -154,10 +154,15 @@ function F.install(opts)
       ["aab-events-enabled"] = { value = true },
       ["aab-chat-prefix"]    = { value = "" },
       ["aab-answer-audience"] = { value = "server" },
+      ["aab-ask-hints"] = { value = "echo" },
       -- Off for the suite; the rate-limit section turns them on.
       ["aab-ask-cooldown-seconds"] = { value = 0 },
       ["aab-asks-per-minute"]      = { value = 0 },
       ["aab-personality"]          = { value = "" },
+      ["aab-allow-say"]            = { value = true },
+      -- Startup settings. The selftest ops are off by default, as shipped.
+      ["aab-claim-ask-command"]    = { value = true },
+      ["aab-selftest-ops"]         = { value = false },
     },
   }
 
@@ -181,7 +186,9 @@ function F.install(opts)
       if type(id) == "table" then item, quality = id.name, id.quality or "normal" end
       assert(type(item) == "string", "get_*_count wants an item prototype name")
       assert(S.quality_share[quality], "no quality prototype named " .. tostring(quality))
-      if S.last_stats_surface ~= "nauvis" then return 0 end
+      -- S.lifetime_surfaces: where the item counters are nonzero, nauvis
+      -- alone unless a suite adds one, so a rate read can be pruned there.
+      if not (S.lifetime_surfaces or { nauvis = true })[S.last_stats_surface] then return 0 end
       return (counts[item] or 0) * S.quality_share[quality]
     end
   end
@@ -279,7 +286,11 @@ function F.install(opts)
       if this.name ~= "nauvis" then return out end
       for _, e in ipairs(S.entities) do
         local by_real = filter.name == nil and filter.type == nil
-        local built = matches(filter.name, e.name) or matches(filter.type, e.type)
+        -- Filters combine with AND, as the engine's do: "If multiple filters are
+        -- specified, only entities matching all given filters are returned."
+        local built = (filter.name ~= nil or filter.type ~= nil)
+          and (filter.name == nil or matches(filter.name, e.name))
+          and (filter.type == nil or matches(filter.type, e.type))
         local ghost = matches(filter.ghost_name, e.ghost_name) or matches(filter.ghost_type, e.ghost_type)
         if by_real and (filter.ghost_name or filter.ghost_type) then by_real = false end
         local inside = true
@@ -467,6 +478,13 @@ function F.install(opts)
       one_thousand_hours = 8,
     },
     gui_type = { custom = 1 },
+    -- defines.entity_status: a subset of the real names (2.1.23), numbered
+    -- arbitrarily because machine_status maps the number back to its key.
+    entity_status = {
+      working = 1, normal = 2, no_power = 3, low_power = 4, no_minable_resources = 5,
+      no_ingredients = 6, full_output = 7, no_fuel = 8, item_ingredient_shortage = 9,
+      fluid_ingredient_shortage = 10, no_recipe = 11, missing_science_packs = 12,
+    },
     -- The nine LuaSpacePlatform states (2.0.77 docs). Values only have to be
     -- distinct, since platform_lookup.lua looks them up by identity, not by
     -- number.
@@ -600,7 +618,8 @@ function F.install(opts)
   -- engine refuses anything else, so this does too. S.settings is the store
   -- tests read and poke directly.
   S.setting_writes = {}
-  _G.settings = { global = setmetatable({}, {
+  -- LuaSettings::startup, read-only; the fake keeps both kinds in S.settings.
+  _G.settings = { startup = setmetatable({}, { __index = S.settings }), global = setmetatable({}, {
     __index = S.settings,
     __newindex = function(_, name, setting)
       local was = S.settings[name]
@@ -676,6 +695,11 @@ function F.install(opts)
     players = { bob, gone },
     -- LuaGameScript::get_player takes an index or a name.
     get_player = function(i)
+      -- The engine raises for a number outside uint (1..65536 here), it does
+      -- not answer nil; only an index nobody holds inside the range is nil.
+      if type(i) == "number" and (i < 1 or i > 65536 or i ~= math.floor(i)) then
+        error("Invalid player index " .. tostring(i))
+      end
       if i == 1 or i == "Bob" then return bob end
       if i == 2 or i == "Ann" then return gone end
       return nil
@@ -785,6 +809,20 @@ function F.install(opts)
           local by_precision = by_fluid[a.name] or {}
           local at = by_precision[a.precision_index] or { input = 0, output = 0 }
           return a.category == "input" and at.input or at.output
+        end,
+        -- Lifetime counters, a FluidID (bare name) each: the sum of every
+        -- window the fixture holds, nonzero wherever any window is.
+        get_input_count = function(name)
+          assert(type(name) == "string", "a fluid counter wants a bare prototype name")
+          local total = 0
+          for _, at in pairs(((S.fluid_flow[force_name] or {})[surface_name] or {})[name] or {}) do total = total + at.input end
+          return total
+        end,
+        get_output_count = function(name)
+          assert(type(name) == "string", "a fluid counter wants a bare prototype name")
+          local total = 0
+          for _, at in pairs(((S.fluid_flow[force_name] or {})[surface_name] or {})[name] or {}) do total = total + at.output end
+          return total
         end,
       }
     end
@@ -1050,8 +1088,9 @@ do
     { "assembling-machine-1", "assembling-machine", 0.5, { "crafting", "basic-crafting", "advanced-crafting" } },
     { "assembling-machine-2", "assembling-machine", 0.75, { "basic-crafting", "crafting", "advanced-crafting", "crafting-with-fluid" } },
     { "assembling-machine-3", "assembling-machine", 1.25, { "basic-crafting", "crafting", "advanced-crafting", "crafting-with-fluid" } },
-    { "stone-furnace", "furnace", 1, { "smelting" } },
-    { "steel-furnace", "furnace", 2, { "smelting" } },
+    -- The stone and steel furnaces burn fuel (data: energy_source type burner).
+    { "stone-furnace", "furnace", 1, { "smelting" }, { burner = true } },
+    { "steel-furnace", "furnace", 2, { "smelting" }, { burner = true } },
     { "electric-furnace", "furnace", 2, { "smelting" } },
     { "chemical-plant", "assembling-machine", 1, { "chemistry" } },
     { "oil-refinery", "assembling-machine", 1, { "oil-processing" } },
@@ -1105,11 +1144,13 @@ do
         -- LuaRecipePrototype::allowed_effects, dictionary[string -> boolean],
         -- optional: only a suite that asks for one gets it.
         allowed_effects = spec.allowed_effects,
+        -- LuaRecipePrototype::surface_conditions, optional array[SurfaceCondition].
+        surface_conditions = spec.surface_conditions,
         has_category = function(wanted)
           assert(type(wanted) == "string", "has_category wants a category name (called with a colon?)")
           return wanted == category
         end,
-      }, { main_product = true, allowed_effects = true })
+      }, { main_product = true, allowed_effects = true, surface_conditions = true })
       P.recipe[spec.name] = protos[spec.name]
       for force_name, state in pairs(S.recipe_state) do
         local on = (spec.enabled or {})[force_name]
@@ -1129,7 +1170,9 @@ do
       local fields = { name = name, valid = true, hidden = false, parameter = false,
                        items_to_place_this = { { name = name, count = 1 } } }
       for key, value in pairs(extra) do fields[key] = value end
-      entities[name] = strict("LuaEntityPrototype", fields)
+      -- surface_conditions and burner_prototype are optional on every
+      -- LuaEntityPrototype (runtime-api.json 2.1.23): nil when it has none.
+      entities[name] = strict("LuaEntityPrototype", fields, { surface_conditions = true, burner_prototype = true })
       P.entity[name] = entities[name]
       P.item[name] = { name = name, place_result = entities[name] }
     end
@@ -1144,6 +1187,11 @@ do
       local speed, flags = m[3], m[5] or {}
       place(m[1], { type = m[2], crafting_categories = categories,
                     hidden = flags.hidden == true, parameter = flags.parameter == true,
+                    -- flags.surface_conditions: array[SurfaceCondition]; flags.burner:
+                    -- a burner energy source, LuaBurnerPrototype, as the stone and
+                    -- steel furnaces have.
+                    surface_conditions = flags.surface_conditions,
+                    burner_prototype = flags.burner and { fuel_categories = { chemical = true } } or nil,
                     effect_receiver = { base_effect = { productivity = flags.productivity },
                                         uses_module_effects = true, uses_beacon_effects = true, uses_surface_effects = true },
                     get_crafting_speed = function(quality)
@@ -1170,6 +1218,20 @@ do
     end
     for _, ore in ipairs({ "iron-ore", "copper-ore", "coal", "stone", "uranium-ore" }) do
       S.add_resource(ore, { item(ore, 1) })
+    end
+    --- Something else a map generator places that can be mined by hand: a
+    --- rock, ruin or stromatolite (type "simple-entity"), a tree ("tree"),
+    --- a Gleba plant ("plant"), a fish ("fish"). Same MineableProperties
+    --- shape as a resource. Measured on 2.1.23: huge-volcanic-rock, a
+    --- simple-entity Vulcanus places, gives stone, iron-ore, copper-ore and
+    --- tungsten-ore.
+    function S.add_harvestable(name, entity_type, products)
+      for _, p in ipairs(products) do if p.name then register(p) end end
+      entities[name] = strict("LuaEntityPrototype", {
+        name = name, type = entity_type, valid = true, hidden = false, parameter = false,
+        mineable_properties = { minable = true, mining_time = 1, products = products },
+      })
+      P.entity[name] = entities[name]
     end
     -- data: crude-oil's minable result is the fluid, amount_min = amount_max = 10.
     S.add_resource("crude-oil", { fluid("crude-oil", nil, { amount_min = 10, amount_max = 10 }) })

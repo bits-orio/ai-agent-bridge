@@ -145,8 +145,10 @@ check("production_since sums consumed over both qualities, rounded",
 -- one lookup per quality, no samples.
 local whole = call("ai-agent-bridge-tools", "production_since",
   { force = "player", surface = "nauvis", item = "iron-plate", since_tick = 0 })
-check("production_since since 0 is exact and summed over qualities", whole.ok and whole.r.produced == 1500
-      and whole.r.consumed == 600 and whole.r.net == 900 and whole.r.method == "lifetime counters, exact"
+-- The method names its limit (review T7): lifetime counters are per
+-- surface, so the totals cover the surfaces that still exist.
+check("production_since since 0 reads lifetime counters, summed over qualities", whole.ok and whole.r.produced == 1500
+      and whole.r.consumed == 600 and whole.r.net == 900 and whole.r.method == "lifetime counters, surfaces that still exist"
       and whole.r.window == nil, F.encode(whole))
 -- No surface: every surface the force has made the item on, with a breakdown;
 -- the platform has never made any and is left out.
@@ -534,7 +536,7 @@ before = #S.printed
 local qid_echo = ask_cmd("what forces are there")
 check("a /ask question is echoed to its audience with the asker's name",
       #S.printed == before + 1 and S.printed[#S.printed].who == "*"
-      and S.printed[#S.printed].text:find("Bob asked: what forces are there", 1, true) ~= nil,
+      and S.printed[#S.printed].text:find("Bob asked with /ask: what forces are there", 1, true) ~= nil,
       S.printed[#S.printed].text)
 check("the echo carries the channel tag after the name",
       S.printed[#S.printed].text:find("^%[AI Agent Bridge%] %[color=[^%]]+%]%[GLOBAL%]%[/color%] Bob asked") ~= nil,
@@ -659,9 +661,18 @@ end
 local by_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "iron-gear-wheel" } })
 check("find_entities by product finds the machine whose recipe makes it", by_product.ok and by_product.r.total == 1
       and by_product.r.entities[1].recipe == "iron-gear-wheel" and by_product.r.entities[1].x == -24, F.encode(by_product))
-local no_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "military science" } })
+-- "military science" has one close match, military-science-pack, so it is
+-- used and the reply says so; "military gear" holds both words of nothing
+-- and only shares one, so it is suggested, never used.
+do
+  local one_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "military science" } })
+  check("a product with one close match is used, and resolved_from says so", one_product.ok and one_product.r.found == true
+        and one_product.r.product == "military-science-pack" and one_product.r.resolved_from.asked == "military science",
+        F.encode(one_product))
+end
+local no_product = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", product = "military gear" } })
 check("an unknown product suggests item names", no_product.ok and no_product.r.found == false
-      and no_product.r.suggestions[1] == "military-science-pack", F.encode(no_product))
+      and table.concat(no_product.r.suggestions, ","):find("military-science-pack", 1, true) ~= nil, F.encode(no_product))
 local no_filter = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis" } })
 check("no filter at all is an error in the tool's own words", not no_filter.ok and tostring(no_filter.m):find("at least one", 1, true) ~= nil, F.encode(no_filter))
 local ghosts = rpc({ op = "call", i = "ai-agent-bridge-tools", f = "find_entities", a = { force = "player", surface = "nauvis", recipe = "iron-chest" } })
@@ -1418,14 +1429,23 @@ check("a rounded figure is short on the wire",
 S.force.research_progress = 0.25
 
 -- ── the big selftest op is clamped ────────────────────────────────────
+-- The diagnostic ops are off as shipped (aab-selftest-ops); this one turns
+-- them on for the check and off again.
+S.rcon_replies = {}
+S.commands["aab-rpc"]({ parameter = F.encode({ v = 1, op = "big", kb = 1 }), tick = S.tick })
+check("big is bad_op while the aab-selftest-ops setting is off",
+      F.decode(S.rcon_replies[#S.rcon_replies]).e == "bad_op", S.rcon_replies[#S.rcon_replies])
+S.settings["aab-selftest-ops"].value = true
 S.rcon_replies = {}
 S.commands["aab-rpc"]({ parameter = F.encode({ v = 1, op = "big", kb = 1e9 }), tick = S.tick })
+S.settings["aab-selftest-ops"].value = false
 local raw = S.rcon_replies[#S.rcon_replies]
 check("big clamps kb to 4096", raw:find('"kb":4096') ~= nil and #raw < 5 * 1024 * 1024,
       #raw .. " bytes")
 
 -- ── poll and answers are bounded ──────────────────────────────────────
 local backlog = {}
+S.tick = S.tick + 60 * 60  -- a fresh minute: remote asks are capped at 60 a minute
 for i = 1, 20 do backlog[i] = ask_bob("backlog " .. i) end
 local default_page = rpc({ op = "poll", after = backlog[1] - 1 })
 check("poll defaults to 16 rows", #default_page.r == 16, #default_page.r)

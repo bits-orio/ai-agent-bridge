@@ -11,11 +11,17 @@
 -- the plates and drops the smallest trickles. Raw rows and targets are never
 -- cut. A raw row the game hands out, mined or pumped, says raw = "mined", and
 -- the recipes that could make it anyway, crushing or melting, stay in
--- alternatives whatever the cut. The whole reply stays under REPLY_BUDGET:
--- the service hands the model at most max_tool_result_bytes of a result,
--- 4096 unless the operator changes it, and cuts the rest mid-JSON. A reply
--- cut here instead stays whole JSON, keeps its targets and raw rows, and
--- says what it left out with total beside shown.
+-- alternatives whatever the cut. The whole reply stays under
+-- bounded.REPLY_BUDGET, the one budget every tool fits: the service hands
+-- the model at most max_tool_result_bytes of a result, 4096 unless the
+-- operator changes it, and cuts the rest mid-JSON. A reply cut here instead
+-- stays whole JSON, keeps its targets and raw rows, and says what it left
+-- out with total beside shown.
+--
+-- approx always says no_modules_or_beacons, since the figures count neither
+-- and the model is told never to work a ratio out itself, and no_fuel when
+-- a machine in the plan burns fuel the plan does not count. not_makeable
+-- names the items the walk could not get on the surface asked about.
 --
 -- The cut is found by encoding the finished reply for n rows, each with its
 -- alternatives, and searching for the largest n that fits. It used to set
@@ -32,7 +38,6 @@ local bounded      = require("scripts.tools.bounded")
 local machine_pick = require("scripts.tools.machine_pick")
 local yield        = require("scripts.tools.recipe_yield")
 
-local REPLY_BUDGET = 4000
 local SECONDS_PER_MINUTE = 60
 local OMITTED_WHEN_EMPTY = { "approx", "raw", "alternatives", "rows" }
 
@@ -164,11 +169,29 @@ local function alternatives_of(walk, kept, n)
   return out
 end
 
-local function approx_of(set)
+--- Whether some crafted item in the walk runs on a machine that burns fuel.
+local function burns_fuel(walk, ctx)
+  for _, node in ipairs(walk.nodes) do
+    if node.role == "craft" then
+      local machine = machine_pick.for_recipe(ctx, node.pick.proto)
+      if machine and machine.burner then return true end
+    end
+  end
+  return false
+end
+
+local function sorted_keys(set)
   local out = {}
-  for reason in pairs(set) do out[#out + 1] = reason end
+  for key in pairs(set) do out[#out + 1] = key end
   table.sort(out)
   return out
+end
+
+local function approx_of(walk, ctx)
+  local set = { no_modules_or_beacons = true }
+  for reason in pairs(walk.approx) do set[reason] = true end
+  if burns_fuel(walk, ctx) then set.no_fuel = true end
+  return sorted_keys(set)
 end
 
 local function belt_wire(belt)
@@ -200,19 +223,21 @@ end
 local function shaped(parts, n)
   local rows = bounded.cut(parts.rows, n)
   return without_empties({
-    found = true, force = parts.force, mode = parts.mode, belt = parts.belt,
-    productivity = parts.productivity, approx = parts.approx,
+    found = true, force = parts.force, mode = parts.mode, assumed = parts.assumed, belt = parts.belt,
+    productivity = parts.productivity, approx = parts.approx, not_makeable = parts.not_makeable,
+    resolved_from = parts.resolved_from,
     targets = parts.targets, raw = parts.raw,
     alternatives = alternatives_of(parts.walk, parts.kept, #rows),
     rows = rows, total = #parts.rows, shown = #rows,
   })
 end
 
---- The most rows that fit REPLY_BUDGET with their alternatives, by binary
+--- The most rows that fit bounded.REPLY_BUDGET with their alternatives, by binary
 --- search over the encoded reply, which only grows with each row; 0 when
 --- even the targets and raw rows alone do not fit.
 local function rows_that_fit(parts)
-  local function fits(n) return #helpers.table_to_json(shaped(parts, n)) <= REPLY_BUDGET end
+  local budget = bounded.REPLY_BUDGET
+  local function fits(n) return #helpers.table_to_json(shaped(parts, n)) <= budget end
   if fits(#parts.rows) then return #parts.rows end
   local low, high = 0, #parts.rows - 1
   while low < high do
@@ -229,12 +254,14 @@ function M.answer(input)
   local rows, kept = rows_of(walk, ctx, belt)
   local parts = {
     force = input.force.name, mode = input.mode, belt = belt_wire(belt), productivity = productivity_of(walk),
-    approx = approx_of(walk.approx), targets = targets_of(input.targets, walk, ctx), raw = raw_of(walk, belt),
-    walk = walk, kept = kept, rows = rows,
+    approx = approx_of(walk, ctx), targets = targets_of(input.targets, walk, ctx), raw = raw_of(walk, belt),
+    walk = walk, kept = kept, rows = rows, assumed = input.assumed, resolved_from = input.resolved_from,
+    not_makeable = next(walk.stuck) and sorted_keys(walk.stuck) or nil,
   }
   return shaped(parts, rows_that_fit(parts))
 end
 
-M.REPLY_BUDGET = REPLY_BUDGET
+-- Read through the module so a test that tightens bounded's budget sees it.
+setmetatable(M, { __index = function(_, key) if key == "REPLY_BUDGET" then return bounded.REPLY_BUDGET end end })
 
 return M

@@ -28,9 +28,11 @@ local M = {}
 
 M.manifest = {
   list_surfaces = {
-    desc = "Surfaces in the game: name, index, planet, this force's players on it, by name. A space platform also carries platform (its name), owner (the force that owns it), location (where it's stopped, left out while in flight) and state. Pass a name or index as another tool's surface. total beside shown says if there are more.",
+    desc = "Surfaces in the game by name: index, planet, this force's players on it (force_players counts offline ones too, force_players_online the connected). A platform row adds platform, owner, location (left out in flight) and state. Pass a name or index as another tool's surface.",
     params = {
-      limit = "integer rows, default " .. DEFAULT_SURFACES .. ", max " .. MAX_SURFACES,
+      limit  = "integer rows, default " .. DEFAULT_SURFACES .. ", max " .. MAX_SURFACES,
+      offset = bounded.OFFSET_PARAM,
+      kind   = "enum<all,planets,platforms> default all; platforms lists space platforms alone",
     },
   },
 }
@@ -41,33 +43,58 @@ local function planet_name(surface)
   return nil
 end
 
-local function list_surfaces(a)
-  local force = force_lookup.require_force(a.force)
-
-  local players_on = {}
+--- Players of `force` per surface index: every one it has had, and the
+--- connected ones. force.players includes players who are offline, so the
+--- first count alone overstated who is there now.
+local function players_by_surface(force)
+  local all, online = {}, {}
   for _, player in pairs(force.players) do
     local surface = player.surface
     if surface and surface.valid then
-      players_on[surface.index] = (players_on[surface.index] or 0) + 1
+      all[surface.index] = (all[surface.index] or 0) + 1
+      if player.connected then online[surface.index] = (online[surface.index] or 0) + 1 end
     end
   end
+  return all, online
+end
+
+local KINDS = { all = true, planets = true, platforms = true }
+
+--- Whether `surface` belongs in a listing of `kind`.
+local function of_kind(surface, kind)
+  if kind == "all" then return true end
+  local platform = platform_lookup.live(surface) ~= nil
+  return (kind == "platforms") == platform
+end
+
+local function list_surfaces(a)
+  local force = force_lookup.require_force(a.force)
+  local kind = a.kind == nil and "all" or a.kind
+  if not KINDS[kind] then error("kind must be all, planets or platforms", 0) end
+  local all, online = players_by_surface(force)
 
   -- Every space platform is a surface of its own, so a long-running save can
-  -- hold a hundred of them. Sorted, then cut.
+  -- hold a hundred of them. Sorted, then paged: platforms sort after planets,
+  -- and a cut with no way on hid exactly them.
   local rows = {}
   for _, surface in pairs(game.surfaces) do
-    local row = {
-      name = surface.name,
-      index = surface.index,
-      planet = planet_name(surface),
-      force_players = players_on[surface.index] or 0,
-    }
-    platform_lookup.merge_into(row, surface)
-    rows[#rows + 1] = row
+    if of_kind(surface, kind) then
+      local row = {
+        name = surface.name,
+        index = surface.index,
+        planet = planet_name(surface),
+        force_players = all[surface.index] or 0,
+        force_players_online = online[surface.index] or 0,
+      }
+      platform_lookup.merge_into(row, surface)
+      rows[#rows + 1] = row
+    end
   end
   bounded.by_name(rows)
-  local shown = bounded.fit(bounded.cut(rows, bounded.limit(a.limit, DEFAULT_SURFACES, MAX_SURFACES)))
-  return { force = force.name, total = #rows, shown = #shown, surfaces = shown }
+  local limit = bounded.limit(a.limit, DEFAULT_SURFACES, MAX_SURFACES)
+  return bounded.page(rows, a.offset, function(page)
+    return { force = force.name, surfaces = page }
+  end, limit)
 end
 
 M.functions = { list_surfaces = list_surfaces }

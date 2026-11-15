@@ -20,6 +20,7 @@
 -- list_players carries no surface for a player, only a force.
 
 local basics_tool = require("scripts.tools.basics")
+local pages = require("scripts.sweep.pages")
 local axes         = require("scripts.sweep.axes")
 
 local LIST_PLAYERS = basics_tool.functions.list_players
@@ -34,30 +35,16 @@ local M = {
 }
 
 function M.read(_ctx, axis, _a)
-  local reply = LIST_PLAYERS({ all = true })
-
-  -- The delegate sorts by PLAYER NAME and cuts at its own row cap before it
-  -- returns, so its rows are an alphabetical slice rather than the whole
-  -- roster. Counting that slice and then letting the ranker publish a leader
-  -- from it names the wrong team whenever the cut bites: the forces whose
-  -- players sort late simply are not in the sample.
-  --
-  -- This is the rule the briefing's own pl key already follows and the rule
-  -- rockets.lua was fixed for: a truncated set is refused whole rather than
-  -- ranked, because a ranking over a subset reads exactly like a ranking over
-  -- everything.
-  local total, shown = reply.total, reply.shown
-  if total and shown and shown < total then
-    return nil, {
-      reason = "list_players returned " .. shown .. " of " .. total ..
-               " players, so a ranking over them would name a leader from an alphabetical " ..
-               "slice rather than the whole roster: ask about one force with list_players",
-      shown = shown, total = total,
-    }
-  end
+  -- The delegate sorts by PLAYER NAME and pages its rows to the reply
+  -- budget, so one page is an alphabetical slice rather than the whole
+  -- roster, and a leader counted from it names the wrong team. Every page is
+  -- read (scripts/sweep/pages.lua), and a cut no page reaches past is still
+  -- refused whole rather than ranked.
+  local players, refusal = pages.collect(LIST_PLAYERS, { all = true }, "players", "list_players")
+  if not players then return nil, refusal end
 
   local by_cell, order = {}, {}
-  for _, row in ipairs(reply.players or {}) do
+  for _, row in ipairs(players) do
     local cell = axes[axis]({ force = row.force, player = row.name })
     if cell then
       if not by_cell[cell] then order[#order + 1] = cell end

@@ -59,7 +59,7 @@ check("the companion still has a manifest", mine.ok and mine.r.tools ~= nil, F.e
 local manifest_bytes = #F.encode(mine.r)
 print("STAGE5 sweep manifest op reply bytes: " .. manifest_bytes)
 check("the manifest still fits one reply with room to spare (CAPS.manifest = 32768)",
-      manifest_bytes < 16384, manifest_bytes)
+      manifest_bytes < 24576, manifest_bytes)
 
 local sweep_registry = require("scripts.sweep.registry")
 local sweep_desc = mine.r.tools.sweep.desc
@@ -130,11 +130,14 @@ check("item_rate without a subject is refused before any pass runs",
       and no_subject_rate.r.reason:find("subject") ~= nil, F.encode(no_subject_rate))
 
 -- fakegame's get_flow_count does not vary by surface (only the lifetime
--- get_input_count/get_output_count pair check S.last_stats_surface), so the
--- real fixture answers the same rate on nauvis and platform-1: 60 + 60*0.5
+-- get_input_count/get_output_count pair check S.last_stats_surface). The
+-- sweep reads a rate only where those lifetime counters are nonzero
+-- (scripts/sweep/scope.lua), so platform-1 is given lifetime counts here and
+-- the real fixture answers the same rate on nauvis and platform-1: 60 + 60*0.5
 -- input, 20 + 20*0.5 output, over the normal/uncommon qualities
 -- (S.quality_share). This is still a real two-row axis answer, just a tied
 -- one; the differently-valued stub below is what proves the sort.
+S.lifetime_surfaces = { nauvis = true, ["platform-1"] = true }
 local rate = call("sweep", { metric = "item_rate", subject = "iron-plate" })
 check("item_rate defaults to force+surface, two rows, tied at 90/min each",
       rate.ok and rate.r.axis == "force+surface"
@@ -177,6 +180,7 @@ production_tool.functions.item_rate = real_item_rate
 local rate_restored = call("sweep", { metric = "item_rate", subject = "iron-plate" })
 check("item_rate answers again once the delegate stops cutting",
       rate_restored.ok and rate_restored.r.found ~= false, F.encode(rate_restored))
+S.lifetime_surfaces = nil
 
 -- ── pollution: delegates to pollution once per surface, force is echoed ──
 -- Real fixture values differ by surface on their own (S.pollution: 1234.5
@@ -218,10 +222,12 @@ check("pollution answers again once the delegate stops cutting",
 -- platform-1, environment's own force[method] closures), so again both the
 -- happy path and the sort check in one.
 local evo = call("sweep", { metric = "evolution" })
-check("evolution defaults to force+surface, largest first",
+-- platform-1 is a space platform: no enemy evolves there, so its cell is
+-- left out before the cost is predicted rather than ranked as a 0.
+check("evolution defaults to force+surface, platforms left out",
       evo.ok and evo.r.axis == "force+surface"
       and row_num_eq(evo.r.rows[1], "player on nauvis", 0.42)
-      and row_num_eq(evo.r.rows[2], "player on platform-1", 0)
+      and evo.r.rows[2] == nil and evo.r.total == 1
       and evo.r.unit == "factor", F.encode(evo))
 
 local evo_no_force = call("sweep", { metric = "evolution", axis = "surface" })
@@ -230,10 +236,10 @@ check("evolution's surface axis needs a force to read across surfaces, and none 
       and evo_no_force.r.reason:find("force") ~= nil, F.encode(evo_no_force))
 
 local evo_surface = call("sweep", { metric = "evolution", axis = "surface", force = "player" })
-check("evolution's surface axis reads the one asking force across every surface",
+check("evolution's surface axis reads the one asking force across every planet",
       evo_surface.ok and evo_surface.r.axis == "surface"
       and row_num_eq(evo_surface.r.rows[1], "nauvis", 0.42)
-      and row_num_eq(evo_surface.r.rows[2], "platform-1", 0), F.encode(evo_surface))
+      and evo_surface.r.rows[2] == nil, F.encode(evo_surface))
 
 local evo_bad_axis = call("sweep", { metric = "evolution", axis = "player" })
 check("evolution does not sweep by player, and says which axes it does",
@@ -259,21 +265,23 @@ check("evolution answers again once the delegate stops cutting",
 -- answer with a real, sortable difference on the unstubbed fixture too.
 S.contents_reads = 0
 local robots = call("sweep", { metric = "robots" })
-check("robots sums logistic_robots, summed over both surfaces by default",
-      robots.ok and robots.r.axis == "force" and row_eq(robots.r.rows[1], "player", 125),
+-- robots counts both kinds: 120 + 5 logistic and 40 + 0 construction.
+check("robots sums logistic and construction robots: 165",
+      robots.ok and robots.r.axis == "force" and row_eq(robots.r.rows[1], "player", 165),
       F.encode(robots))
 local robots_cells = call("sweep", { metric = "robots", axis = "force+surface" })
-check("robots' force+surface axis keeps nauvis (125) and platform-1 (0) apart",
-      robots_cells.ok and row_eq(robots_cells.r.rows[1], "player on nauvis", 125)
-      and row_eq(robots_cells.r.rows[2], "player on platform-1", 0), F.encode(robots_cells))
+-- platform-1 has no logistic network, so its cell is never read.
+check("robots' force+surface axis has nauvis (165) and no row for platform-1, which has no network",
+      robots_cells.ok and row_eq(robots_cells.r.rows[1], "player on nauvis", 165)
+      and robots_cells.r.rows[2] == nil, F.encode(robots_cells))
 
 local networks = call("sweep", { metric = "networks" })
 check("networks counts logistics_summary's own whole total, summed over surfaces",
       networks.ok and row_eq(networks.r.rows[1], "player", 2), F.encode(networks))
 local networks_cells = call("sweep", { metric = "networks", axis = "force+surface" })
-check("networks' force+surface axis keeps nauvis (2) and platform-1 (0) apart",
+check("networks' force+surface axis has nauvis (2) and no row for platform-1",
       networks_cells.ok and row_eq(networks_cells.r.rows[1], "player on nauvis", 2)
-      and row_eq(networks_cells.r.rows[2], "player on platform-1", 0), F.encode(networks_cells))
+      and networks_cells.r.rows[2] == nil, F.encode(networks_cells))
 
 check("neither sweep read a network's contents: contents=false actually skipped get_contents",
       S.contents_reads == 0, S.contents_reads)
@@ -305,17 +313,24 @@ check("robots refuses when the delegate sends no whole total (an older companion
       and tostring(robots_old.r.reason):find("older") ~= nil, F.encode(robots_old))
 logistics_tool.functions.logistics_summary = function(a)
   return { found = true, force = a.force, surface = a.surface, total = 5, shown = 3,
-           logistic_robots_total = 25, construction_robots_total = 4,
+           logistic_robots_total = 25, construction_robots_total = 4, robots_total = 29,
            networks = { { logistic_robots = 10 } } }
 end
+-- Only nauvis has a network in the fixture, so only nauvis is asked.
 local robots_cut = call("sweep", { metric = "robots" })
-check("robots answers from the pre-cut total however many rows were shown: 25 + 25 over both surfaces",
+check("robots answers from the pre-cut total however many rows were shown: 29 on nauvis",
       robots_cut.ok and robots_cut.r.found ~= false
-      and row_eq(robots_cut.r.rows[1], "player", 50), F.encode(robots_cut))
+      and row_eq(robots_cut.r.rows[1], "player", 29), F.encode(robots_cut))
+local logistic_cut = call("sweep", { metric = "logistic_robots" })
+local construction_cut = call("sweep", { metric = "construction_robots" })
+check("logistic_robots and construction_robots read their own totals: 25 and 4",
+      logistic_cut.ok and row_eq(logistic_cut.r.rows[1], "player", 25)
+      and construction_cut.ok and row_eq(construction_cut.r.rows[1], "player", 4),
+      F.encode({ logistic_cut.r, construction_cut.r }))
 local networks_not_cut = call("sweep", { metric = "networks" })
-check("networks does not refuse on the same cut, reply.total is whole: 5 + 5 summed over both surfaces",
+check("networks does not refuse on the same cut, reply.total is whole: 5 on nauvis",
       networks_not_cut.ok and networks_not_cut.r.found ~= false
-      and row_eq(networks_not_cut.r.rows[1], "player", 10), F.encode(networks_not_cut))
+      and row_eq(networks_not_cut.r.rows[1], "player", 5), F.encode(networks_not_cut))
 logistics_tool.functions.logistics_summary = real_logistics_summary
 
 local robots_restored = call("sweep", { metric = "robots" })

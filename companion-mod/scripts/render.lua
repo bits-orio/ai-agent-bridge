@@ -23,6 +23,8 @@ local audience = require("scripts.audience")
 -- naming one of those must not reach it.
 local SHAPES = { summary = true, notice = true, list = true, table = true, comparison = true, art = true }
 
+local SESSION_NAME_MAX = 16
+
 local M = {}
 
 --- One artifact -> {shape, title, body, lines}. `body` is the shape's own
@@ -53,7 +55,11 @@ end
 local function session_marker(artifact)
   local session = type(artifact) == "table" and artifact.session or nil
   if type(session) ~= "table" or session.fresh ~= true then return nil end
-  if type(session.name) == "string" and session.name ~= "" then
+  -- The protocol is open, so the name is held to the charset the service
+  -- gives its own: anything else, a newline that would forge a second chat
+  -- line included, is shown without the name rather than repaired.
+  if type(session.name) == "string" and #session.name <= SESSION_NAME_MAX
+     and session.name:match("^[a-z0-9_%-]+$") then
     return "(new session #" .. session.name .. ")"
   end
   return "(new session)"
@@ -69,10 +75,23 @@ local function chat_text(question, artifact, rendered)
   return head .. ": " .. table.concat(rendered.lines, "\n")
 end
 
+--- Draws `artifact` into its lines without showing anyone anything. An
+--- error here is the artifact's: the `answer` op reports it as bad_artifact.
+function M.compose(artifact)
+  return compose(artifact)
+end
+
+--- Shows an already composed answer to the question's audience. Delivery
+--- never raises (scripts/audience.lua), so a failure of the game's printing
+--- is never mistaken for a bad artifact.
+function M.deliver(question, artifact, rendered)
+  audience.deliver(question, chat_text(question, artifact, rendered), artifact.to_asker == true)
+end
+
 --- Renders `artifact` for `question` (a row from scripts/questions.lua).
 function M.render(question, artifact)
   local rendered = compose(artifact)
-  audience.deliver(question, chat_text(question, artifact, rendered), artifact.to_asker == true)
+  M.deliver(question, artifact, rendered)
   return rendered
 end
 

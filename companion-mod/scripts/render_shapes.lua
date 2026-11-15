@@ -54,6 +54,11 @@ end
 -- tostring would print its heap address, which differs on every peer, and
 -- that string is stored on the question: mod storage would stop matching
 -- between the server and its clients and the next checksum would desync them.
+--- `v` as one line: control characters become a space.
+local function flatten(v)
+  return (tostring(v):gsub("%c+", " "))
+end
+
 local function line(v)
   if v == nil then return "" end
   local kind = type(v)
@@ -65,7 +70,7 @@ local function line(v)
   -- raw, so it is fixed before anything else is added. The labels and
   -- sprites decorated in here can carry a line past MAX_BYTES that the
   -- service kept within it, and fit_line never cuts inside one of their tags.
-  local flat = tostring(v):gsub("%c+", " ")
+  local flat = flatten(v)
   return fit_line(player_colors.decorate(labels.decorate(sprites.decorate(sprites.repair(flat)))))
 end
 
@@ -76,6 +81,13 @@ local function clip(t, n)
 end
 
 local M = {}
+
+--- Text of a player's own, as one plain line within the answer line's byte
+--- net: control characters flattened, nothing decorated. The question echo
+--- uses it, so it is held to the same net as what the bot says.
+function M.plain_line(v)
+  return fit_line(flatten(v))
+end
 
 --- The count caps by shape. The artifact check reads them so it judges an
 --- artifact by what the renderer would show of it.

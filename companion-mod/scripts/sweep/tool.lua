@@ -26,19 +26,15 @@ M.manifest = {
     -- is not registered or leave one out (the phase5 contract: "The tool's
     -- manifest description must GENERATE its metric vocabulary from the
     -- registry").
-    desc = "Which force, surface, platform or player has the most of something, in one call " ..
-           "instead of one per force. metric is one of: " .. registry.metric_line() ..
-           ". Another mod may declare more; an unrecognised name answers with every metric's card, theirs included. axis groups the rows; each metric's own list above is what it accepts, and its " ..
-           "first is the default when axis is left out. subject names the specific thing a " ..
-           "metric measures, an entity, item or fluid prototype name, e.g. lab or iron-plate; the " ..
-           "list above says which metrics need one. Rows sort largest value first. An unrecognised metric, or an axis a " ..
-           "metric does not sweep by, answers found=false with every metric's own card, so a " ..
-           "wrong guess recovers in one round instead of a one-line error.",
+    desc = "Which force, surface, platform or player has the most of something, in one call instead of one per force. metric, with the axes it groups by, the first the default: " ..
+           registry.metric_line() ..
+           ". Another mod may declare more. subject is the entity, item or fluid prototype a metric measures, e.g. lab or iron-plate. " ..
+           "Rows sort largest first. An unknown metric, or an axis a metric does not group by, answers found=false with every metric's card.",
     params = {
       metric  = "string! which metric to sweep; see desc for the full list",
-      axis    = "string group rows by force, surface, platform, player, or force+surface; default depends on the metric",
-      subject = "string what the metric measures, e.g. an entity, item or fluid prototype name; required by the metrics the desc marks needs subject",
-      window  = "string for a rate metric, the averaging window, one of " .. flow.window_names .. "; default one_minute",
+      axis    = "string force, surface, platform, player or force+surface; default is the metric's first",
+      subject = "string the entity, item or fluid prototype name a metric marked needs subject measures",
+      window  = "string averaging window for a rate metric, one of " .. flow.window_names .. "; default one_minute",
       limit   = "integer rows to return, default " .. envelope.DEFAULT_ROWS .. ", max " .. envelope.MAX_ROWS,
     },
   },

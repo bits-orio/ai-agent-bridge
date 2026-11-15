@@ -18,6 +18,8 @@ local ask_rate        = require("scripts.ask_rate")
 local personality     = require("scripts.personality")
 local home_force      = require("scripts.home_force")
 local text_clip       = require("scripts.text_clip")
+local render_shapes   = require("scripts.render_shapes")
+local ask_hints       = require("scripts.ask_hints")
 
 local RING_SIZE = 64
 
@@ -27,11 +29,16 @@ local RING_SIZE = 64
 -- so a long-winded asker still gets an answer to the start of what they typed.
 local MAX_TEXT_BYTES = 400
 
+-- Longest force name kept on a row. Past this it is clipped and then has to
+-- name a real force, so a hostile 100 KB string never reaches storage.
+local FORCE_NAME_BYTES = 64
+
 local M = {}
 
 function M.ensure_storage()
   storage.aab = storage.aab or {}
   storage.aab.q = storage.aab.q or { next_id = 1, ring = {} }
+  ask_hints.ensure_storage()
 end
 
 --- The chat scope, fixed when the question is made (docs/design/phase3-spec.md
@@ -42,11 +49,37 @@ end
 --- question from a player is resolved from the providers, and the rest are
 --- global.
 local function scope_of(spec, player, player_index, text)
-  if type(spec.scope) == "table" then return spec.scope end
+  -- A mod's own scope is cleaned the way a provider's answer is: a key past
+  -- the limit is refused whole, the tag is fitted, the audience checked.
+  if type(spec.scope) == "table" then return scope.sanitize(spec.scope, "ai-agent-bridge-v1 ask") end
   local line = type(spec.line) == "string" and spec.line or nil
   if line and player then return chat_visibility.scope_of_line(player, line) end
   if player_index then return scope.resolve(player_index, line or text) end
   return { key = scope.GLOBAL_KEY, private = false }
+end
+
+--- A force name from a caller, kept only when it is a string that names a
+--- force that exists: clipped first, so the lookup is never given a huge key.
+local function known_force(name)
+  if type(name) ~= "string" then return nil end
+  name = text_clip.bytes(name, FORCE_NAME_BYTES)
+  local force = game.forces[name]
+  if force and force.valid then return name end
+  return nil
+end
+
+--- Takes one row out of a full ring: the oldest answered one, which has
+--- nothing left to lose, and only when every row is waiting the oldest of
+--- them, which the service learns of from a `question_dropped` event
+--- because its answer to that question can no longer land.
+function M.evict(ring)
+  for i, q in ipairs(ring) do
+    if q.answered then table.remove(ring, i) return end
+  end
+  local dropped = table.remove(ring, 1)
+  log("[ai-agent-bridge] question " .. tostring(dropped.id)
+    .. " dropped unanswered: the ring is full of unanswered questions")
+  events.write("question_dropped", { qid = dropped.id })
 end
 
 --- Creates a question. spec = { text, player_index?, force?, viewing_force?, watching_force?, scope? }. Returns the
@@ -63,14 +96,14 @@ function M.ask(spec)
   M.ensure_storage()
   local text = text_clip.bytes(spec.text, MAX_TEXT_BYTES)
   local player_index = type(spec.player_index) == "number" and spec.player_index or nil
-  local force = type(spec.force) == "string" and spec.force or nil
+  local force = known_force(spec.force)
   -- The force the asker is on right now when it is not the force the
   -- question is about: a member watching from a spectator force, say.
-  local viewing = type(spec.viewing_force) == "string" and spec.viewing_force ~= force
-    and spec.viewing_force or nil
+  local viewing = known_force(spec.viewing_force)
+  if viewing == force then viewing = nil end
   -- The force whose base the asker is looking at, when not their own.
-  local watching = type(spec.watching_force) == "string" and spec.watching_force ~= force
-    and spec.watching_force or nil
+  local watching = known_force(spec.watching_force)
+  if watching == force then watching = nil end
   -- Looked up once, here, and stored: the asker may have left by the time the
   -- service polls, and history is keyed by player name rather than by index.
   local player = player_lookup.by_index(player_index)
@@ -90,6 +123,11 @@ function M.ask(spec)
   -- privately, it does not open the question to everyone.
   local private = scope.is_private(sc.private)
 
+  -- Decided now and kept on the row, so a later change of the setting never
+  -- rewrites what history says about this question: a global question the
+  -- operator keeps between one player and the bot is logged as such.
+  local to_asker = (not private and player_index ~= nil and audience.asker_mode()) or nil
+
   local q = storage.aab.q
   local qid = q.next_id
   q.next_id = qid + 1
@@ -107,21 +145,20 @@ function M.ask(spec)
     answered = false,
     scope = key,
     private = private,
+    to_asker = to_asker,
     audience = private and type(sc.audience) == "table" and sc.audience or nil,
     tag = type(sc.tag) == "string" and sc.tag or nil,
     -- The voice the answer is written in, as the setting stood when the
     -- question was asked, so changing it never re-voices one in flight.
     personality = personality.for_question(),
   }
-  if #q.ring > RING_SIZE then
-    table.remove(q.ring, 1)
-  end
+  if #q.ring > RING_SIZE then M.evict(q.ring) end
 
   -- The text as kept, the same cut the poll row carries, so history holds
   -- the question the service answered and never more of it.
   events.write("question", {
     qid = qid, player = player_name, force = force, text = text,
-    scope = key, private = private,
+    scope = key, private = private, to_asker = to_asker,
   })
   return qid
 end
@@ -184,8 +221,18 @@ function M.ask_as_player(player, text, line)
     -- follow up on would start with an answer to a question they never saw.
     -- A chat-prefix question is its own echo: the chat line was visible.
     local question = M.find(qid)
-    audience.deliver(question, audience.head(question) .. " " .. player.name .. " asked: " .. text)
+    -- The stored text, not the typed one: it is clipped, and goes through
+    -- the same strip and length net an answer line does, so a newline in a
+    -- /ask cannot forge a second chat line.
+    -- Named with the command unless aab-ask-hints is off, so a watcher
+    -- sees how it was done.
+    local verb = " asked"
+    if ask_hints.mode() ~= "off" then verb = " asked with /" .. ask_hints.command() end
+    audience.deliver(question, audience.head(question) .. " " .. player.name .. verb .. ": "
+      .. render_shapes.plain_line(question.text))
+    ask_hints.hint_audience(question)
   end
+  if qid then ask_hints.mark(player) end
   return qid
 end
 

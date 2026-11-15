@@ -19,17 +19,18 @@ local labels = require("scripts.labels")
 
 local M = {}
 
---- The force a label names, when a labels provider calls one of the forces
---- that. Case-insensitive, spaces trimmed, so "team 02" and "Team 02" both
---- find team-2 when that is its label. Nil when no label matches.
+--- The forces whose label is `name`, in force name order. Case-insensitive,
+--- spaces trimmed, so "team 02" and "Team 02" both find team-2 when that is
+--- its label. Sorted because pairs() order is not stable across saves: two
+--- forces sharing a label used to resolve to whichever came first.
 local function by_label(name)
   local wanted = name:lower():gsub("^%s+", ""):gsub("%s+$", "")
+  local out = {}
   for force_name, label in pairs(labels.cached_map()) do
-    if label:lower() == wanted and game.forces[force_name] then
-      return game.forces[force_name]
-    end
+    if label:lower() == wanted and game.forces[force_name] then out[#out + 1] = force_name end
   end
-  return nil
+  table.sort(out)
+  return out
 end
 
 --- The force called `name`: by its force name first, then by the label
@@ -41,11 +42,17 @@ function M.require_force(name)
     error("force is required", 0)
   end
   -- game.forces is indexable directly by name (LuaGameScript::forces).
-  local force = game.forces[name] or by_label(name)
-  if not force then
+  local force = game.forces[name]
+  if force then return force end
+  local labelled = by_label(name)
+  if #labelled > 1 then
+    error("ambiguous force: " .. name .. " is the label of " .. table.concat(labelled, ", ") ..
+          "; pass one of those force names", 0)
+  end
+  if #labelled == 0 then
     error("unknown force: " .. name .. " (use the force name, not a display name)", 0)
   end
-  return force
+  return game.forces[labelled[1]]
 end
 
 return M

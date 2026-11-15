@@ -27,6 +27,7 @@
 -- makes the design true rather than described.
 
 local entity_count_tool = require("scripts.tools.entity_count")
+local pages = require("scripts.sweep.pages")
 local axes              = require("scripts.sweep.axes")
 
 -- Looked up at call time rather than captured at load, so the seam between
@@ -62,12 +63,13 @@ function M.check(a)
 end
 
 local function read_force(a)
-  local reply = ENTITY_COUNT({ all = true, name = a.subject })
-  if reply.found == false then
-    return nil, { subject = a.subject, reason = reply.reason }
+  local forces, refusal = pages.collect(ENTITY_COUNT, { all = true, name = a.subject }, "forces", "entity_count")
+  if not forces then
+    refusal.subject = a.subject
+    return nil, refusal
   end
   local rows = {}
-  for _, row in ipairs(reply.forces or {}) do
+  for _, row in ipairs(forces) do
     rows[#rows + 1] = { name = axes.force({ force = row.force }), value = row.count }
   end
   return rows
@@ -78,25 +80,17 @@ end
 --- that measured zero is already absent: the tool leaves those out, since a
 --- force owns entities on almost none of the surfaces it is not standing on.
 ---
---- The tool cuts its rows to a count and a byte budget and reports total
---- beside shown. A cut list of cells ranked and published as a leader would
---- name whoever happened to survive the cut, so shown below total is refused
---- whole, the rule the players metric and the briefing's own pl key follow.
+--- The tool pages its rows to the reply budget; every page is read, since a
+--- ranking over the first alone would name whoever survived the cut.
 local function read_cells(_ctx, axis, a)
-  local reply = ENTITY_COUNT({ all = true, per_surface = true, name = a.subject })
-  if reply.found == false then
-    return nil, { subject = a.subject, reason = reply.reason, passes = reply.passes, max_passes = reply.max_passes }
-  end
-  if reply.total and reply.shown and reply.shown < reply.total then
-    return nil, {
-      subject = a.subject, shown = reply.shown, total = reply.total,
-      reason = "entity_count showed " .. reply.shown .. " of " .. reply.total ..
-               " force-and-surface rows, so a ranking over them would name whoever survived the cut: " ..
-               "use the force axis for each force's total, or name a surface",
-    }
+  local cells, refusal = pages.collect(ENTITY_COUNT, { all = true, per_surface = true, name = a.subject },
+                                       "forces", "entity_count")
+  if not cells then
+    refusal.subject = a.subject
+    return nil, refusal
   end
   local by_cell, order = {}, {}
-  for _, row in ipairs(reply.forces or {}) do
+  for _, row in ipairs(cells) do
     local cell = axes[axis]({
       force = row.force, surface = row.surface,
       platform = row.platform, owner = row.owner, location = row.location, state = row.state,

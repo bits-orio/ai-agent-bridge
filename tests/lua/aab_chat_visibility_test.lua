@@ -517,7 +517,7 @@ local before_wide = #S.printed
 S.commands["ask"]({ parameter = "wide", player_index = 1, tick = S.tick })
 local echo_line = S.printed[#S.printed]
 check("a 301-byte tag is cut to 199 bytes, the last whole character before 200",
-      #S.printed == before_wide + 1 and echo_line.text:find("[AI Agent Bridge] t" .. string.rep(E_ACUTE, 99) .. " Bob asked: wide", 1, true) == 1,
+      #S.printed == before_wide + 1 and echo_line.text:find("[AI Agent Bridge] t" .. string.rep(E_ACUTE, 99) .. " Bob asked with /ask: wide", 1, true) == 1,
       echo_line.text)
 check("an /ask question under a refused key is echoed to the audience the provider named",
       echo_line.who == "force:player", echo_line.who)
@@ -563,7 +563,7 @@ tag_text = "[color=1,0.5,0]" .. string.rep("x", 180) .. "[/color]"
 local closed_tag = "[color=1,0.5,0]" .. string.rep("x", 177) .. "[/color]"
 local echoed, answered_text = tagged_lines("torn")
 check("a cut inside the tag's own [/color] keeps the span whole instead, in 200 bytes",
-      #closed_tag == 200 and echoed == "[AI Agent Bridge] " .. closed_tag .. " Bob asked: torn", echoed)
+      #closed_tag == 200 and echoed == "[AI Agent Bridge] " .. closed_tag .. " Bob asked with /ask: torn", echoed)
 check("and the answer's first line carries the same tag",
       answered_text == "[AI Agent Bridge] " .. closed_tag .. ": ok", answered_text)
 -- 11 + 300 = 311 bytes: the cut lands after [color=red] opened, before it closed.
@@ -571,13 +571,13 @@ tag_text = "[color=red]" .. string.rep("y", 300)
 local open_tag = "[color=red]" .. string.rep("y", 181) .. "[/color]"
 echoed = tagged_lines("open")
 check("a cut that leaves a colour open closes it, in 200 bytes",
-      #open_tag == 200 and echoed == "[AI Agent Bridge] " .. open_tag .. " Bob asked: open", echoed)
+      #open_tag == 200 and echoed == "[AI Agent Bridge] " .. open_tag .. " Bob asked with /ask: open", echoed)
 -- 190 + 21 = 211 bytes: the cut tears an img tag, which opens no span, so
 -- only dropping the torn tag back to its bracket saves the line.
 tag_text = string.rep("z", 190) .. "[img=item.iron-plate]"
 echoed = tagged_lines("img")
 check("a cut inside an img tag drops the tag",
-      echoed == "[AI Agent Bridge] " .. string.rep("z", 190) .. " Bob asked: img", echoed)
+      echoed == "[AI Agent Bridge] " .. string.rep("z", 190) .. " Bob asked with /ask: img", echoed)
 S.interfaces["test-scope-tagged"] = nil
 
 -- ── nothing is asked when nothing is logged ──────────────────────────

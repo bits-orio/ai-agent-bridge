@@ -57,6 +57,7 @@ local yield       = require("scripts.tools.recipe_yield")
 local raw_sources = require("scripts.tools.raw_sources")
 local rank        = require("scripts.tools.recipe_rank")
 local recipe_cost = require("scripts.tools.recipe_cost")
+local recipe_reach = require("scripts.tools.recipe_reach")
 
 local MAX_ALTERNATIVES = 3
 
@@ -101,6 +102,22 @@ local function before(a, b)
   return rank.better(a, b)
 end
 
+--- `order` with the candidates whose chain completes on the surface asked
+--- about ahead of those that do not, each group in its own order, when the
+--- first does not complete and another does (recipe_reach.lua). Unchanged
+--- with no surface, when the first completes, or when none does.
+local function completing_first(memo, order)
+  if not memo.reach or #order == 0 or memo.reach.completes(order[1]) then return order end
+  local done, rest = {}, {}
+  for _, found in ipairs(order) do
+    local into = memo.reach.completes(found) and done or rest
+    into[#into + 1] = found
+  end
+  if #done == 0 then return order end
+  for _, found in ipairs(rest) do done[#done + 1] = found end
+  return done
+end
+
 --- The candidates for one item in pick order before ties, round trips
 --- dropped: worked out once a call, and the route recipe_cost walks.
 local function ordered(memo, kind, name)
@@ -115,6 +132,7 @@ local function ordered(memo, kind, name)
     for _, found in ipairs(order) do found.alive = not side(found) or resolves(memo, found) end
     table.sort(order, before)
   end
+  order = completing_first(memo, order)
   memo.orders[key] = order
   return order
 end
@@ -233,6 +251,22 @@ function M.memo(force, surface)
     return known.found, known.locked, known.mined
   end
   function picker.prefetch(list) prefetch(memo, list) end
+  --- On a surface asked about: `allowed(recipe)` says whether a recipe can
+  --- be made there (machine_pick hands it in before anything is ranked),
+  --- and from then on a candidate whose chain completes there wins over the
+  --- named recipe when that one's does not.
+  function picker.restrict(allowed)
+    memo.allowed = allowed
+    memo.reach = recipe_reach.new(memo, rule.available)
+  end
+  --- Whether an item is out of reach on the surface asked about: no recipe
+  --- here makes it and it is not mined, pumped or harvested here. Always
+  --- false with no surface.
+  function picker.reach_capped() return memo.reach ~= nil and memo.reach.capped == true end
+  function picker.unobtainable(kind, name)
+    if not memo.reach then return false end
+    return not rule.available(kind, name) and #rank.ranked(memo, kind, name) == 0
+  end
   return picker
 end
 

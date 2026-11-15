@@ -28,7 +28,10 @@
 -- where the player is, adds `any_planet` when a recipe the force can use
 -- could make it: it may really be crafted there, and that recipe is in
 -- alternatives. Ore no recipe makes is raw wherever it is, so it adds
--- nothing.
+-- nothing. On a surface asked about, a raw item that is neither mined,
+-- pumped nor harvested there and that no recipe there makes adds
+-- `not_makeable_on_surface`, and stuck names it: the plan needs something
+-- the player cannot get where they are.
 --
 -- Before either pass the tree is asked of the engine a layer at a time:
 -- every item one step further down goes to recipe_pick in one prefetch, a
@@ -88,6 +91,10 @@ local function classify(walk, node, depth)
   if not pick then
     node.role, node.locked, node.mined = "raw", locked, mined
     if mined and mined.anywhere and #mined.alternatives > 0 then walk.approx.any_planet = true end
+    if not mined and walk.picker.unobtainable and walk.picker.unobtainable(node.kind, node.name) then
+      walk.approx.not_makeable_on_surface = true
+      walk.stuck[node.name] = true
+    end
     return
   end
   if depth > MAX_DEPTH or walk.count > MAX_ITEMS then
@@ -151,15 +158,16 @@ end
 --- a set of reasons the figures are rough.
 function M.run(targets, picker, stop)
   local walk = { picker = picker, stop = stop or {}, nodes = {}, order = {}, on_path = {},
-                 count = 0, approx = {}, looped = {} }
+                 count = 0, approx = {}, looped = {}, stuck = {} }
   prefetch(walk, targets)
   for _, target in ipairs(targets) do
     discover(walk, target.kind, target.name, 1)
   end
   settle(walk, targets)
+  if picker.reach_capped and picker.reach_capped() then walk.approx.cap = true end
   local nodes = {}
   for i, key in ipairs(walk.order) do nodes[i] = walk.nodes[key] end
-  return { nodes = nodes, looped = walk.looped, approx = walk.approx }
+  return { nodes = nodes, looped = walk.looped, approx = walk.approx, stuck = walk.stuck }
 end
 
 M.MAX_DEPTH = MAX_DEPTH

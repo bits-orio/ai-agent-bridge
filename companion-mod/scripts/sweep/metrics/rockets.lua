@@ -10,6 +10,7 @@
 -- here: force only.
 
 local rockets_tool = require("scripts.tools.rockets")
+local pages = require("scripts.sweep.pages")
 local axes          = require("scripts.sweep.axes")
 
 -- Looked up at call time rather than captured at load, the same reason
@@ -27,19 +28,12 @@ local M = {
 }
 
 function M.read(_ctx, _axis, _a)
-  local reply = ROCKETS({ all = true })
-  -- rockets{all=true} cuts at bounded.MAX_FORCES, and a ranking over the
-  -- survivors of a cut names whoever survived: the rule every other metric
-  -- in this catalog follows, and the one this file, the oldest, had skipped.
-  if reply.total and reply.shown and reply.shown < reply.total then
-    return nil, {
-      shown = reply.shown, total = reply.total,
-      reason = "rockets showed " .. reply.shown .. " of " .. reply.total ..
-               " rows, so a ranking over them would name whoever survived the cut",
-    }
-  end
+  -- Every page of rockets{all=true}: a ranking over the first page alone
+  -- would name whoever survived the byte cut (scripts/sweep/pages.lua).
+  local forces, refusal = pages.collect(ROCKETS, { all = true }, "forces", "rockets")
+  if not forces then return nil, refusal end
   local rows = {}
-  for _, row in ipairs(reply.forces or {}) do
+  for _, row in ipairs(forces) do
     rows[#rows + 1] = { name = axes.force({ force = row.force }), value = row.rockets_launched }
   end
   return rows

@@ -62,14 +62,23 @@ end
 --- whole line raw when any tag in it is torn, so the cut never tears one.
 local function clip_tag(s)
   if type(s) ~= "string" then return nil end
-  return richtext.fit(s, TAG_LIMIT)
+  -- Control characters go first: the tag is printed on the answer's first
+  -- line, and a newline in it would start a line that looks like anyone's.
+  return richtext.fit((s:gsub("%c+", " ")), TAG_LIMIT)
 end
+
+-- The player indices the engine accepts: get_player raises for anything
+-- outside this range, so nothing else is worth keeping on a row.
+local MIN_PLAYER_INDEX, MAX_PLAYER_INDEX = 1, 65536
 
 local function ints(list)
   if type(list) ~= "table" then return nil end
   local out = {}
   for _, v in ipairs(list) do
-    if type(v) == "number" and v == math.floor(v) then out[#out + 1] = v end
+    if type(v) == "number" and v == math.floor(v)
+       and v >= MIN_PLAYER_INDEX and v <= MAX_PLAYER_INDEX then
+      out[#out + 1] = v
+    end
   end
   if #out == 0 then return nil end
   return out
@@ -93,13 +102,21 @@ end
 --- nil when it names neither.
 local function read_audience(raw)
   local audience = type(raw.audience) == "table" and raw.audience or {}
-  if type(audience.force) == "string" then return { force = audience.force } end
+  if type(audience.force) == "string" then
+    -- The index goes beside the name: a force name can be reused by another
+    -- force after this one is merged away, and delivery then checks both
+    -- (scripts/audience.lua). A name that names no force stores none, and
+    -- delivery falls back to the asker for it as it always did.
+    local force = game.forces[audience.force]
+    return { force = audience.force, force_index = force and force.valid and force.index or nil }
+  end
   local players = ints(audience.players)
   if players then return { players = players } end
   return nil
 end
 
---- One provider's answer, reduced to the shape the row stores. A private
+--- One provider's answer, or the scope a mod handed to ask, reduced to the
+--- shape the row stores. A private
 --- answer without a usable audience is kept private and answered to the
 --- asker alone, which is the safe side of a provider's mistake. One without
 --- a usable key keeps the global key, which the service never reads private
@@ -107,7 +124,7 @@ end
 --- reads public rows alone. A refused key is a mistake of the same kind,
 --- and the answer that carried it is private under the global key whatever
 --- it said about private.
-local function sanitize(raw, iface_name)
+function M.sanitize(raw, iface_name)
   if type(raw) ~= "table" then return nil end
   local key, refused = read_key(raw.key, iface_name)
   local scope = { key = key, private = refused or M.is_private(raw.private) }
@@ -141,7 +158,7 @@ function M.lookup(player_index, text)
   for _, iface_name in ipairs(names) do
     local answered, raw = pcall(remote.call, iface_name, PROBE_FN, player_index, text)
     if answered then
-      local scope = sanitize(raw, iface_name)
+      local scope = M.sanitize(raw, iface_name)
       if scope and (scope.private and not chosen.private) then
         chosen = scope
       elseif scope and scope.private == chosen.private and chosen.provider == nil then

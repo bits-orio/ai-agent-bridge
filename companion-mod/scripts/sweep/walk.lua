@@ -7,7 +7,8 @@
 -- the metric predict its own cost against that scope,
 -- refuse before a single pass runs if the estimate is over budget, then hand
 -- the metric its scope to read through whichever existing tool it delegates
--- to. Mirrors the discipline entity_count.lua's own named-surface path
+-- to. A metric prunes the cells it predicts on itself (scripts/sweep/
+-- scope.lua), so the estimate counts the reads it would really make. Mirrors the discipline entity_count.lua's own named-surface path
 -- already uses on itself (predict the passes, refuse rather than
 -- half-answer), generalised here so any metric with a per-cell read gets it
 -- for free instead of reimplementing it.
@@ -42,7 +43,8 @@ end
 --- Every valid surface, name order, the same walk list_surfaces already
 --- builds. An axis that has nothing to say about some of them (the platform
 --- axis, on a planet) answers nil for that cell and the cell contributes no
---- row; see scripts/sweep/axes.lua. No metric narrows this list itself.
+--- row; see scripts/sweep/axes.lua. A per-cell metric prunes the cells it
+--- reads from this list itself (scripts/sweep/scope.lua).
 local function live_surfaces()
   local out = {}
   for _, surface in pairs(game.surfaces) do
@@ -99,11 +101,15 @@ function M.run(a)
   if metric.predict and metric.max_passes then
     local passes = metric.predict(ctx, axis, a)
     if passes > metric.max_passes then
+      -- Each metric names what to ask instead, and only asks that would
+      -- pass: "use the force axis" used to be the advice everywhere, and
+      -- for most metrics that axis reads the same cells and was refused
+      -- the same way.
+      local instead = metric.refusal_hint and (": " .. metric.refusal_hint) or ""
       return refuse({
         metric = metric_name, axis = axis,
         reason = "sweeping " .. metric_name .. " by " .. axis .. " would be " .. passes ..
-                 " passes over the map, past the " .. metric.max_passes .. " one call may spend: " ..
-                 "ask about fewer forces or surfaces, or use the force axis for the engine's own totals",
+                 " reads, past the " .. metric.max_passes .. " one call may spend" .. instead,
         passes = passes, max_passes = metric.max_passes,
       })
     end

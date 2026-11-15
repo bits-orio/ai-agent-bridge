@@ -2,9 +2,29 @@
 -- Author: bits-orio
 -- License: MIT
 --
--- Runtime-global settings: apply server-wide, changeable without restarting.
+-- Runtime-global settings apply server-wide and change without restarting.
+-- The two startup settings at the top are read when the mod loads.
 
 data:extend({
+    {
+        -- Whether the mod takes the /ask command name. /aab-ask always
+        -- exists; turn this off when another mod's /ask must stay. Read
+        -- when the mod loads, so it is a startup setting.
+        type = "bool-setting",
+        name = "aab-claim-ask-command",
+        setting_type = "startup",
+        default_value = true,
+        order = "b-a",
+    },
+    {
+        -- The Phase 0 transport checks (ping, big, write, pcall_test), for
+        -- the test rigs only. Off, they answer bad_op.
+        type = "bool-setting",
+        name = "aab-selftest-ops",
+        setting_type = "startup",
+        default_value = false,
+        order = "b-b",
+    },
     {
         type = "bool-setting",
         name = "aab-events-enabled",
@@ -34,6 +54,18 @@ data:extend({
         default_value = "server",
         allowed_values = { "server", "asker" },
         order = "a-c",
+    },
+    {
+        -- How much the mod teaches players about asking; see
+        -- scripts/ask_hints.lua. echo names the command in the question
+        -- echo, all adds one private hint per player who has not asked, off
+        -- leaves the echo as it was.
+        type = "string-setting",
+        name = "aab-ask-hints",
+        setting_type = "runtime-global",
+        default_value = "echo",
+        allowed_values = { "all", "echo", "off" },
+        order = "a-c2",
     },
     {
         -- Rate limits on asking, checked before anything else happens; see
@@ -66,5 +98,14 @@ data:extend({
         allow_blank = true,
         auto_trim = true,
         order = "a-f",
+    },
+    {
+        -- Whether the service may print a line nobody asked for (a milestone
+        -- toast, the `say` op). Answers to questions never read it.
+        type = "bool-setting",
+        name = "aab-allow-say",
+        setting_type = "runtime-global",
+        default_value = true,
+        order = "a-g",
     },
 })

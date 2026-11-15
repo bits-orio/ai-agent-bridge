@@ -61,7 +61,7 @@ check("the companion still has a manifest", manifest ~= nil, F.encode(mine))
 local manifest_bytes = #F.encode(mine.r)
 print("STAGE5 UNIT A manifest op reply bytes: " .. manifest_bytes)
 check("the manifest still fits one reply with room to spare (CAPS.manifest = 32768)",
-      manifest_bytes < 16384, manifest_bytes)
+      manifest_bytes < 24576, manifest_bytes)
 
 for _, name in ipairs(NEW4) do
   local entry = manifest and manifest[name]
@@ -504,19 +504,21 @@ check("a planet row carries no gps: a planet position is a find_entities answer"
 -- A platform row carries owner, location, state and gps, and 44 of them
 -- encode past the 8000-byte call cap, where rpc.lua refuses the whole reply
 -- after every pass was spent. The budget is shrunk here rather than the
--- fixture grown to 44 platforms: bounded.fit reads ROW_BUDGET at call time.
--- Mutation-tested: dropping bounded.fit from the per_surface path leaves
+-- fixture grown to 44 platforms: bounded.page reads REPLY_BUDGET at call
+-- time, and measures the whole reply, rows and the fields around them.
+-- Mutation-tested: dropping bounded.page from the per_surface path leaves
 -- shown equal to total and turns the first check red.
 local bounded = require("scripts.tools.bounded")
-local saved_budget = bounded.ROW_BUDGET
-bounded.ROW_BUDGET = 80
+local saved_budget = bounded.REPLY_BUDGET
+local whole = call("entity_count", { all = true, per_surface = true, name = "lab" })
+bounded.REPLY_BUDGET = #F.encode(whole.r) - 1
 local tight = call("entity_count", { all = true, per_surface = true, name = "lab" })
 check("a per_surface reply drops rows to stay inside the byte budget",
       tight.ok and tight.r.total == 2 and tight.r.shown == 1
-      and #F.encode(tight.r.forces) <= 80, F.encode(tight))
+      and #F.encode(tight.r) <= bounded.REPLY_BUDGET, F.encode(tight))
 check("the row it keeps is the largest",
       tight.ok and tight.r.forces[1] and tight.r.forces[1].count == 12, F.encode(tight))
-bounded.ROW_BUDGET = saved_budget
+bounded.REPLY_BUDGET = saved_budget
 
 -- ── a ship between planets reads "in flight", on every path ──────────
 -- LuaSpacePlatform::space_location is nil while a platform travels and its
@@ -574,7 +576,7 @@ check("fluid_rate all=true at 106 forces answers rather than tripping the call c
       F.encode(fluid_bounded))
 check("fluid_rate all=true at 106 forces reports total beside a shown that fits",
       fluid_bounded.ok and fluid_bounded.r.total == 106 and fluid_bounded.r.shown >= 1
-      and fluid_bounded.r.shown <= 100 and #F.encode(fluid_bounded.r) <= 8000,
+      and fluid_bounded.r.shown <= 100 and #F.encode(fluid_bounded.r) <= require("scripts.tools.bounded").REPLY_BUDGET,
       fluid_bounded.ok and (fluid_bounded.r.shown .. " shown, " .. #F.encode(fluid_bounded.r) .. " bytes") or F.encode(fluid_bounded))
 -- player makes 90 + 10 a minute across its two surfaces against 12.5 for
 -- every synthetic force (team-3 has no player in this block), so player must
@@ -584,9 +586,17 @@ check("fluid_rate all=true keeps the leader through the cut",
       and tonumber(fluid_bounded.r.forces[1].produced_per_min) == 100,
       F.encode(fluid_bounded.r.forces and fluid_bounded.r.forces[1]))
 local kills_bounded = call("kills", { all = true })
-check("kills all=true bounds its rows at bounded.MAX_FORCES and reports total beside shown",
-      kills_bounded.ok and kills_bounded.r.total == 106 and kills_bounded.r.shown == 100
-      and #kills_bounded.r.forces == 100, F.encode(kills_bounded))
+-- 100 rows of {force, kills, losses} encode past the reply budget, so the
+-- bytes cut before the count does, and the reply says where the next page is.
+local kills_budget = require("scripts.tools.bounded").REPLY_BUDGET
+check("kills all=true bounds its rows by count and bytes and reports total beside shown",
+      kills_bounded.ok and kills_bounded.r.total == 106 and kills_bounded.r.shown < 100
+      and #kills_bounded.r.forces == kills_bounded.r.shown and #F.encode(kills_bounded.r) <= kills_budget
+      and kills_bounded.r.next_offset == kills_bounded.r.shown, kills_bounded.ok and kills_bounded.r.shown or F.encode(kills_bounded))
+local kills_last = call("kills", { all = true, offset = 100 })
+check("kills all=true offset 100 reaches the last six rows",
+      kills_last.ok and kills_last.r.shown == 6 and kills_last.r.offset == 100 and kills_last.r.next_offset == nil,
+      F.encode(kills_last))
 check("player, the only real kill count among the synthetic zeroes, still leads",
       kills_bounded.ok and kills_bounded.r.forces[1].force == "player" and kills_bounded.r.forces[1].kills == 55,
       F.encode(kills_bounded.r.forces[1]))

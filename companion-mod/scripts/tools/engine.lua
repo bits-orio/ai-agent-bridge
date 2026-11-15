@@ -26,17 +26,25 @@ local environment      = require("scripts.tools.environment")
 local rockets          = require("scripts.tools.rockets")
 local game_time        = require("scripts.tools.game_time")
 local locate           = require("scripts.tools.locate")
+local locate_player    = require("scripts.tools.locate_player")
 local kills            = require("scripts.tools.kills")
 local built            = require("scripts.tools.built")
 local fluid_rate       = require("scripts.tools.fluid_rate")
 local trains           = require("scripts.tools.trains")
 local recipe_needs     = require("scripts.tools.recipe_needs")
+local machine_status   = require("scripts.tools.machine_status")
+local power            = require("scripts.tools.power")
+local research_cost    = require("scripts.tools.research_cost")
+local mods             = require("scripts.tools.mods")
+local resources        = require("scripts.tools.resources")
+local force_card       = require("scripts.tools.force_card")
 local sweep            = require("scripts.sweep.tool")
 
 local MODULES = {
   basics, surfaces, production, production_since,
   research, tech_status, logistics, entity_count, environment, rockets, game_time,
-  locate, kills, built, fluid_rate, trains, recipe_needs, sweep,
+  locate, locate_player, kills, built, fluid_rate, trains, recipe_needs, sweep,
+  machine_status, power, research_cost, mods, resources, force_card,
 }
 
 local INTERFACE = "ai-agent-bridge-tools"

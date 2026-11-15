@@ -36,9 +36,19 @@ function M.cut(rows, n)
   return out
 end
 
---- ROW_BUDGET is what the rows of one reply may encode to, left clear of
---- rpc.lua's CAPS.call = 8000 so the fields wrapped around them still fit.
-M.ROW_BUDGET = 6000
+--- REPLY_BUDGET is what one whole reply may encode to, rows and the fields
+--- around them. The cap that governs is not rpc.lua's CAPS.call = 8000 but
+--- the service's: it hands the model at most max_tool_result_bytes of a
+--- result, 4096 by default (service/internal/agent/agent.go), and cuts the
+--- rest mid-JSON. 3800 leaves 296 bytes under that cut for what the service
+--- itself adds or re-escapes: Go's encoder writes <, > and & as six-byte
+--- \u escapes, and a player-named platform or force can carry them.
+M.REPLY_BUDGET = 3800
+
+--- ROW_BUDGET is what the rows alone may encode to, for the one caller that
+--- fits rows without building its reply (fit below): REPLY_BUDGET less 500
+--- for the fields a reply wraps around them.
+M.ROW_BUDGET = M.REPLY_BUDGET - 500
 
 --- The first rows that fit a byte budget, for a reply whose rows are wide
 --- enough that a row count is the wrong unit to bound them in.
@@ -53,19 +63,68 @@ M.ROW_BUDGET = 6000
 ---
 --- Binary search rather than dropping a row at a time, so a wide reply costs
 --- about seven encodes instead of one per row discarded.
-function M.fit(rows, budget)
-  budget = budget or M.ROW_BUDGET
-  if #rows == 0 then return rows end
-  local function fits(n)
-    return #helpers.table_to_json(M.cut(rows, n)) <= budget
-  end
-  if fits(#rows) then return rows end
-  local low, high = 0, #rows
+--- The largest n in 0..most for which fits(n) holds, fits growing false as n
+--- grows. Binary search, so a wide reply costs about seven encodes.
+local function largest(most, fits)
+  if most == 0 or fits(most) then return most end
+  local low, high = 0, most - 1
   while low < high do
     local mid = math.floor((low + high + 1) / 2)
     if fits(mid) then low = mid else high = mid - 1 end
   end
-  return M.cut(rows, low)
+  return low
+end
+
+function M.fit(rows, budget)
+  budget = budget or M.ROW_BUDGET
+  local n = largest(#rows, function(n) return #helpers.table_to_json(M.cut(rows, n)) <= budget end)
+  if n == #rows then return rows end
+  return M.cut(rows, n)
+end
+
+--- The offset param every paged tool declares, one wording for all of them.
+M.OFFSET_PARAM = "integer rows to skip, default 0; pass a cut reply's next_offset for the next page"
+
+--- A caller's offset: a whole number from 0, 0 when missing or not a number.
+function M.offset(value)
+  local n = math.floor(tonumber(value) or 0)
+  if n < 0 then n = 0 end
+  return n
+end
+
+--- Stamps total and shown on a reply, and offset and next_offset when the
+--- page is not the whole list, so a cut reply says where the next page
+--- starts. An uncut first page carries neither, as before paging existed.
+local function stamp(reply, total, offset, shown)
+  reply.total, reply.shown = total, shown
+  if offset > 0 or offset + shown < total then
+    reply.offset = offset
+    if offset + shown < total then reply.next_offset = offset + shown end
+  end
+  return reply
+end
+
+--- One page of `rows`, already sorted: from `offset` (0 based), at most
+--- `max` rows, and no more than the whole reply fits in REPLY_BUDGET.
+--- `build(page)` returns the reply around the page's rows and must not
+--- change them; this adds total, shown, offset and next_offset. Measuring
+--- the finished reply, not the rows alone, is what keeps the fields around
+--- the rows inside the budget too.
+function M.page(rows, offset, build, max)
+  offset = M.offset(offset)
+  local rest = {}
+  for i = offset + 1, math.min(#rows, offset + (max or #rows)) do rest[#rest + 1] = rows[i] end
+  local function reply_for(n) return stamp(build(M.cut(rest, n)), #rows, offset, n) end
+  local budget = M.REPLY_BUDGET
+  return reply_for(largest(#rest, function(n) return #helpers.table_to_json(reply_for(n)) <= budget end))
+end
+
+--- How many of `rows` fit when `build(first_n)` must encode within
+--- REPLY_BUDGET: for a reply that is cut but not paged.
+function M.fit_reply(rows, build)
+  local budget = M.REPLY_BUDGET
+  local n = largest(#rows, function(n) return #helpers.table_to_json(build(M.cut(rows, n))) <= budget end)
+  return M.cut(rows, n)
 end
 
 --- Sorts rows by their `name` field, in place, and returns them.

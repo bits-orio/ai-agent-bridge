@@ -32,12 +32,13 @@ local M = {}
 
 M.manifest = {
   built = {
-    desc = "How many entities one force has built and how many it has mined back, counted as events over the whole game so far, not what stands on the map now: how many of something a force HAS is entity_count, which built the most of something is entity_count with all=true. Over every surface unless one is named. top names the kinds built most, largest first; distinct_kinds says if there are more. all=true answers every force that has players in one call, built and mined only, no top list: use it for any each-team or every-force question instead of one call per force. Unknown surface: found=false.",
+    desc = "How many entities one force has built and mined back, counted as events over the game, not what stands now (that is entity_count). Over every surface unless one is named. top names the kinds built most; distinct_kinds says if there are more. all=true: one row per force with players, built and mined only. Unknown surface: found=false.",
     tier = "1",
     params = {
       surface = "string surface name or index, e.g. nauvis; omit for every surface",
       limit   = "integer kinds-built rows, default " .. DEFAULT_TOP .. ", max " .. MAX_TOP,
       all     = "boolean default false: one row per force with players, built and mined only; force and surface ignored",
+      offset  = bounded.OFFSET_PARAM,
     },
   },
 }
@@ -86,7 +87,7 @@ end
 -- all=true is the every-team question in one call. The rows are forces that
 -- have players, the same rule current_research's own sweep follows: an empty
 -- slot has built nothing anywhere.
-local function built_all()
+local function built_all(a)
   local surfaces = flow.surfaces_for({})
   local rows = {}
   for _, force in pairs(game.forces) do
@@ -102,16 +103,15 @@ local function built_all()
     if x.built ~= y.built then return x.built > y.built end
     return x.force < y.force
   end)
-  local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
-  for _, row in ipairs(shown) do
+  for _, row in ipairs(rows) do
     row.built = bounded.round(row.built, 0)
     row.mined = bounded.round(row.mined, 0)
   end
-  return { total = #rows, shown = #shown, forces = shown }
+  return bounded.page(rows, a.offset, function(page) return { forces = page } end, bounded.MAX_FORCES)
 end
 
 local function built(a)
-  if a.all == true then return built_all() end
+  if a.all == true then return built_all(a) end
   local force = force_lookup.require_force(a.force)
   local surfaces, miss = flow.surfaces_for(a)
   if not surfaces then

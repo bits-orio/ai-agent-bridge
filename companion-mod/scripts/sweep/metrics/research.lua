@@ -2,8 +2,9 @@
 -- Author: bits-orio
 -- License: MIT
 --
--- The research sweep metric: which force is furthest through its current
--- research, as a whole-number percent, 0 to 100. Delegates the sweep itself,
+-- The research sweep metric: which force is furthest through the one
+-- technology it is researching now, as a whole-number percent, 0 to 100. Not
+-- overall progress: the researched metric counts finished technologies. Delegates the sweep itself,
 -- which forces are in play and what each is researching, to
 -- scripts/tools/basics.lua's own `current_research` function with all=true;
 -- no code here decides which forces have research running, current_research
@@ -38,6 +39,7 @@
 -- metric gets. Whole percents keep this metric inside that gate too.
 
 local basics_tool = require("scripts.tools.basics")
+local pages = require("scripts.sweep.pages")
 local axes         = require("scripts.sweep.axes")
 
 local CURRENT_RESEARCH = basics_tool.functions.current_research
@@ -46,15 +48,19 @@ local M = {
   axes = { "force" },
   default_axis = "force",
   subject = nil,
-  unit = "percent",
+  -- Progress through the technology being researched now, never overall
+  -- progress: a force 90% through automation-2 outranks one 10% into space
+  -- science here. researched.lua counts what a force has finished.
+  unit = "percent of current technology",
   places = 0,
   costly = false,
 }
 
 function M.read(_ctx, _axis, _a)
-  local reply = CURRENT_RESEARCH({ all = true })
+  local forces, refusal = pages.collect(CURRENT_RESEARCH, { all = true }, "forces", "current_research")
+  if not forces then return nil, refusal end
   local rows = {}
-  for _, row in ipairs(reply.forces or {}) do
+  for _, row in ipairs(forces) do
     local force = game.forces[row.force]
     local raw_progress = (force and row.researching) and force.research_progress or 0
     rows[#rows + 1] = { name = axes.force({ force = row.force }), value = raw_progress * 100 }

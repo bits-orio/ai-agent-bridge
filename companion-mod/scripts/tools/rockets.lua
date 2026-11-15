@@ -23,10 +23,11 @@ local M = {}
 
 M.manifest = {
   rockets = {
-    desc = "Rockets one force has launched, and the items sent up, largest count first. distinct_items beside shown says if there are more kinds. all=true answers every force in one call, counts only, no items and limit ignored: use it for any each-team or every-force question instead of one call per force.",
+    desc = "Rockets one force has launched and the items sent up, largest first; distinct_items says if there are more kinds. all=true: one row per force with players or a launch, counts only.",
     params = {
       limit = "integer item rows, default " .. DEFAULT_ITEMS .. ", max " .. MAX_ITEMS,
       all   = "boolean default false: one row per force with players or a launch, no items; force ignored",
+      offset = bounded.OFFSET_PARAM,
     },
   },
 }
@@ -36,7 +37,7 @@ M.manifest = {
 -- neither. No item list here: fourteen forces of item rows would blow the
 -- reply budget, so items stay a single-force answer and distinct_items is
 -- what tells the model there is more to ask for.
-local function rockets_all()
+local function rockets_all(a)
   local rows = {}
   for _, force in pairs(game.forces) do
     local launched = force.rockets_launched or 0
@@ -58,13 +59,12 @@ local function rockets_all()
     if x.rockets_launched ~= y.rockets_launched then return x.rockets_launched > y.rockets_launched end
     return x.force < y.force
   end)
-  local shown = bounded.cut(rows, MAX_FORCES)
-  return { total = #rows, shown = #shown, forces = shown }
+  return bounded.page(rows, a.offset, function(page) return { forces = page } end, MAX_FORCES)
 end
 
 local function rockets(a)
   if a.all == true then
-    return rockets_all()
+    return rockets_all(a)
   end
   local force = force_lookup.require_force(a.force)
 

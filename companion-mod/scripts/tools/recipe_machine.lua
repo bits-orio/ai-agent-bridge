@@ -43,7 +43,7 @@ end
 --- worked out once a call.
 function M.picker(picker, ctx)
   local netted = {}
-  local wrapped = { prefetch = picker.prefetch }
+  local wrapped = { prefetch = picker.prefetch, unobtainable = picker.unobtainable, reach_capped = picker.reach_capped }
   function wrapped.pick(kind, name)
     local found, locked, mined = picker.pick(kind, name)
     if not found then return found, locked, mined end

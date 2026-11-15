@@ -43,20 +43,21 @@ local M = {}
 
 M.manifest = {
   trains = {
-    desc = "How many trains one force has, and how many are moving or in manual control right now, over every surface unless one is named. Builds one wrapper per train, so name a surface on a very large fleet. all=true answers every force that has players in one call, summed over every surface, most trains first: use it for any each-team or every-force question instead of one call per force. Unknown surface: found=false.",
+    desc = "How many trains one force has, and how many are moving or in manual control now, over every surface unless one is named; one wrapper per train. all=true: one row per force with players, most trains first. Unknown surface: found=false.",
     tier = "1",
     params = {
       surface = "string surface name or index, e.g. nauvis; omit for every surface",
       all     = "boolean default false: one row per force with players, summed over every surface; force and surface ignored",
+      offset  = bounded.OFFSET_PARAM,
     },
   },
 }
 
---- One surface's trains for one force, counted rather than kept: the wrapper
---- array is walked once and dropped, so nothing here holds more than one
---- surface's worth of LuaTrain objects at a time.
+--- One force's trains on one surface, or on every surface when `surface`
+--- is nil (TrainFilter's surface is optional), counted rather than kept: the
+--- wrapper array is walked once and dropped.
 local function counts_for(force, surface)
-  local trains = game.train_manager.get_trains{ force = force.name, surface = surface.name }
+  local trains = game.train_manager.get_trains{ force = force.name, surface = surface and surface.name or nil }
   local moving, manual = 0, 0
   for _, train in ipairs(trains) do
     if train.speed ~= 0 then moving = moving + 1 end
@@ -67,17 +68,15 @@ end
 
 -- all=true is the every-team question in one call. The rows are forces that
 -- have players, the same rule current_research's own sweep follows: an empty
--- slot owns no trains anywhere.
-local function trains_all()
-  local surfaces = flow.surfaces_for({})
+-- slot owns no trains anywhere. One get_trains per force with no surface in
+-- the filter, so the cost is one read per force plus one LuaTrain wrapper per
+-- train it has; asking every surface in turn cost forces x surfaces reads
+-- and built the same wrappers.
+local function trains_all(a)
   local rows = {}
   for _, force in pairs(game.forces) do
     if #force.players > 0 then
-      local total, moving, manual = 0, 0, 0
-      for _, surface in ipairs(surfaces) do
-        local here_total, here_moving, here_manual = counts_for(force, surface)
-        total, moving, manual = total + here_total, moving + here_moving, manual + here_manual
-      end
+      local total, moving, manual = counts_for(force, nil)
       rows[#rows + 1] = { force = force.name, trains = total, moving = moving, manual = manual }
     end
   end
@@ -85,12 +84,11 @@ local function trains_all()
     if x.trains ~= y.trains then return x.trains > y.trains end
     return x.force < y.force
   end)
-  local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
-  return { total = #rows, shown = #shown, forces = shown }
+  return bounded.page(rows, a.offset, function(page) return { forces = page } end, bounded.MAX_FORCES)
 end
 
 local function trains(a)
-  if a.all == true then return trains_all() end
+  if a.all == true then return trains_all(a) end
   local force = force_lookup.require_force(a.force)
   local surfaces, miss = flow.surfaces_for(a)
   if not surfaces then

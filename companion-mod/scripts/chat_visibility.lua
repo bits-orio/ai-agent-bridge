@@ -63,7 +63,7 @@ local function engine_scope(player, providers_installed)
     return { key = scope.GLOBAL_KEY, private = false }
   end
   local force = player.force.name
-  return { key = engine_key(force, providers_installed), private = true, audience = { force = force } }
+  return { key = engine_key(force, providers_installed), private = true, audience = { force = force, force_index = player.force.index } }
 end
 
 --- The whole scope of one line a player typed, audience and tag included:

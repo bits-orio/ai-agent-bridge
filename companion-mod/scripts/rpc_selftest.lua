@@ -7,18 +7,35 @@
 -- so the frozen Phase 1 protocol ops stay easy to read on their own; merged
 -- into rpc.lua's op table at load time.
 
-local remote_iface = require("scripts.remote")
+-- These ops are for the test rigs. The startup setting aab-selftest-ops
+-- (default off) turns them on; off, every one answers bad_op as an unknown
+-- op does, and the helper interface below is not even registered, so a real
+-- server carries none of this surface.
+local function enabled()
+  local setting = settings.startup["aab-selftest-ops"]
+  return setting ~= nil and setting.value == true
+end
 
 -- A tiny provider whose only job is proving pcall(remote.call, ...) catches
 -- an error thrown inside a provider's own function. Registered every load,
--- like every other remote interface in this mod.
-remote.add_interface("ai-agent-bridge-selftest", {
-  boom = function() error("boom") end,
-})
+-- like every other remote interface in this mod, but only when enabled.
+if enabled() then
+  remote.add_interface("ai-agent-bridge-selftest", {
+    boom = function() error("boom") end,
+  })
+end
 
 local MAX_KB = 4096
 
 local function ok_reply(r) return { ok = true, r = r } end
+
+--- `fn` as an op that refuses with bad_op while the diagnostic ops are off.
+local function gated(name, fn)
+  return function(req, cmd)
+    if not enabled() then return { ok = false, e = "bad_op", m = name } end
+    return fn(req, cmd)
+  end
+end
 
 local M = { ops = {} }
 
@@ -46,13 +63,13 @@ function M.ops.big(req, _cmd)
   return ok_reply({ kb = kb, bytes = #payload, payload = payload })
 end
 
---- Does a storage write and raise_event inside an RCON command replicate to
---- every connected client? Increments a counter and raises on_answer with a
---- test payload so a second client can be watched for both.
+--- Does a storage write inside an RCON command replicate to every connected
+--- client? Increments a counter so a second client can be watched for it.
+--- It raises no on_answer: a subscriber, a relay for one, would take the
+--- fake answer for a real one.
 function M.ops.write(_req, _cmd)
   storage.aab = storage.aab or {}
   storage.aab.test_counter = (storage.aab.test_counter or 0) + 1
-  remote_iface.raise_answer({ qid = 0, text = "phase0-write-test", counter = storage.aab.test_counter })
   return ok_reply({ counter = storage.aab.test_counter })
 end
 
@@ -61,5 +78,7 @@ function M.ops.pcall_test(_req, _cmd)
   local ran_ok, result = pcall(remote.call, "ai-agent-bridge-selftest", "boom")
   return ok_reply({ caught = not ran_ok, message = tostring(result) })
 end
+
+for name, fn in pairs(M.ops) do M.ops[name] = gated(name, fn) end
 
 return M

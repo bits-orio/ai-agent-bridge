@@ -9,7 +9,8 @@
 --
 -- Candidates are the recipes the engine says produce the item, narrowed to
 -- its one name. A candidate stays when the force has it enabled, the
--- prototype is neither hidden nor a parameter, and it nets more of the item
+-- prototype is neither hidden nor a parameter, it can be made on the
+-- surface asked about (memo.allowed, when one was), and it nets more of the item
 -- than it takes back as an ingredient, which handles a catalyst like kovarex
 -- without naming it. The engine's filter drops hidden recipes itself.
 --
@@ -132,6 +133,10 @@ local function consider(memo, name, proto, wanted, named)
   local known = known_of(memo, name, proto)
   if not (known.enabled or named[name]) then return end
   if proto.parameter then return end
+  -- On a surface asked about, a recipe that cannot be made there, by its
+  -- own surface conditions or for want of a machine that may run there, is
+  -- no candidate (scripts/tools/machine_surface.lua).
+  if memo.allowed and not memo.allowed(proto) then return end
   for key, net in pairs(io_of(known)) do
     local item = wanted[key]
     if item and net > 0 then file(memo, known, item, net) end

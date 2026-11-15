@@ -17,6 +17,17 @@
 local shapes   = require("scripts.render_shapes")
 local richtext = require("scripts.richtext")
 
+-- The service keeps an artifact within 12000 marshalled bytes
+-- (service/internal/agent/budget.go, MaxArtifactBytes). The protocol is
+-- open, so another client gets no such promise; this is the companion's own
+-- ceiling, above the service's with room for its encoding, so nothing the
+-- service sends is refused and nothing unbounded gets in.
+local MAX_ARTIFACT_BYTES = 16000
+-- No per-cell refusal here: a cell past 1280 bytes (320 characters of four
+-- bytes, the service's MaxCellChars) is cut by the printer at that net, an
+-- ellipsis ending it, and the answer is still given (aab_test.lua holds that).
+-- This ceiling on the whole artifact is what bounds a client that sends a
+-- great many long cells.
 local SCALARS = { string = true, number = true, boolean = true }
 local CAPS = shapes.CAPS
 
@@ -159,6 +170,11 @@ function M.problem(a)
   if a.to_asker ~= nil and type(a.to_asker) ~= "boolean" then return "to_asker must be a boolean" end
   local wrong = check(a)
   if wrong then return wrong end
+  local encoded, json = pcall(helpers.table_to_json, a)
+  if not encoded then return "artifact is not plain data" end
+  if #json > MAX_ARTIFACT_BYTES then
+    return "artifact is " .. #json .. " bytes, the most is " .. MAX_ARTIFACT_BYTES
+  end
   if says_nothing(a) then
     return a.shape .. " would print nothing: its title and every line, item or cell are blank"
   end

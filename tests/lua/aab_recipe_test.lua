@@ -115,7 +115,7 @@ check("the surface param asks for the asker's surface and says what it decides",
       and tostring(entry.params.surface):find("mines or pumps", 1, true) ~= nil, entry and entry.params and entry.params.surface)
 check("the desc says machine productivity is counted", entry
       and entry.desc:find("research and machine productivity", 1, true) ~= nil, entry and entry.desc)
-check("the manifest still fits one reply with room to spare", #F.encode(mine.r) < 16384, #F.encode(mine.r))
+check("the manifest still fits one reply with room to spare", #F.encode(mine.r) < 24576, #F.encode(mine.r))
 
 -- ── the fake holds the tool to the 2.1 API ────────────────────────────
 -- 2.1.17 removes LuaRecipePrototype::category, ::additional_categories and
@@ -142,8 +142,10 @@ check("oracle red: 2 iron plate a pack", per_min(red, "iron-plate") == 120, red.
 check("oracle red: 1 copper plate a pack", per_min(red, "copper-plate") == 60, red.ok and F.encode(red.r.rows))
 check("red walks down to ore", per_min(red, "iron-ore", "raw") == 120 and per_min(red, "copper-ore", "raw") == 60,
       red.ok and F.encode(red.r.raw))
-check("red science is exact: approx is left out, never sent empty", red.ok and red.r.approx == nil
-      and red_raw:find('"approx"', 1, true) == nil, red_raw)
+-- The figures count no modules or beacons, and approx always says so
+-- (review T9); nothing else is rough about red science.
+check("red science is exact but for modules: approx is no_modules_or_beacons alone",
+      red.ok and F.encode(red.r.approx) == '["no_modules_or_beacons"]', red_raw)
 check("nor are its empty alternatives: no list or map in the reply is empty",
       red.ok and red.r.alternatives == nil and nothing_empty(red_raw), red_raw)
 check("red reports research productivity only", red.ok and red.r.productivity == "research")
@@ -185,7 +187,7 @@ check("total and shown sit beside the rows", three.ok and three.r.total == #thre
       three.ok and (three.r.total .. " / " .. three.r.shown))
 local _, three_raw = needs({ force = "player", items = { RED, GREEN, BLUE }, per_min = { 60, 60, 60 } })
 check("Pirion's three packs fit one reply under the tool's own budget (" .. #three_raw .. " bytes)",
-      #three_raw <= 4000 + 32, #three_raw)
+      #three_raw <= require("scripts.tools.bounded").REPLY_BUDGET + 32, #three_raw)
 
 -- ── the oil tree: fluids, byproducts and alternatives ─────────────────
 local gas = find(blue.r.rows, "petroleum-gas")
@@ -379,9 +381,9 @@ local stop_target, stop_target_raw = needs({ force = "player", items = { "iron-p
 check("a target in stop_at is a stopped row and a stopped target",
       stop_target.ok and stop_target.r.targets[1].stop == true and find(stop_target.r.rows, "iron-plate").stop == true
       and stop_target.r.raw == nil, stop_target.ok and F.encode(stop_target.r))
-check("with nothing raw, rough or alternative, raw, approx and alternatives are all left out",
-      stop_target.ok and stop_target.r.raw == nil and stop_target.r.approx == nil and stop_target.r.alternatives == nil
-      and nothing_empty(stop_target_raw), stop_target_raw)
+check("with nothing raw, rough or alternative, raw and alternatives are left out, approx says only no_modules_or_beacons",
+      stop_target.ok and stop_target.r.raw == nil and F.encode(stop_target.r.approx) == '["no_modules_or_beacons"]'
+      and stop_target.r.alternatives == nil and nothing_empty(stop_target_raw), stop_target_raw)
 
 -- ── the catalyst: kovarex nets one ────────────────────────────────────
 check("uranium-235 is made by kovarex, ranked above processing by net output",
@@ -505,7 +507,7 @@ check("the walk counts shape A as the engine does: 7.5 iron plate for 60 a minut
 -- A research-progress product is skipped, not a crash.
 local progress = needs({ force = "player", items = { "test-progress-item" }, per_min = { 60 } })
 check("a research-progress product is skipped, not a crash", progress.ok and progress.r.found == true
-      and per_min(progress, "iron-plate") == 60 and progress.r.approx == nil, F.encode(progress))
+      and per_min(progress, "iron-plate") == 60 and F.encode(progress.r.approx) == '["no_modules_or_beacons"]', F.encode(progress))
 
 -- Ranking rule 1, the recipe named after the item, beats a larger net output.
 S.add_recipe({ name = "test-gear-casting", ingredients = { input("iron-plate", 3) },
@@ -682,7 +684,7 @@ S.add_recipe({ name = "test-wide-60-alt", ingredients = { input("copper-plate", 
 local cut, cut_raw = needs({ force = "player", items = { "test-wide" }, per_min = { 60 } })
 check("a wide tree is cut by bounded.fit: total above shown", cut.ok and cut.r.total == 62 and cut.r.shown < cut.r.total
       and cut.r.shown == #cut.r.rows, cut.ok and (cut.r.total .. " total, " .. cut.r.shown .. " shown"))
-check("the cut reply stays under the tool's budget (" .. #cut_raw .. " bytes)", #cut_raw <= 4000 + 32, #cut_raw)
+check("the cut reply stays under the tool's budget (" .. #cut_raw .. " bytes)", #cut_raw <= require("scripts.tools.bounded").REPLY_BUDGET + 32, #cut_raw)
 check("the cut keeps the largest flow first: 3600 iron plate a minute", cut.ok and cut.r.rows[1].item == "iron-plate"
       and is(cut.r.rows[1].per_min, 3600), cut.ok and F.encode(cut.r.rows[1]))
 check("raw rows and targets are never cut", cut.ok and per_min(cut, "iron-ore", "raw") == 3600 and #cut.r.targets == 1,
@@ -708,7 +710,11 @@ refused({ force = "player", items = { RED }, machines = { 4, 5 } }, "one entry p
         "a machines list of the wrong length is an argument error")
 refused({ force = "player", items = { RED }, per_min = { 60 }, machines = { 4 } }, "not both",
         "per_min and machines together are an argument error")
-refused({ force = "player", items = { RED } }, "give per_min", "neither per_min nor machines is an argument error")
+-- Neither per_min nor machines: one machine each, said in assumed (F7).
+local no_rate = needs({ force = "player", items = { RED } })
+check("neither per_min nor machines assumes one machine and says so",
+      no_rate.ok and no_rate.r.assumed == "machines=1" and no_rate.r.mode == "machines"
+      and tonumber(no_rate.r.targets[1].machines) == 1, F.encode(no_rate))
 refused({ force = "player", items = { RED }, per_min = { 0 } }, "above 0", "a rate of 0 is an argument error")
 refused({ force = "player", items = { RED }, per_min = { -5 } }, "above 0", "a negative rate is an argument error")
 refused({ force = "player", items = { RED }, per_min = { "lots" } }, "above 0", "a rate that is not a number is an argument error")
@@ -735,10 +741,19 @@ check("no argument table at all says force is required", (not bare.ok) and bare.
 local one = needs({ force = "player", items = RED, per_min = 60 })
 check("one bare value is a one-entry list", one.ok and per_min(one, "iron-plate") == 120, F.encode(one))
 
-local unknown = needs({ force = "player", items = { "red-science", RED }, per_min = { 60, 60 }, stop_at = { "iron plate" } })
+-- A name with one close match is used in its place (review F7, covered in
+-- aab_recipe_review_test.lua), so the misses here are names with several
+-- close matches or none: zq plate shares plate with every plate, zq-red
+-- holds no word of any real name.
+local unknown = needs({ force = "player", items = { "zq-red", RED }, per_min = { 60, 60 }, stop_at = { "zq plate" } })
 check("unknown names give found=false", unknown.ok and unknown.r.found == false and unknown.r.force == "player", F.encode(unknown))
 check("and list every unknown name, sorted, stop_at included", unknown.ok and #unknown.r.unknown == 2
-      and unknown.r.unknown[1] == "iron plate" and unknown.r.unknown[2] == "red-science", unknown.ok and F.encode(unknown.r.unknown))
+      and unknown.r.unknown[1] == "zq plate" and unknown.r.unknown[2] == "zq-red", unknown.ok and F.encode(unknown.r.unknown))
+local resolved = needs({ force = "player", items = { "red-science", RED }, per_min = { 60, 60 }, stop_at = { "iron plate" } })
+check("names with one close match are used instead, and resolved_from lists each",
+      resolved.ok and resolved.r.found == true and #resolved.r.resolved_from == 2
+      and resolved.r.resolved_from[1].used == RED and resolved.r.resolved_from[2].used == "iron-plate",
+      F.encode(resolved.r and resolved.r.resolved_from))
 check("and say what names look like", unknown.ok and tostring(unknown.r.reason):find("internal names", 1, true) ~= nil,
       unknown.ok and unknown.r.reason)
 
@@ -751,11 +766,19 @@ check("and say what names look like", unknown.ok and tostring(unknown.r.reason):
 -- iron plate lose their first guess; without the nicknames, the colour
 -- names do; without the shared words, copper-wire has none; without the cap,
 -- the test names come back more than five.
-local function guesses(reply, name) return reply.ok and reply.r.did_you_mean and reply.r.did_you_mean[name] end
+--
+-- Most of these names now have one close match and are used outright, so
+-- the guesses are read from recipe_names.did_you_mean itself, the list a
+-- reply carries whenever a name is not resolved.
+local recipe_names = require("scripts.tools.recipe_names")
+local function guesses(_reply, name) return recipe_names.did_you_mean(name) end
 check("the stop_at name respelled is the first guess: iron plate is iron-plate",
-      (guesses(unknown, "iron plate") or {})[1] == "iron-plate", F.encode(unknown.r and unknown.r.did_you_mean))
+      (guesses(unknown, "iron plate") or {})[1] == "iron-plate", F.encode(guesses(unknown, "iron plate")))
 check("a colour name is the first guess: red science is automation-science-pack",
-      (guesses(unknown, "red-science") or {})[1] == RED, F.encode(unknown.r and unknown.r.did_you_mean))
+      (guesses(unknown, "red-science") or {})[1] == RED, F.encode(guesses(unknown, "red-science")))
+check("a reply that did not resolve carries did_you_mean for its misses",
+      unknown.ok and unknown.r.did_you_mean ~= nil and unknown.r.did_you_mean["zq plate"] ~= nil
+      and unknown.r.did_you_mean["zq-red"] == nil, F.encode(unknown.r and unknown.r.did_you_mean))
 check("the reason points at did_you_mean", unknown.ok and tostring(unknown.r.reason):find("did_you_mean", 1, true) ~= nil,
       unknown.ok and unknown.r.reason)
 local NICKNAMED = {
@@ -786,10 +809,10 @@ check("a fluid is a real name too: Petroleum Gas is petroleum-gas",
 local crowded = needs({ force = "player", items = { "test-twin-crowd" }, per_min = { 60 } })
 check("never more than five guesses for one name", guesses(crowded, "test-twin-crowd") ~= nil
       and #guesses(crowded, "test-twin-crowd") == 5, F.encode(crowded.r and crowded.r.did_you_mean))
-local nothing_close = needs({ force = "player", items = { "zq", RED }, per_min = { 60, 60 }, stop_at = { "iron plate" } })
+local nothing_close = needs({ force = "player", items = { "zq", RED }, per_min = { 60, 60 }, stop_at = { "zq plate" } })
 check("a name with nothing close has no entry, and the others keep theirs",
-      nothing_close.ok and nothing_close.r.found == false and guesses(nothing_close, "zq") == nil
-      and (guesses(nothing_close, "iron plate") or {})[1] == "iron-plate", F.encode(nothing_close.r))
+      nothing_close.ok and nothing_close.r.found == false and nothing_close.r.did_you_mean["zq"] == nil
+      and nothing_close.r.did_you_mean["zq plate"] ~= nil, F.encode(nothing_close.r))
 local none_close = needs({ force = "player", items = { "zq" }, per_min = { 60 } })
 check("no guess at all leaves did_you_mean out", none_close.ok and none_close.r.found == false
       and none_close.r.did_you_mean == nil, F.encode(none_close.r))
@@ -1096,7 +1119,8 @@ check("a surface by index is the same surface", lube_index.ok and F.encode(lube_
       lube_index.ok and F.encode(lube_index.r.raw))
 local lube_fulgora = lube("fulgora")
 check("on Fulgora the oil ocean gives heavy oil: mined, no crude oil, approx clean",
-      mined(lube_fulgora, "heavy-oil") and nowhere(lube_fulgora, "crude-oil") and lube_fulgora.r.approx == nil,
+      mined(lube_fulgora, "heavy-oil") and nowhere(lube_fulgora, "crude-oil")
+      and F.encode(lube_fulgora.r.approx) == '["no_modules_or_beacons"]',
       lube_fulgora.ok and F.encode(lube_fulgora.r))
 local lube_pen = lube("landing-pen")
 check("a surface whose map generator lists nothing counts every planet, and says so",
@@ -1105,7 +1129,7 @@ local lube_blank = lube("")
 check("an empty surface is no surface", lube_blank.ok and F.encode(lube_blank.r) == F.encode(lube_anywhere.r), lube_blank.ok and F.encode(lube_blank.r))
 local moon_plate = needs({ force = "player", items = { "iron-plate" }, per_min = { 60 }, surface = "lab-moon" })
 check("a surface that lists nothing reads its planet's lists: iron ore is mined there",
-      mined(moon_plate, "iron-ore") and moon_plate.r.approx == nil, moon_plate.ok and F.encode(moon_plate.r))
+      mined(moon_plate, "iron-ore") and F.encode(moon_plate.r.approx) == '["no_modules_or_beacons"]', moon_plate.ok and F.encode(moon_plate.r))
 local moon_lube = lube("lab-moon")
 check("and what the planet does not list is not mined there: crude oil is raw, not mined",
       moon_lube.ok and find(moon_lube.r.raw, "crude-oil") ~= nil and find(moon_lube.r.raw, "crude-oil").raw == nil
@@ -1320,9 +1344,12 @@ local last = fitted.ok and fitted.r.rows[#fitted.r.rows] or {}
 local next_row = #F.encode(last) + #F.encode({ [last.item or "?"] = alternatives_for(fitted, last.item) or {} }) - 2 + 2
 check("rows are cut, each shown one with its alternative", fitted.ok and fitted.r.shown < fitted.r.total and fitted.r.shown == #fitted.r.rows
       and last.item ~= nil and alternatives_for(fitted, last.item) ~= nil, fitted.ok and (fitted.r.shown .. " of " .. fitted.r.total))
-check("within the budget (" .. fitted_bytes .. " bytes)", fitted_bytes <= 4000, fitted_bytes)
+-- The budget is the one every tool fits (bounded.REPLY_BUDGET), read here
+-- rather than written out, so moving it moves this test with it.
+local REPLY_BUDGET = require("scripts.tools.bounded").REPLY_BUDGET
+check("within the budget (" .. fitted_bytes .. " bytes)", fitted_bytes <= REPLY_BUDGET, fitted_bytes)
 check("and full: one more row of the same width and its alternative would not fit",
-      4000 - fitted_bytes < next_row, (4000 - fitted_bytes) .. " bytes unused, a row takes " .. next_row)
+      REPLY_BUDGET - fitted_bytes < next_row, (REPLY_BUDGET - fitted_bytes) .. " bytes unused, a row takes " .. next_row)
 
 print(("\n%d passed, %d failed"):format(passes, fails))
 if fails > 0 then os.exit(1) end

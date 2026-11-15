@@ -12,11 +12,13 @@
 -- `answer` op (via questions.record_answer, and only once rendering has
 -- succeeded), the Phase 0 `write` op, and `status` making the map id on a
 -- save that has none yet (scripts/map_id.lua), once. `answers` reads back
--- what `answer` stored. The three catalog ops live in scripts/rpc_catalog.lua
+-- what `answer` stored. `say` (scripts/say.lua) prints one unprompted line and
+-- writes nothing to storage. The three catalog ops live in scripts/rpc_catalog.lua
 -- and are merged into the same dispatch table below.
 
 local probe          = require("scripts.probe")
 local questions      = require("scripts.questions")
+local ask_hints      = require("scripts.ask_hints")
 local question_reads = require("scripts.question_reads")
 local artifact_check = require("scripts.artifact_check")
 local ask_command    = require("scripts.ask_command")
@@ -27,6 +29,7 @@ local events         = require("scripts.events")
 local map_id         = require("scripts.map_id")
 local selftest       = require("scripts.rpc_selftest")
 local catalog        = require("scripts.rpc_catalog")
+local say            = require("scripts.say")
 
 local PROTOCOL_VERSION = 1
 -- Reply caps by op. Tool results (call) and the legacy whole-catalog read
@@ -107,7 +110,10 @@ function OPS.answer(req, _cmd)
     return ok_reply(true)
   end
 
-  local drawn, rendered = pcall(render.render, question, req.artifact)
+  -- Composing is the only step that can fault the artifact. Delivery is
+  -- guarded on its own below, so a failed print is never reported as
+  -- bad_artifact, the code that tells a client to rewrite what it sent.
+  local drawn, rendered = pcall(render.compose, req.artifact)
   if not drawn then
     -- First line of the error only: the rest is a Lua traceback, and this
     -- reply has a byte cap.
@@ -115,16 +121,37 @@ function OPS.answer(req, _cmd)
     return err_reply("bad_artifact", "the artifact could not be rendered: " .. why)
   end
 
+  local delivered, why = pcall(render.deliver, question, req.artifact, rendered)
+  if not delivered then
+    log("[ai-agent-bridge] answer " .. tostring(req.qid) .. " delivery failed: " .. tostring(why):match("^[^\n]*"))
+  end
+
+  -- Watchers who have never asked learn the command; a refusal meant for the
+  -- asker alone is nobody else's business.
+  if delivered and req.artifact.to_asker ~= true then
+    local hinted, hint_why = pcall(ask_hints.hint_audience, question)
+    if not hinted then log("[ai-agent-bridge] hint failed: " .. tostring(hint_why):match("^[^\n]*")) end
+  end
+
   questions.record_answer(question, rendered)
   events.write("answer", { qid = req.qid, shape = rendered.shape })
   -- scope and private are the question's, fixed when it was asked, so a
   -- subscriber that relays answers elsewhere can keep a private one inside
   -- its channel. Additive: older subscribers never read them.
-  remote_iface.raise_answer({
+  -- Under its own pcall: the answer is recorded and printed by now, and a
+  -- subscriber's failure must not turn that into an error reply, which would
+  -- make the service answer again. Whether script.raise_event passes a
+  -- handler's error up to its caller is not verified, so the guard is here
+  -- either way and costs nothing.
+  local raised, raise_why = pcall(remote_iface.raise_answer, {
     qid = req.qid, question = question.text, artifact = req.artifact,
     shape = rendered.shape, lines = rendered.lines,
     scope = question.scope or "global", private = question.private == true,
   })
+  if not raised then
+    log("[ai-agent-bridge] on_answer subscriber failed for answer " .. tostring(req.qid) .. ": "
+      .. tostring(raise_why):match("^[^\n]*"))
+  end
   return ok_reply(true)
 end
 
@@ -135,7 +162,7 @@ function OPS.answers(req, _cmd)
   return ok_reply(question_reads.answers(req.after, req.limit))
 end
 
-for _, module in ipairs({ catalog, selftest }) do
+for _, module in ipairs({ catalog, selftest, say }) do
   for name, fn in pairs(module.ops) do
     OPS[name] = fn
   end

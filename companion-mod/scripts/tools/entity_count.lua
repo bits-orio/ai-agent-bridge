@@ -4,7 +4,10 @@
 --
 -- entity_count: how many of one entity a force owns on one surface. The count
 -- happens inside the engine, over the whole surface, so this is one C++ pass and
--- not a Lua walk over entities however large the base is.
+-- not a Lua walk over entities however large the base is. `names` and `type`
+-- count several prototypes in one call: "which team has the most furnaces"
+-- was one call per furnace type. The all=true paths live in
+-- scripts/tools/entity_count_all.lua.
 --
 -- API names verified against the official 2.0.77 docs (fetched 2026-09-10),
 -- https://lua-api.factorio.com/2.0.77/classes/LuaSurface.html,
@@ -17,264 +20,126 @@
 --   prototypes, the global LuaPrototypes object, ::entity
 --     LuaCustomTable[string -> LuaEntityPrototype]
 
-local force_lookup    = require("scripts.tools.force_lookup")
-local surface_lookup  = require("scripts.tools.surface_lookup")
-local bounded         = require("scripts.tools.bounded")
-local platform_lookup = require("scripts.tools.platform_lookup")
+local force_lookup     = require("scripts.tools.force_lookup")
+local surface_lookup   = require("scripts.tools.surface_lookup")
+local name_lookup      = require("scripts.tools.name_lookup")
+local entity_count_all = require("scripts.tools.entity_count_all")
 
--- One count_entities_filtered is a C++ pass over a surface, not a Lua walk, but
--- a sweep multiplies them: every force against every surface.
---
--- The sweep does not add game time, it removes round trips. A force owns
--- entities on its own surface and almost nowhere else, so the passes that find
--- nothing are cheap and only a handful do real work, and those same passes were
--- always going to run. Question 64 on 2026-09-15 asked how many solar panels
--- each team had and cost fourteen entity_count calls in one round: fourteen
--- RCON trips for engine work that one trip can carry.
---
--- So MAX_PASSES guards the pathological shape rather than the ordinary one. The
--- measured server runs 23 surfaces against 14 populated forces, 322 passes; a
--- save that has accumulated a hundred space platforms (surfaces.lua says they
--- do) against twenty teams is 2000, and that one refuses and says which
--- argument makes it affordable. docs/design/phase4-spec.md, "Bounding a walk"
--- and "Refusal as a Lua contract".
-local MAX_PASSES = 600
+local MAX_NAMES = 8
+local MAX_TYPE_NAMES = 25
+local NO_NAME = "no entity prototype by that name: use the internal name, for example assembling-machine-2"
 
 local M = {}
 
 M.manifest = {
   entity_count = {
-    desc = "How many entities of one prototype one force has on one surface (how many labs do we have). Internal prototype name. Unknown name or surface: found=false. all=true answers for every force that has players in one call, one row each, largest count first: use it for any each-team or every-force question instead of one call per force. Under all=true, leave surface out for each force's total everywhere, which the engine keeps and which costs nothing however many teams there are, the right call for any which-team-has-most question; name a surface only when the answer must be about that one place. all=true with per_surface=true breaks each force's count down by surface instead of totalling it, one row per team-and-place that has any, so \"which space ship has most thrusters, where is it\" is one call; a platform row carries the owner, location and state columns list_surfaces does, and gps, the ping at the ship's own hub: put that gps in the answer, it is what where-is-it means for a ship.",
+    desc = "How many entities one force has on one surface (how many labs do we have): by name, names (up to " .. MAX_NAMES .. ") or a prototype type such as furnace, per name and in total. all=true: one row per force with players, largest first; leave surface out there for each force's total everywhere, an O(1) engine counter, the right call for which-team-has-most. all=true with per_surface=true: one row per force and surface that has any, platform rows with owner, location, state and gps, the ping at the ship's hub: put that gps in a where-is-it answer. Unknown name or surface: found=false.",
     params = {
       surface     = "string surface name or index, e.g. nauvis; required unless all=true, where omitting it counts every surface",
-      name        = "string! entity prototype name, e.g. lab, assembling-machine-2",
+      name        = "string entity prototype name, e.g. lab; give name, names or type",
+      names       = "list<string> up to " .. MAX_NAMES .. " entity prototype names counted together, one row each",
+      type        = "string entity prototype type, e.g. furnace, assembling-machine: every entity of that type",
       all         = "boolean default false: one row per force that has players; the force argument is ignored",
-      per_surface = "boolean default false, only with all=true and surface left out: one row per force-and-surface that has any, instead of one row per force totalled across surfaces",
+      per_surface = "boolean default false, only with all=true, surface left out and one name: one row per force-and-surface that has any",
+      offset      = require("scripts.tools.bounded").OFFSET_PARAM,
     },
   },
 }
 
---- Which forces a sweep answers for: the ones a team mod has actually put
---- players on, the same rule current_research's own sweep follows. An empty
---- slot owns nothing anywhere, so a row of zeroes for it is noise in every
---- row of the answer.
-local function sweep_forces()
+--- Every non-hidden entity prototype of one type, by name, at most
+--- MAX_TYPE_NAMES. LuaPrototypes::get_entity_filtered, EntityPrototypeFilter
+--- "type" (runtime-api.json 2.1.23), returns a LuaCustomTable walked with
+--- pairs.
+local function names_of_type(entity_type)
   local out = {}
-  for _, force in pairs(game.forces) do
-    if #force.players > 0 then out[#out + 1] = force end
+  for name, proto in pairs(prototypes.get_entity_filtered({ { filter = "type", type = entity_type } })) do
+    if not proto.hidden then out[#out + 1] = name end
   end
-  table.sort(out, function(x, y) return x.name < y.name end)
+  table.sort(out)
+  for i = #out, MAX_TYPE_NAMES + 1, -1 do out[i] = nil end
   return out
 end
 
---- Which surfaces a sweep counts over: the one named, or every surface in the
---- game when none was, the rule production_since already follows so a force's
---- total never depends on the model guessing where that force lives. Returns
---- the surfaces, the label to quote back, and a ready-to-return miss reply when
---- a named surface does not resolve.
-local function sweep_surfaces(a)
-  if a.surface == nil or a.surface == "" or a.surface == "all" then
-    local all = {}
-    for _, surface in pairs(game.surfaces) do
-      if surface.valid then all[#all + 1] = surface end
+--- What to count: the resolved names, whether it was one `name` alone, the
+--- head of the reply, or nil and a found=false reply.
+local function targets_of(a)
+  if a.name == nil and a.names == nil and a.type == nil then error("name is required", 0) end
+  local asked, head = {}, {}
+  if a.name ~= nil then
+    if type(a.name) ~= "string" or a.name == "" then error("name is required", 0) end
+    asked[1] = a.name
+  end
+  local list = a.names == nil and {} or (type(a.names) == "table" and a.names or { a.names })
+  if #list > MAX_NAMES then error("at most " .. MAX_NAMES .. " names in one call", 0) end
+  for _, one in ipairs(list) do asked[#asked + 1] = one end
+  local names, resolved, missing = name_lookup.resolve_all(asked, "entity")
+  if missing then
+    local first = next(missing)
+    return nil, nil, nil, { found = false, name = first, reason = NO_NAME, suggestions = missing[first] }
+  end
+  if a.type ~= nil then
+    local typed = names_of_type(a.type)
+    if #typed == 0 then
+      return nil, nil, nil, { found = false, type = a.type, reason = "no entity prototype of that type: types are such as furnace, assembling-machine, mining-drill" }
     end
-    table.sort(all, function(x, y) return x.name < y.name end)
-    return all, "all"
+    for _, one in ipairs(typed) do names[#names + 1] = one end
+    head.type = a.type
   end
-  local surface, miss = surface_lookup.find(a.surface)
-  if not surface then return nil, nil, miss end
-  return { surface }, surface.name
+  local single = a.name ~= nil and #list == 0 and a.type == nil
+  if single then head.name = names[1] else head.names = names end
+  head.resolved_from = resolved and (single and resolved[1] or resolved) or nil
+  return names, single, head
 end
 
---- all=true is the every-team question in one call. The reply carries no
---- top-level force field: that absence is what tells a sweep from the
---- single-force shape, which carries one, and both carry rows.
---- Sorting, bounding and the reply shape, shared by both sweep paths so the
---- wire shape cannot drift between them. surfaces_counted is nil on the
---- engine-counter path: that path asks no surface anything, so reporting a
---- number there would be inventing one.
-local function finish_rows(rows, name, label, surfaces_counted)
-  table.sort(rows, function(x, y)
-    if x.count ~= y.count then return x.count > y.count end
-    return x.force < y.force
-  end)
-  local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
-  return {
-    found = true, name = name, surface = label, surfaces_counted = surfaces_counted,
-    total = #rows, shown = #shown, forces = shown,
-  }
-end
-
---- Every valid surface in the game, sorted by name. The same set
---- sweep_surfaces(a) walks when no surface was named, pulled out so the
---- per_surface path can drive it directly rather than going through the
---- single-surface-or-all branching sweep_surfaces exists for.
-local function every_surface()
-  local all = {}
-  for _, surface in pairs(game.surfaces) do
-    if surface.valid then all[#all + 1] = surface end
-  end
-  table.sort(all, function(x, y) return x.name < y.name end)
-  return all
-end
-
---- The per_surface answer: one row per force-and-surface that actually has
---- some of the entity, empty combinations left out rather than padding the
---- reply with zeroes. Platform surfaces carry the same owner/location/state
---- columns list_surfaces does, so "which space ship has most thrusters,
---- where is it" reads off one row.
----
---- Same shape as the named-surface path in entity_count_all, one
---- count_entities_filtered per force per surface, so the same MAX_PASSES
---- bound applies: this walks every surface in the game rather than one, so
---- it is the likelier of the two to hit it.
-local function entity_count_per_surface(a, forces)
-  local surfaces = every_surface()
-  local passes = #forces * #surfaces
-  if passes > MAX_PASSES then
-    return {
-      found = false, name = a.name, surface = "all",
-      force_count = #forces, surface_count = #surfaces,
-      passes = passes, max_passes = MAX_PASSES,
-      reason = "counting every force on every surface would be " .. passes ..
-               " passes over the map, past the " .. MAX_PASSES .. " one call may spend: " ..
-               "drop per_surface for the engine's own per-force totals, or name one surface",
-    }
-  end
-
-  -- Two things keep this walk off the game thread on a big save. A force
-  -- that owns none of the entity anywhere is skipped after one O(1) read of
-  -- the engine's own per-force counter, instead of one pass per surface
-  -- that all find nothing; and a platform surface is counted for the force
-  -- that owns it and no other, since a platform belongs to one force. On the
-  -- owner's save, 16 forces across 30 surfaces was 480 passes and 1.26
-  -- seconds on the game thread for a question about thrusters that three
-  -- forces owned; it is a few dozen passes now.
-  local rows = {}
-  for _, force in ipairs(forces) do
-    if force.get_entity_count(a.name) > 0 then
-      for _, surface in ipairs(surfaces) do
-        local platform = platform_lookup.live(surface)
-        local owner = platform and platform.force and platform.force.name
-        if not owner or owner == force.name then
-          local count = surface.count_entities_filtered{ force = force.name, name = a.name }
-          if count > 0 then
-            local row = { force = force.name, surface = surface.name, count = count }
-            platform_lookup.merge_into(row, surface)
-            -- A platform is its own surface with its hub at the origin, so
-            -- the one ping that opens remote view on the ship is right here,
-            -- ready for the answer to carry.
-            if platform then row.gps = "[gps=0,0," .. surface.name .. "]" end
-            rows[#rows + 1] = row
-          end
-        end
-      end
+--- One force on one surface, several names: a row per name it has any of,
+--- the O(1) counter deciding which are worth a pass.
+local function count_many(force, surface, names, head)
+  local rows, total = {}, 0
+  for _, name in ipairs(names) do
+    if force.get_entity_count(name) > 0 then
+      local n = surface.count_entities_filtered{ force = force.name, name = name }
+      total = total + n
+      if n > 0 then rows[#rows + 1] = { name = name, count = n } end
     end
   end
   table.sort(rows, function(x, y)
     if x.count ~= y.count then return x.count > y.count end
-    if x.force ~= y.force then return x.force < y.force end
-    return x.surface < y.surface
+    return x.name < y.name
   end)
-  -- Bounded by bytes as well as by count, like finish_rows above: these rows
-  -- carry a platform's owner, location, state and gps, and 44 of them encode
-  -- past the 8000-byte call cap, where the whole reply is refused after
-  -- every pass was spent. This is the path bounded.fit was written for, and
-  -- it was the one path that did not call it.
-  local shown = bounded.fit(bounded.cut(rows, bounded.MAX_FORCES))
-  return {
-    found = true, name = a.name, surface = "all", surfaces_counted = #surfaces,
-    total = #rows, shown = #shown, forces = shown,
-  }
-end
-
-local function entity_count_all(a)
-  if type(a.name) ~= "string" or a.name == "" then error("name is required", 0) end
-  if not prototypes.entity[a.name] then
-    return {
-      found = false, name = a.name,
-      reason = "no entity prototype by that name: use the internal name, for example assembling-machine-2",
-    }
-  end
-
-  local forces = sweep_forces()
-  local rows = {}
-
-  -- No surface named means "how many does each force have", and the engine
-  -- already knows: LuaForce::get_entity_count is documented O(1), "entity
-  -- counts are kept and maintained in the game engine" (2.0.77). There is no
-  -- pass budget to spend and nothing to refuse, so this answers at 40 forces
-  -- exactly as fast as at 4.
-  --
-  -- The first version of this sweep summed count_entities_filtered over every
-  -- force against every surface to reach the same number. On the measured
-  -- server that was 322 chunk passes; at 40 teams across 45 surfaces it is
-  -- 1800, past MAX_PASSES, so the sweep would have refused precisely the
-  -- question it was built for.
-  if a.surface == nil or a.surface == "" or a.surface == "all" then
-    -- per_surface trades the O(1) counter above for a walk, on purpose: a
-    -- per-force total cannot say which surface it came from, and that is
-    -- exactly what this asks for instead.
-    if a.per_surface == true then return entity_count_per_surface(a, forces) end
-    for _, force in ipairs(forces) do
-      rows[#rows + 1] = { force = force.name, count = force.get_entity_count(a.name) }
-    end
-    return finish_rows(rows, a.name, "all", nil)
-  end
-
-  -- A named surface is the only case the engine keeps no counter for, and it
-  -- costs one pass per force rather than one per force per surface, so the
-  -- cross product that made the bound necessary cannot arise.
-  local surfaces, label, miss = sweep_surfaces(a)
-  if not surfaces then return miss end
-  local passes = #forces * #surfaces
-  if passes > MAX_PASSES then
-    return {
-      found = false, name = a.name, surface = label,
-      force_count = #forces, surface_count = #surfaces,
-      passes = passes, max_passes = MAX_PASSES,
-      reason = "counting every force on this surface would be " .. passes ..
-               " passes over the map, past the " .. MAX_PASSES .. " one call may spend: " ..
-               "ask about fewer forces, or leave surface out for the engine's own per-force totals",
-    }
-  end
-  for _, force in ipairs(forces) do
-    local count = 0
-    for _, surface in ipairs(surfaces) do
-      count = count + surface.count_entities_filtered{ force = force.name, name = a.name }
-    end
-    rows[#rows + 1] = { force = force.name, count = count }
-  end
-  return finish_rows(rows, a.name, label, #surfaces)
+  head.found, head.force, head.surface, head.count = true, force.name, surface.name, total
+  head.names = rows
+  return head
 end
 
 local function entity_count(a)
   a = a or {}
-  if a.all == true then return entity_count_all(a) end
+  if a.all == true then
+    local names, _, head, refused = targets_of(a)
+    if not names then return refused end
+    return entity_count_all.run(a, names, head)
+  end
   local force = force_lookup.require_force(a.force)
   local surface, miss = surface_lookup.find(a.surface)
   if not surface then
     miss.force = force.name
     return miss
   end
-  if type(a.name) ~= "string" or a.name == "" then error("name is required", 0) end
-
-  -- Checked here rather than inside the filter: an unknown prototype name is the
-  -- likeliest thing to be wrong about, and a clear found = false beats the
-  -- engine's own error for the model's next round.
-  if not prototypes.entity[a.name] then
-    return {
-      found = false, force = force.name, surface = surface.name, name = a.name,
-      reason = "no entity prototype by that name: use the internal name, for example assembling-machine-2",
-    }
+  -- Checked here rather than inside the filter: an unknown prototype name is
+  -- the likeliest thing to be wrong about, and a clear found = false beats
+  -- the engine's own error for the model's next round.
+  local names, single, head, refused = targets_of(a)
+  if not names then
+    refused.force, refused.surface = force.name, surface.name
+    return refused
   end
-
+  if not single then return count_many(force, surface, names, head) end
   return {
     found = true,
     force = force.name,
     surface = surface.name,
-    name = a.name,
-    count = surface.count_entities_filtered{ force = force.name, name = a.name },
+    name = names[1],
+    resolved_from = head.resolved_from,
+    count = surface.count_entities_filtered{ force = force.name, name = names[1] },
   }
 end
 

@@ -16,6 +16,7 @@
 local fluid_rate_tool = require("scripts.tools.fluid_rate")
 local flow = require("scripts.tools.flow")
 local axes              = require("scripts.sweep.axes")
+local scope             = require("scripts.sweep.scope")
 
 -- Looked up at call time rather than captured at load, the same reason
 -- entities.lua gives for its own delegate wrapper, so a test can stand a
@@ -37,10 +38,13 @@ local M = {
   costly = false,
 }
 
--- One call per (force, surface) pair whichever axis is asked for: the same
--- predict item_rate.lua declares for the identical shape of walk.
+-- One fluid_rate call per (force, surface) cell, only on cells where the
+-- force has ever made or used the fluid (scripts/sweep/scope.lua), the same
+-- pruning item_rate.lua applies, and predicted on that pruned list.
 M.max_passes = 600
-function M.predict(ctx, _axis, _a) return #ctx.forces * #ctx.surfaces end
+function M.predict(ctx, _axis, a) return #scope.fluid(ctx, a.subject) end
+
+M.refusal_hint = "ask fluid_rate with all=true for each force's total over every surface in one call"
 
 function M.check(a)
   if type(a.subject) ~= "string" or a.subject == "" then
@@ -55,37 +59,31 @@ function M.check(a)
   return nil
 end
 
+--- One cell's rate, or nil and a refusal when the delegate refused or cut.
+local function read_cell(cell, a, window)
+  local reply = FLUID_RATE({ force = cell.force.name, surface = cell.surface.name, fluid = a.subject, window = window })
+  if reply.found == false then
+    return nil, { subject = a.subject, reason = reply.reason }
+  end
+  if reply.total and reply.shown and reply.shown < reply.total then
+    return nil, {
+      subject = a.subject, shown = reply.shown, total = reply.total,
+      reason = "fluid_rate showed " .. reply.shown .. " of " .. reply.total ..
+               " rows, so a ranking over them would name whoever survived the cut",
+    }
+  end
+  return tonumber(reply.produced_per_min) or 0
+end
+
 function M.read(ctx, axis, a)
   local window = (type(a.window) == "string" and a.window ~= "") and a.window or DEFAULT_WINDOW
-  local by_cell, order = {}, {}
-  for _, force in ipairs(ctx.forces) do
-    for _, surface in ipairs(ctx.surfaces) do
-      local reply = FLUID_RATE({ force = force.name, surface = surface.name, fluid = a.subject, window = window })
-      if reply.found == false then
-        return nil, { subject = a.subject, reason = reply.reason }
-      end
-      -- fluid_rate answers one row, never a list to cut; this guard is the
-      -- same forward defence item_made.lua and item_rate.lua carry, kept
-      -- for the same reason: a delegate may one day grow a cut without this
-      -- file changing at all.
-      if reply.total and reply.shown and reply.shown < reply.total then
-        return nil, {
-          subject = a.subject, shown = reply.shown, total = reply.total,
-          reason = "fluid_rate showed " .. reply.shown .. " of " .. reply.total ..
-                   " rows, so a ranking over them would name whoever survived the cut",
-        }
-      end
-      local value = tonumber(reply.produced_per_min)
-      local cell = axes[axis]({ force = force.name, surface = surface.name })
-      if cell and value then
-        if not by_cell[cell] then order[#order + 1] = cell end
-        by_cell[cell] = (by_cell[cell] or 0) + value
-      end
-    end
+  local values = {}
+  for _, cell in ipairs(scope.fluid(ctx, a.subject)) do
+    local value, refusal = read_cell(cell, a, window)
+    if refusal then return nil, refusal end
+    values[#values + 1] = { cell = cell, value = value }
   end
-  local rows = {}
-  for _, cell in ipairs(order) do rows[#rows + 1] = { name = cell, value = by_cell[cell] } end
-  return rows
+  return scope.summed(ctx, axis, axes, values)
 end
 
 return M

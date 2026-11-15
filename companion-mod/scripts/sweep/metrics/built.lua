@@ -9,6 +9,7 @@
 -- metric gives: built{all=true} always sums every surface into one row.
 
 local built_tool = require("scripts.tools.built")
+local pages = require("scripts.sweep.pages")
 local axes         = require("scripts.sweep.axes")
 
 -- Looked up at call time rather than captured at load, the same reason
@@ -26,16 +27,12 @@ local M = {
 }
 
 function M.read(_ctx, _axis, _a)
-  local reply = BUILT({ all = true })
-  if reply.total and reply.shown and reply.shown < reply.total then
-    return nil, {
-      shown = reply.shown, total = reply.total,
-      reason = "built showed " .. reply.shown .. " of " .. reply.total ..
-               " rows, so a ranking over them would name whoever survived the cut",
-    }
-  end
+  -- Every page of built{all=true}: a ranking over the first page alone
+  -- would name whoever survived the byte cut (scripts/sweep/pages.lua).
+  local forces, refusal = pages.collect(BUILT, { all = true }, "forces", "built")
+  if not forces then return nil, refusal end
   local rows = {}
-  for _, row in ipairs(reply.forces or {}) do
+  for _, row in ipairs(forces) do
     rows[#rows + 1] = { name = axes.force({ force = row.force }), value = row.built }
   end
   return rows

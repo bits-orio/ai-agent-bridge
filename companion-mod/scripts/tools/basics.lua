@@ -15,29 +15,35 @@ local MAX_PLAYERS = 50
 local DEFAULT_FORCES = 50
 local MAX_FORCES = bounded.MAX_FORCES
 
+-- The same words on every paged tool, so the model learns one rule.
+local OFFSET_PARAM = bounded.OFFSET_PARAM
+
 local M = {}
 
 M.manifest = {
   list_forces = {
-    desc = "Forces on the server: name, players, connected players, by name. Forces that have never had a player are left out as empty team slots unless include_empty=true; empty is the count of those slots either way, and it never counts the engine's own enemy, neutral and player forces, which carry engine=true when listed and are not teams. total beside shown says if there are more.",
+    desc = "Forces on the server by name: players, connected players. Forces that never had a player are empty team slots, left out unless include_empty=true and counted in empty; the engine's own enemy, neutral and player forces carry engine=true and are never slots.",
     params = {
       include_empty = "boolean default false: also list forces that never had a player, the team slots a scenario mod made in advance and the engine's own",
       names         = "boolean add called, each force's chosen name; answers still write the force name",
       limit         = "integer rows, default " .. DEFAULT_FORCES .. ", max " .. MAX_FORCES,
+      offset        = OFFSET_PARAM,
     },
   },
   list_players = {
-    desc = "Players of one force: name, connected, admin. Connected only unless connected=false. Quote total and known, not the row count. all=true answers every force in one call, name and force per row, with total and shown but no known, and limit is ignored: use it for any who-is-online or every-player question instead of one call per force.",
+    desc = "Players of one force: name, connected, admin. Connected only unless connected=false. Quote total and known, not the row count. all=true answers every force in one call, name and force per row, limit ignored: use it for any who-is-online question.",
     params = {
       connected = "boolean default true: connected only; false: every player ever",
       limit     = "integer rows, default " .. DEFAULT_PLAYERS .. ", max " .. MAX_PLAYERS,
       all       = "boolean default false: one row per player, every force; force ignored",
+      offset    = OFFSET_PARAM,
     },
   },
   current_research = {
-    desc = "The technology one force is researching now, if any, and its progress. all=true answers for every force that has players or is researching, one row each in a single call: use it for any each-team or every-force question instead of one call per force.",
+    desc = "The technology one force is researching now, if any, and its progress through that one technology. all=true: one row per force with players or research, in one call.",
     params = {
-      all = "boolean default false: one row per force with players or research; the force argument is ignored",
+      all    = "boolean default false: one row per force with players or research; the force argument is ignored",
+      offset = OFFSET_PARAM,
     },
   },
 }
@@ -98,8 +104,8 @@ local function list_forces(a)
     end
   end
   bounded.by_name(rows)
-  local shown = bounded.cut(rows, bounded.limit(a.limit, DEFAULT_FORCES, MAX_FORCES))
-  return { total = #rows, empty = empty, shown = #shown, forces = shown }
+  local limit = bounded.limit(a.limit, DEFAULT_FORCES, MAX_FORCES)
+  return bounded.page(rows, a.offset, function(page) return { empty = empty, forces = page } end, limit)
 end
 
 -- all=true is the who-is-online question in one call, across every force
@@ -121,8 +127,7 @@ local function list_players_all(a)
     end
   end
   bounded.by_name(rows)
-  local shown = bounded.cut(rows, MAX_PLAYERS)
-  return { total = #rows, shown = #shown, players = shown }
+  return bounded.page(rows, a.offset, function(page) return { players = page } end, MAX_PLAYERS)
 end
 
 -- force.players holds every player the force has ever had, not the ones online
@@ -141,15 +146,10 @@ local function list_players(a)
     end
   end
   bounded.by_name(rows)
-  local shown = bounded.cut(rows, bounded.limit(a.limit, DEFAULT_PLAYERS, MAX_PLAYERS))
-  return {
-    force = force.name,
-    connected_only = connected_only,
-    known = #force.players,
-    total = #rows,
-    shown = #shown,
-    players = shown,
-  }
+  local limit = bounded.limit(a.limit, DEFAULT_PLAYERS, MAX_PLAYERS)
+  return bounded.page(rows, a.offset, function(page)
+    return { force = force.name, connected_only = connected_only, known = #force.players, players = page }
+  end, limit)
 end
 
 local function research_row(force)
@@ -176,8 +176,7 @@ local function current_research(a)
       end
     end
     table.sort(rows, function(x, y) return x.force < y.force end)
-    local shown = bounded.cut(rows, MAX_FORCES)
-    return { total = #rows, shown = #shown, forces = shown }
+    return bounded.page(rows, a.offset, function(page) return { forces = page } end, MAX_FORCES)
   end
   return research_row(force_lookup.require_force(a.force))
 end

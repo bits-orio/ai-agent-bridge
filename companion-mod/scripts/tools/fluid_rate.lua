@@ -25,18 +25,20 @@ local force_lookup   = require("scripts.tools.force_lookup")
 local surface_lookup = require("scripts.tools.surface_lookup")
 local flow           = require("scripts.tools.flow")
 local bounded        = require("scripts.tools.bounded")
+local window_age     = require("scripts.tools.window_age")
 
 local M = {}
 
 M.manifest = {
   fluid_rate = {
-    desc = "How fast one fluid is being made and used: production and consumption rate for one force on one surface, in units per minute, averaged over the window. A rate, never a total. all=true answers every force that has players in one call, one row each, summed over every surface, largest producer first: use it for any each-team or every-force question instead of one call per force. Unknown surface: found=false.",
+    desc = "How fast one force makes and uses one fluid on one surface, units per minute averaged over the window; a rate, never a total. all=true: one row per force with players, summed over every surface, largest producer first. Unknown surface: found=false.",
     tier = "1",
     params = {
       surface = "string surface name or index, e.g. nauvis; required unless all=true",
       fluid   = "string! fluid prototype name, e.g. crude-oil, water",
-      window  = "string! the average's span, one of " .. flow.window_names .. "; the shortest that covers the question, one_minute for right now",
+      window  = "string! averaging window, one of " .. flow.window_names .. "; one_minute for right now; partial_window means the map is younger than the window and the rate is understated, averaged over the whole window",
       all     = "boolean default false: one row per force with players, summed over every surface; force and surface ignored",
+      offset  = bounded.OFFSET_PARAM,
     },
   },
 }
@@ -87,9 +89,8 @@ local function fluid_rate_all(a)
   -- reply was refused whole with too_large and shipped no rows at all. kills,
   -- built and trains never had the problem because their rows already carry
   -- their final names when fit runs; this one does now too.
-  local cut = bounded.cut(rows, bounded.MAX_FORCES)
   local wire = {}
-  for i, row in ipairs(cut) do
+  for i, row in ipairs(rows) do
     wire[i] = {
       force = row.force,
       produced_per_min = bounded.round(row.produced, 2),
@@ -97,8 +98,7 @@ local function fluid_rate_all(a)
       net_per_min = bounded.round(row.produced - row.consumed, 2),
     }
   end
-  local shown = bounded.fit(wire)
-  return { total = #rows, shown = #shown, forces = shown }
+  return bounded.page(wire, a.offset, function(page) return { forces = page } end, bounded.MAX_FORCES)
 end
 
 local function fluid_rate(a)
@@ -113,13 +113,13 @@ local function fluid_rate(a)
   local window = flow.require_window(a.window)
 
   local produced, consumed = rate_for(force, surface, a.fluid, window)
-  return {
+  return window_age.stamp({
     found = true,
     force = force.name, surface = surface.name, fluid = a.fluid, window = a.window,
     produced_per_min = bounded.round(produced, 2),
     consumed_per_min = bounded.round(consumed, 2),
     net_per_min = bounded.round(produced - consumed, 2),
-  }
+  }, window)
 end
 
 M.functions = { fluid_rate = fluid_rate }

@@ -87,9 +87,10 @@ local function logistics_summary(a)
   -- handful on purpose, a mall surface can hold dozens of one-roboport
   -- networks, and a sum over the survivors of that cut is not a total.
   local order = {}
-  local logistic_total = 0
+  local logistic_total, construction_total = 0, 0
   for _, network in pairs(force.logistic_networks[surface.name] or {}) do
     logistic_total = logistic_total + network.all_logistic_robots
+    construction_total = construction_total + network.all_construction_robots
     order[#order + 1] = {
       network = network,
       id = network.network_id,
@@ -112,8 +113,22 @@ local function logistics_summary(a)
     total = #order,
     shown = #rows,
     logistic_robots_total = logistic_total,
+    construction_robots_total = construction_total,
+    robots_total = logistic_total + construction_total,
     networks = rows,
   }
+end
+
+--- Robot totals over every network of one force on one surface, from the
+--- counters the networks keep. For callers that want the sums and no rows
+--- (force_card); the same two sums logistics_summary reports.
+function M.robot_totals(force, surface_name)
+  local logistic, construction = 0, 0
+  for _, network in pairs(force.logistic_networks[surface_name] or {}) do
+    logistic = logistic + network.all_logistic_robots
+    construction = construction + network.all_construction_robots
+  end
+  return logistic, construction
 end
 
 M.functions = { logistics_summary = logistics_summary }

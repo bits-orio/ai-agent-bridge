@@ -18,6 +18,7 @@
 local production_tool = require("scripts.tools.production")
 local flow = require("scripts.tools.flow")
 local axes             = require("scripts.sweep.axes")
+local scope            = require("scripts.sweep.scope")
 
 -- Looked up at call time rather than captured at load, the same reason
 -- entities.lua gives for its own delegate wrapper, so a test can stand a
@@ -40,11 +41,17 @@ local M = {
   costly = false,
 }
 
--- One call per (force, surface) pair whichever axis is asked for: the
--- "force" axis still reads every surface to sum them, it only regroups the
--- rows afterward. predict = forces x surfaces per the phase5 contract.
+-- One item_rate call per (force, surface) cell whichever axis is asked
+-- for, but only on cells where the force has ever made or used the item
+-- (scripts/sweep/scope.lua): every other cell's rate is zero in every
+-- window. The prediction counts the pruned cells, so the refusal is about
+-- what the read would really spend.
 M.max_passes = 600
-function M.predict(ctx, _axis, _a) return #ctx.forces * #ctx.surfaces end
+function M.predict(ctx, _axis, a) return #scope.item(ctx, a.subject) end
+
+--- What to ask instead when even the pruned cells are too many: both pass.
+M.refusal_hint = "sweep item_made for each force's lifetime total, one counter read per force, " ..
+                 "or item_rate for one force"
 
 function M.check(a)
   if type(a.subject) ~= "string" or a.subject == "" then
@@ -61,37 +68,33 @@ function M.check(a)
   return nil
 end
 
+--- One cell's rate, or nil and a refusal when the delegate refused or cut.
+local function read_cell(cell, a, window)
+  local reply = ITEM_RATE({ force = cell.force.name, surface = cell.surface.name, item = a.subject, window = window })
+  if reply.found == false then
+    return nil, { subject = a.subject, reason = reply.reason }
+  end
+  -- item_rate answers one row, never a list to cut; this guard is a forward
+  -- defence in case the delegate grows a cut later.
+  if reply.total and reply.shown and reply.shown < reply.total then
+    return nil, {
+      subject = a.subject, shown = reply.shown, total = reply.total,
+      reason = "item_rate showed " .. reply.shown .. " of " .. reply.total ..
+               " rows, so a ranking over them would name whoever survived the cut",
+    }
+  end
+  return tonumber(reply.produced_per_min) or 0
+end
+
 function M.read(ctx, axis, a)
   local window = (type(a.window) == "string" and a.window ~= "") and a.window or DEFAULT_WINDOW
-  local by_cell, order = {}, {}
-  for _, force in ipairs(ctx.forces) do
-    for _, surface in ipairs(ctx.surfaces) do
-      local reply = ITEM_RATE({ force = force.name, surface = surface.name, item = a.subject, window = window })
-      if reply.found == false then
-        return nil, { subject = a.subject, reason = reply.reason }
-      end
-      -- item_rate answers one row, never a list to cut; this guard is the
-      -- same forward defence item_made.lua carries, kept for the same
-      -- reason: a provider tool this delegate wraps may grow a cut later
-      -- without this file changing at all.
-      if reply.total and reply.shown and reply.shown < reply.total then
-        return nil, {
-          subject = a.subject, shown = reply.shown, total = reply.total,
-          reason = "item_rate showed " .. reply.shown .. " of " .. reply.total ..
-                   " rows, so a ranking over them would name whoever survived the cut",
-        }
-      end
-      local value = tonumber(reply.produced_per_min)
-      local cell = axes[axis]({ force = force.name, surface = surface.name })
-      if cell and value then
-        if not by_cell[cell] then order[#order + 1] = cell end
-        by_cell[cell] = (by_cell[cell] or 0) + value
-      end
-    end
+  local values = {}
+  for _, cell in ipairs(scope.item(ctx, a.subject)) do
+    local value, refusal = read_cell(cell, a, window)
+    if refusal then return nil, refusal end
+    values[#values + 1] = { cell = cell, value = value }
   end
-  local rows = {}
-  for _, cell in ipairs(order) do rows[#rows + 1] = { name = cell, value = by_cell[cell] } end
-  return rows
+  return scope.summed(ctx, axis, axes, values)
 end
 
 return M

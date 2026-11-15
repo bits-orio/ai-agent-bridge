@@ -57,6 +57,16 @@
 --     (ModuleEffects in 2.0.77, Effect in 2.1.17), whose productivity is an
 --     optional float in both.
 --   LuaRecipePrototype::has_category(category) -> boolean, ::name.
+--   LuaEntityPrototype::burner_prototype (optional LuaBurnerPrototype): set
+--     on a machine that burns fuel, such as the stone and steel furnaces.
+--
+-- On a surface asked about, a machine whose surface_conditions fail there
+-- is not offered (scripts/tools/surface_rule.lua), and a recipe that only
+-- such machines can make is not a candidate either: context() hands the
+-- picker that rule before it ranks anything.
+
+local surface_rule    = require("scripts.tools.surface_rule")
+local machine_surface = require("scripts.tools.machine_surface")
 
 local CRAFTER_TYPES = { "assembling-machine", "furnace", "rocket-silo" }
 local BELT_TYPE = "transport-belt"
@@ -110,6 +120,7 @@ local function crafters()
     one.categories = proto.crafting_categories or {}
     one.sorted = sorted_keys(one.categories)
     one.productivity = base_productivity(proto)
+    one.burner = proto.burner_prototype ~= nil
     out[#out + 1] = one
   end
   table.sort(out, faster)
@@ -175,7 +186,7 @@ end
 
 local function verdict(ctx, crafter)
   return { name = crafter.name, speed = crafter.speed, productivity = crafter.productivity,
-           unlocked = can_build(ctx, crafter) }
+           unlocked = can_build(ctx, crafter), burner = crafter.burner }
 end
 
 --- What the caller sent, for an error: a name as itself, anything else as its
@@ -192,20 +203,30 @@ local function named(list, name)
   return nil
 end
 
+--- The machine the caller named, or an error in words they can act on.
+local function wanted_machine(ctx, all, wanted)
+  local found = named(ctx.crafters, wanted)
+  if found then return found end
+  if named(all, wanted) then
+    error("machine " .. shown(wanted) .. " cannot run on " .. ctx.rule.surface.name ..
+          ": its surface conditions do not hold there; leave machine out for one that can", 0)
+  end
+  error("machine must be a crafting machine prototype name, e.g. assembling-machine-2, not " .. shown(wanted), 0)
+end
+
 --- Everything one call needs to choose machines and the belt: the crafting
 --- machines and belts read once, `picker` (recipe_pick.memo for the force) to
 --- tell what it can build, and `wanted`, a machine the caller named. Errors
 --- on a `wanted` that is not a crafting machine, in words the caller can act
 --- on.
-function M.context(picker, wanted)
+function M.context(picker, wanted, surface)
   local ctx = { picker = picker, built = {}, chosen = {}, matched = {} }
-  ctx.crafters, ctx.belts = crafters(), belts()
-  if wanted ~= nil then
-    ctx.wanted = named(ctx.crafters, wanted)
-    if not ctx.wanted then
-      error("machine must be a crafting machine prototype name, e.g. assembling-machine-2, not " .. shown(wanted), 0)
-    end
-  end
+  local all
+  all, ctx.belts = crafters(), belts()
+  ctx.rule = surface_rule.of(surface)
+  ctx.crafters = machine_surface.eligible(ctx.rule, all)
+  if wanted ~= nil then ctx.wanted = wanted_machine(ctx, all, wanted) end
+  if ctx.rule then picker.restrict(machine_surface.recipe_rule(ctx.rule, all, ctx.crafters)) end
   prefetch_placers(ctx)
   return ctx
 end

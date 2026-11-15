@@ -105,12 +105,40 @@ local function from_map_gen(map_gen, resources)
 end
 
 --- What a surface that is not a platform hands out, from its own map
---- generator or else its planet's, or nil when neither says.
+--- generator or else its planet's, or nil when neither says; and the map
+--- generator that said.
 local function on_planet(surface, resources)
   local set = from_map_gen(surface.map_gen_settings, resources)
-  if set then return set end
+  if set then return set, surface.map_gen_settings end
   local planet = surface.planet
-  return planet and from_map_gen(planet.prototype.map_gen_settings, resources) or nil
+  local map_gen = planet and planet.prototype.map_gen_settings
+  set = map_gen and from_map_gen(map_gen, resources) or nil
+  return set, set and map_gen or nil
+end
+
+--- The entity types a map generator places that keep giving: trees, the
+--- plants an agricultural tower harvests, fish. A rock, a ruin or a
+--- stromatolite (type simple-entity) is mined once and gone, so it is no
+--- source a plan can run on. Measured on a fresh 2.1.23 map: Vulcanus'
+--- big and huge volcanic rocks give iron ore, Gleba's iron stromatolite
+--- too, and counting them told recipe_needs that iron plate smelted from
+--- ore completes on both, so Vulcanus never got casting from lava and
+--- neither said not_makeable_on_surface.
+local KEEPS_GIVING = { tree = true, plant = true, fish = true }
+
+--- What harvesting the living things a map generator places gives: wood
+--- from its trees, fruit from its plants, fish. Not raw for the walk, which
+--- has always charged only resources and pumped fluids as mined, but
+--- obtainable there, so a plan needing wood on Nauvis is not called
+--- unmakeable.
+local function harvested(map_gen)
+  local set = {}
+  if not map_gen then return set end
+  for name in pairs(placed(map_gen, "entity")) do
+    local proto = prototypes.entity[name]
+    if proto and KEEPS_GIVING[proto.type] then add_mined(set, proto) end
+  end
+  return set
 end
 
 --- The mined rule for one call, about `surface` (a LuaSurface, or nil for
@@ -120,14 +148,14 @@ end
 --- answered for any planet, because no surface said? The read happens on the
 --- first question that needs it, once, and a platform needs no prototype.
 function M.rule(surface)
-  local set, said
+  local set, said, map_gen
   local function read()
     if surface and surface.platform then
       set, said = {}, true
       return
     end
     local resources = prototypes.get_entity_filtered({ { filter = "type", type = "resource" } })
-    set = surface and on_planet(surface, resources)
+    if surface then set, map_gen = on_planet(surface, resources) end
     said = set ~= nil
     set = set or anywhere(resources)
   end
@@ -140,6 +168,17 @@ function M.rule(surface)
   function rule.anywhere()
     if not set then read() end
     return not said
+  end
+  --- rule.available(kind, name): can this be had where the question is
+  --- about without a recipe, mined, pumped or harvested there, whether or
+  --- not a recipe is named after it? What decides if a chain completes.
+  local harvest
+  function rule.available(kind, name)
+    if not set then read() end
+    local key = yield.key(kind, name)
+    if set[key] then return true end
+    harvest = harvest or harvested(map_gen)
+    return harvest[key] == true
   end
   return rule
 end

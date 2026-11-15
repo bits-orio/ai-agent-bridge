@@ -19,6 +19,7 @@ local events              = require("scripts.events")
 local chat                = require("scripts.chat")
 local ask_rate            = require("scripts.ask_rate")
 local map_id              = require("scripts.map_id")
+local ask_hints           = require("scripts.ask_hints")
 
 -- Console commands. commands.add_command must run every time this mod's Lua
 -- state starts (nothing about a command registration persists across a
@@ -45,9 +46,20 @@ script.on_event(defines.events.on_console_chat, function(e)
   chat.on_console_chat(e)
 end)
 
-script.on_event(defines.events.on_player_left_game, function(e)
-  events.on_player_left_game(e)
+script.on_event(defines.events.on_player_left_game, events.on_player_left_game)
+
+-- Logging first, then the one-time ask hint (scripts/ask_hints.lua).
+script.on_event(defines.events.on_player_joined_game, function(e)
+  events.on_player_joined_game(e)
+  local player = game.get_player(e.player_index)
+  if player then ask_hints.hint(player) end
+end)
+
+-- A removed player is gone for good; a player who only left keeps their
+-- cooldown (scripts/ask_rate.lua) and their lesson (scripts/ask_hints.lua).
+script.on_event(defines.events.on_player_removed, function(e)
   ask_rate.forget(e.player_index)
+  ask_hints.forget(e.player_index)
 end)
 
 script.on_init(function()

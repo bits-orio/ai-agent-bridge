@@ -41,10 +41,11 @@ check("the companion still has a manifest", manifest ~= nil, F.encode(mine))
 -- 7000 was a guess made when this op did not exist, and the manifest outgrew it
 -- honestly as tools were added. The cap that governs is rpc.lua's own
 -- CAPS.manifest = 32768, the op the service actually builds its catalog from,
--- so assert at half of it: still a real guard against a runaway manifest, and no
+-- so assert at three quarters of it (24576, raised from half when the
+-- machine_status, power, research_cost, mods and resources tools landed): still a real guard against a runaway manifest, and no
 -- longer a reason to trim descriptions the model needs.
 check("the companion's own manifest fits one reply with room to spare",
-      #F.encode(mine.r) < 16384, #F.encode(mine.r))
+      #F.encode(mine.r) < 24576, #F.encode(mine.r))
 -- Every param opens with a type word the service's catalog knows, ended by a
 -- space (service/internal/catalog/params.go typeWord). Anything else becomes
 -- a plain string in the schema: list_forces once declared names as
@@ -74,9 +75,11 @@ end
 -- of them declares the reserved force parameter.
 for _, name in ipairs(NEW) do
   for param, spec in pairs((manifest[name] or {}).params or {}) do
+    -- A bracketed type word, list<...> or enum<...>, is one word too
+    -- (service/internal/catalog/params.go typeWord).
     check(name .. "." .. param .. " parses",
-          spec:match("^(string|integer|number|boolean)!? ") ~= nil or
-          spec:match("^%a+!? .") ~= nil, spec)
+          spec:match("^%a+!? .") ~= nil or spec:match("^list%b<>!? .") ~= nil
+          or spec:match("^enum%b<>!? .") ~= nil, spec)
     check(name .. " does not declare force", param ~= "force", param)
   end
 end
@@ -594,7 +597,7 @@ rockets_tool.functions.rockets = real_rockets
 
 local research_sweep = call("sweep", { metric = "research" })
 check("research sweep delegates to current_research{all=true}",
-      research_sweep.ok and research_sweep.r.unit == "percent"
+      research_sweep.ok and research_sweep.r.unit == "percent of current technology"
       and row_eq(research_sweep.r.rows[1], "player", 25), F.encode(research_sweep))
 
 -- The regression this metric's own file documents: current_research's row
@@ -634,18 +637,22 @@ check("a limit cuts the tail, keeps the leaders, and says why",
       and row_eq(limited.r.rows[2], "sweep-synth-2", 50), F.encode(limited))
 -- The same rows, bounded by bytes as well: a name on the platform axis is a
 -- whole label, and a hundred of them with the names players give ships
--- encode past the call cap. bounded.fit reads ROW_BUDGET at call time, so
--- the budget is shrunk here rather than the names grown. Mutation-tested:
--- dropping bounded.fit from envelope.build leaves shown at 3 and why nil.
+-- encode past the reply budget. bounded.fit_reply reads REPLY_BUDGET at call
+-- time and measures the whole reply, so the budget is shrunk here, to one
+-- byte under the uncut reply, rather than the names grown: dropping the last
+-- row saves 13 bytes and why="bytes" costs 14, so two rows go. Mutation-tested:
+-- dropping the fit from envelope.build leaves shown at 3 and why nil.
 local budgeted = require("scripts.tools.bounded")
-local saved_budget = budgeted.ROW_BUDGET
-budgeted.ROW_BUDGET = 40
+local saved_budget = budgeted.REPLY_BUDGET
+local uncut = call("sweep", { metric = "rockets", limit = 100 })
+budgeted.REPLY_BUDGET = #F.encode(uncut.r) - 1
 local by_bytes = call("sweep", { metric = "rockets", limit = 100 })
 check("a byte bound cuts the tail below the limit and says so",
       by_bytes.ok and by_bytes.r.total == 3 and by_bytes.r.shown == 1 and by_bytes.r.skipped == 2
-      and by_bytes.r.why == "bytes" and row_eq(by_bytes.r.rows[1], "sweep-synth-1", 100),
+      and by_bytes.r.why == "bytes" and row_eq(by_bytes.r.rows[1], "sweep-synth-1", 100)
+      and #F.encode(by_bytes.r) <= budgeted.REPLY_BUDGET,
       F.encode(by_bytes))
-budgeted.ROW_BUDGET = saved_budget
+budgeted.REPLY_BUDGET = saved_budget
 game.forces["sweep-synth-1"] = nil
 game.forces["sweep-synth-2"] = nil
 local cleaned_up = call("sweep", { metric = "rockets" })
@@ -692,13 +699,12 @@ check("a plain surface with no platform at all contributes nothing",
 -- nothing the model can use. Measured before this bound: entity_count
 -- per_surface died at 32 surfaces, list_surfaces reached 7794 bytes at its own
 -- default row count.
--- ── sweep{metric="players"} over a roster the delegate truncated ──────
--- list_players{all=true} sorts by PLAYER NAME and cuts at its own row cap
--- before returning, so past that cap its rows are an alphabetical slice. A
--- sweep that counts the slice and lets the ranker publish a leader names the
--- wrong force whenever the cut bites, because the forces whose players sort
--- late are simply not in the sample. Refusing whole is the rule the briefing's
--- pl key already follows.
+-- ── sweep{metric="players"} over a roster the delegate paged ──────────
+-- list_players{all=true} sorts by PLAYER NAME and pages at its own row cap,
+-- so one page is an alphabetical slice. A sweep that counted the slice and
+-- let the ranker publish a leader named the wrong force whenever the cut
+-- bit; it used to refuse, and now reads every page (scripts/sweep/pages.lua)
+-- so the whole roster is counted.
 local saved_players = game.forces.player.players
 local many = {}
 for i = 1, 51 do
@@ -708,12 +714,12 @@ game.forces.player.players = many
 game.forces.player.connected_players = many
 
 local truncated = call("sweep", { metric = "players" })
-check("sweep players refuses rather than ranking a truncated roster",
-      truncated.ok and truncated.r.found == false, F.encode(truncated))
-check("the refusal says how much of the roster it saw",
-      truncated.ok and truncated.r.shown == 50 and truncated.r.total == 51, F.encode(truncated))
-check("a refused sweep carries no rows at all",
-      truncated.ok and truncated.r.rows == nil, F.encode(truncated))
+check("sweep players reads every page of a roster past one page",
+      truncated.ok and truncated.r.found == nil and row_eq(truncated.r.rows[1], "player", 51), F.encode(truncated))
+local one_page = call("list_players", { all = true })
+check("the delegate itself paged: 50 shown of 51, next_offset 50",
+      one_page.ok and one_page.r.shown == 50 and one_page.r.total == 51 and one_page.r.next_offset == 50,
+      F.encode({ one_page.r.shown, one_page.r.total, one_page.r.next_offset }))
 
 game.forces.player.players = saved_players
 game.forces.player.connected_players = { saved_players[1] }

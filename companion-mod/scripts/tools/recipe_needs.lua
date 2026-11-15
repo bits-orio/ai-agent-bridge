@@ -42,6 +42,7 @@ local recipe_reply   = require("scripts.tools.recipe_reply")
 local recipe_walk    = require("scripts.tools.recipe_walk")
 local surface_lookup = require("scripts.tools.surface_lookup")
 local yield          = require("scripts.tools.recipe_yield")
+local name_lookup    = require("scripts.tools.name_lookup")
 
 local MAX_TARGETS = 12
 local MAX_PER_MIN = 1e9
@@ -51,7 +52,7 @@ local M = {}
 
 M.manifest = {
   recipe_needs = {
-    desc = "What it takes to make something: machines, every input per minute down to raw resources, and belts of each. Every target in one call; the totals are summed for you. Never work a ratio out yourself. A count of something the player \"has\" or \"runs\" is machines: \"I have 48 blue science\" is machines=[48], not per_min=[48]. Only a rate, \"60 a minute\", is per_min. Say which you assumed. Uses this force's unlocked recipes, research and machine productivity; approx says why figures are rough. Unknown names: found=false, with did_you_mean.",
+    desc = "What it takes to make something: machines, every input per minute down to raw resources, and belts of each, every target in one call, totals summed for you. Never work a ratio out yourself. A count the player \"has\" is machines: \"I have 48 blue science\" is machines=[48], not per_min=[48]. Only a rate, \"60 a minute\", is per_min; with neither, one machine each is assumed and assumed says so. Uses this force's recipes, research and machine productivity, and with surface only what can run there; approx says why figures are rough. One close name is used, resolved_from says so; unknown names: found=false, with did_you_mean.",
     tier = "1",
     params = {
       items    = "list<string>! target item or fluid prototype names, e.g. chemical-science-pack",
@@ -60,7 +61,7 @@ M.manifest = {
       machine  = "string one machine to use for every recipe it can make, e.g. assembling-machine-2; default is the fastest the force can build",
       belt     = "string belt prototype to count belts in, e.g. fast-transport-belt; default is the fastest the force can build",
       stop_at  = "list<string> items to treat as inputs and not expand, e.g. iron-plate",
-      surface  = "string the asker's surface, e.g. nauvis: raw rows are what it mines or pumps",
+      surface  = "string the asker's surface, e.g. nauvis: raw rows are what it mines or pumps, machines and recipes what can run there",
     },
   },
 }
@@ -102,7 +103,10 @@ local function amounts_arg(value, what, count, max)
   return out
 end
 
---- Exactly one of per_min or machines, as the mode and its amounts.
+--- At most one of per_min or machines, as the mode and its amounts, and
+--- what was assumed when neither came: one machine per item. A plain "how
+--- do I make X" has no rate in it, and refusing it cost a round on every
+--- one of the eight such questions in the ledger.
 local function mode_of(a, count)
   local per_min = amounts_arg(a.per_min, "per_min", count, MAX_PER_MIN)
   local machines = amounts_arg(a.machines, "machines", count, MAX_MACHINES)
@@ -111,7 +115,27 @@ local function mode_of(a, count)
   end
   if per_min then return "per_min", per_min end
   if machines then return "machines", machines end
-  error("give per_min (a rate per minute) or machines (how many machines make each item), one entry per item", 0)
+  local ones = {}
+  for i = 1, count do ones[i] = 1 end
+  return "machines", ones, "machines=1"
+end
+
+--- The names with every one the game lacks replaced by its single close
+--- match (scripts/tools/name_lookup.lua), the {asked, used} pairs, and the
+--- names that have none or several.
+local function resolve_names(list, resolved)
+  local out, unknown = {}, {}
+  for i, name in ipairs(list) do
+    local used, extra = name_lookup.resolve(name, "goods")
+    if used then
+      out[i] = used
+      if extra then resolved[#resolved + 1] = extra end
+    else
+      out[i] = name
+      unknown[#unknown + 1] = name
+    end
+  end
+  return out, unknown
 end
 
 --- stop_at as walk keys. A name both an item and a fluid stops both.
@@ -186,12 +210,13 @@ end
 local function answer(force, surface, args)
   -- machine_pick refuses a machine or belt it does not know, whatever its type.
   local picker = recipe_pick.memo(force, surface)
-  local ctx = machine_pick.context(picker, args.machine)
+  local ctx = machine_pick.context(picker, args.machine, surface)
   local belt = machine_pick.belt(ctx, args.belt)
   local crafting = recipe_machine.picker(picker, ctx)
   local targets = targets_of(args.items, args.mode, args.amounts, crafting, ctx)
   local walk = recipe_walk.run(walkable(targets), crafting, stop_set(args.stop_at))
-  return recipe_reply.answer({ force = force, mode = args.mode, belt = belt, ctx = ctx, walk = walk, targets = targets })
+  return recipe_reply.answer({ force = force, mode = args.mode, belt = belt, ctx = ctx, walk = walk, targets = targets,
+                               assumed = args.assumed, resolved_from = args.resolved_from })
 end
 
 local function recipe_needs(a)
@@ -199,14 +224,18 @@ local function recipe_needs(a)
   local items = names_arg(a.items, "items")
   if #items == 0 then error("items is required: target item or fluid names, e.g. [\"automation-science-pack\"]", 0) end
   if #items > MAX_TARGETS then error("at most " .. MAX_TARGETS .. " items in one call", 0) end
-  local mode, amounts = mode_of(a, #items)
-  local stop_at = names_arg(a.stop_at, "stop_at")
+  local mode, amounts, assumed = mode_of(a, #items)
+  local resolved = {}
+  local stop_at
+  items = resolve_names(items, resolved)
+  stop_at = resolve_names(names_arg(a.stop_at, "stop_at"), resolved)
   local unknown = recipe_names.unknown(items, stop_at)
   if #unknown > 0 then return unknown_reply(force, unknown) end
   local surface, miss = surface_of(a, force)
   if miss then return miss end
   return answer(force, surface, { items = items, mode = mode, amounts = amounts, stop_at = stop_at,
-                                  machine = a.machine, belt = a.belt })
+                                  machine = a.machine, belt = a.belt, assumed = assumed,
+                                  resolved_from = #resolved > 0 and resolved or nil })
 end
 
 M.functions = { recipe_needs = recipe_needs }

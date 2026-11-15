@@ -97,6 +97,7 @@ local function research_queue(a)
   }
 end
 
+M.entry_name = entry_name
 M.functions = { research_queue = research_queue }
 
 return M

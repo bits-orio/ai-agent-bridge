@@ -88,17 +88,17 @@ function M.on_player_left_game(e)
   M.write("player_left", { player = player.name, force = player.force.name })
 end
 
+function M.on_player_joined_game(e)
+  local player = game.get_player(e.player_index)
+  if not player then return end
+  M.write("player_joined", { player = player.name, force = player.force.name })
+end
+
 function M.register()
   script.on_event(defines.events.on_player_died, function(e)
     local player = game.get_player(e.player_index)
     if not player then return end
     M.write("player_died", { player = player.name, force = player.force.name, cause = death_cause(e) })
-  end)
-
-  script.on_event(defines.events.on_player_joined_game, function(e)
-    local player = game.get_player(e.player_index)
-    if not player then return end
-    M.write("player_joined", { player = player.name, force = player.force.name })
   end)
 
 
