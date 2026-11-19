@@ -73,9 +73,12 @@ a time: it starts a Factorio server of about 2 GB, and a game of your own
 
 ### Ports and state
 
-Game port `34210`, RCON port `27110`, RCON password `rig`. These are fixed
-(not configurable via flags) so the harness never collides with a developer's
-own long-running dev rig on different ports. Everything the harness writes
+RCON password `rig`. On Factorio 2.1.25 and newer the harness starts the
+server with `--port 0 --rcon-port 0` and reads the bound ports from the
+`Hosting game at` and `Starting RCON interface at` log lines, so it never
+collides with a developer's own long-running dev rig or a second run. Older
+engines (CI pins 2.1.23) get the fixed game port `34210` and RCON port
+`27110`. Everything the harness writes
 lives under `tests/e2e/.run/` (git-ignored): per-instance write-data dirs
 (`w-server/`, `w-client/`), logs, the generated mods dir, mod-list and
 `mod-settings.dat`, the generated service config, `history.sqlite`, and (only
@@ -108,7 +111,7 @@ scenarios read their rows back from it, so it must hold this run only).
 
 `--keep` leaves the server, client and service running after the scenarios
 finish, for poking at by hand (state stays live under `tests/e2e/.run/`,
-RCON still open on `27110`, control API at `http://127.0.0.1:8090`). It
+RCON still open on the port the run printed, control API at `http://127.0.0.1:8090`). It
 prints the PIDs it left running and writes them to `tests/e2e/.run/pids`.
 Stop them with:
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -31,8 +32,11 @@ from typing import List, NamedTuple, Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_RUN_ROOT = REPO_ROOT / "tests" / "e2e" / ".run"
 
+# Fixed ports, used on engines that cannot bind port 0 (before 2.1.25) and
+# whenever a caller asks for one. CI pins 2.1.23, so it stays on these.
 DEFAULT_GAME_PORT = 34210
 DEFAULT_RCON_PORT = 27110
+FREE_PORTS_SINCE = (2, 1, 25)
 DEFAULT_RCON_PASSWORD = "rig"
 
 # Proven-working companion mod-list (TESTING.md 1.7): every mod bundled with
@@ -52,6 +56,28 @@ def default_headless_bin() -> str:
 
 def default_client_bin() -> str:
     return os.environ.get("FACTORIO_CLIENT", str(Path.home() / "factorio-2.1/bin/x64/factorio"))
+
+
+def engine_version(binary: Path) -> Optional[tuple]:
+    """(major, minor, patch) from `factorio --version`, or None if unreadable."""
+    try:
+        out = subprocess.run([str(binary), "--version"], capture_output=True, text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"Version:\s*(\d+)\.(\d+)\.(\d+)", out)
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def supports_free_ports(binary: Path) -> bool:
+    """2.1.25 accepts --port 0 and --rcon-port 0 and logs the bound ports."""
+    version = engine_version(binary)
+    return version is not None and version >= FREE_PORTS_SINCE
+
+
+def bound_port(log_text: str, marker: str) -> Optional[int]:
+    """The port in a `<marker> IP ADDR:({addr:PORT})` log line, or None."""
+    m = re.search(re.escape(marker) + r"\s*IP ADDR:\(\{[^}]*:(\d+)\}\)", log_text)
+    return int(m.group(1)) if m else None
 
 
 class ModLink(NamedTuple):
@@ -375,16 +401,20 @@ class Server:
         name: str = "server",
         run_root: Optional[Path] = None,
         headless_bin: Optional[str] = None,
-        game_port: int = DEFAULT_GAME_PORT,
-        rcon_port: int = DEFAULT_RCON_PORT,
+        game_port: Optional[int] = None,
+        rcon_port: Optional[int] = None,
         rcon_password: str = DEFAULT_RCON_PASSWORD,
         mods_dir: Optional[Path] = None,
     ):
         self.name = name
         self.run_root = Path(run_root) if run_root else DEFAULT_RUN_ROOT
         self.headless_bin = Path(headless_bin or default_headless_bin())
-        self.game_port = game_port
-        self.rcon_port = rcon_port
+        # None means "let the engine pick when it can" (see start()); the
+        # attributes hold the real ports once the server is up.
+        self._asked_game_port = game_port
+        self._asked_rcon_port = rcon_port
+        self.game_port = game_port if game_port is not None else DEFAULT_GAME_PORT
+        self.rcon_port = rcon_port if rcon_port is not None else DEFAULT_RCON_PORT
         self.rcon_password = rcon_password
         self.mods_dir = Path(mods_dir) if mods_dir else self.run_root / "mods"
         self.write_data = self.run_root / ("w-" + name)
@@ -413,13 +443,17 @@ class Server:
         _write_server_settings(settings_path, name="aab-e2e-%s" % self.name)
         map_gen = _map_gen_settings_path(self.headless_bin)
 
+        free = supports_free_ports(self.headless_bin)
+        game_arg = self._asked_game_port if self._asked_game_port is not None else (0 if free else DEFAULT_GAME_PORT)
+        rcon_arg = self._asked_rcon_port if self._asked_rcon_port is not None else (0 if free else DEFAULT_RCON_PORT)
+
         cmd = [
             str(self.headless_bin),
             "--config", str(self.write_data / "config.ini"),
             "--start-server-load-scenario", "base/freeplay",
             "--server-settings", str(settings_path),
-            "--port", str(self.game_port),
-            "--rcon-port", str(self.rcon_port),
+            "--port", str(game_arg),
+            "--rcon-port", str(rcon_arg),
             "--rcon-password", self.rcon_password,
             "--mod-directory", str(self.mods_dir),
             "--map-gen-settings", str(map_gen),
@@ -432,6 +466,17 @@ class Server:
         # startup log the same regardless of how this harness itself was run.
         self.proc = subprocess.Popen(cmd, stdout=self._log_file, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         _wait_for_log(self.log_path, "Starting RCON", timeout=timeout, proc=self.proc)
+        self._read_bound_ports(game_arg, rcon_arg)
+
+    def _read_bound_ports(self, game_arg: int, rcon_arg: int) -> None:
+        """Port 0 was asked for: the engine logged what it bound."""
+        text = self.log_path.read_text(encoding="utf-8", errors="replace")
+        if game_arg == 0:
+            self.game_port = bound_port(text, "Hosting game at") or 0
+        if rcon_arg == 0:
+            self.rcon_port = bound_port(text, "Starting RCON interface at") or 0
+        if not (self.game_port and self.rcon_port):
+            raise LogError("no bound port in the server log %s" % self.log_path)
 
     def stop(self, timeout: float = 20) -> None:
         _stop_process(self.proc, timeout)

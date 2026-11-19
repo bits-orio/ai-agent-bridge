@@ -364,9 +364,9 @@ def main() -> int:
     exit_code = 1
 
     try:
-        print("run.py: starting rig server on game=%d rcon=%d ..." % (server.game_port, server.rcon_port))
+        print("run.py: starting rig server ...")
         server.start()
-        print("run.py: server up, log at %s" % server.log_path)
+        print("run.py: server up on game=%d rcon=%d, log at %s" % (server.game_port, server.rcon_port, server.log_path))
 
         if client is not None:
             print("run.py: starting standalone client ...")

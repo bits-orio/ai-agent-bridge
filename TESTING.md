@@ -158,8 +158,8 @@ python3 ~/factorio-dev/rig/rcon.py <rcon-port> rig '<command>'
 
 ## 2. Automated harness (`tests/e2e`)
 
-`make e2e` builds the service in Docker, starts a headless 2.0.77 server on ports
-34210 and 27110 with the companion and the test provider mod, starts the service on
+`make e2e` builds the service in Docker, starts a headless 2.0.77 server on free ports (fixed 34210
+and 27110 before Factorio 2.1.25) with the companion and the test provider mod, starts the service on
 the scripted `fake` model, and runs every scenario. `make e2e-client` also launches a
 standalone client so the player-only scenarios run. See `tests/e2e/README.md`.
 
