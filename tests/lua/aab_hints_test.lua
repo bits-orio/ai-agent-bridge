@@ -32,6 +32,14 @@ local NOTE = { shape = "notice", text = "hello" }
 
 local bob, ann, cy
 
+-- Factorio refuses require once control.lua has been parsed, even for a
+-- module already loaded. The fake game does the same, or a lazy require in
+-- a handler passes here and takes the live server down.
+local real_require = require
+local function locked_require(name)
+  error("Require can't be used outside of control.lua parsing. (" .. tostring(name) .. ")", 2)
+end
+
 --- A new game, three players connected, the companion loaded.
 local function fresh(before, settings)
   S = F.install()
@@ -60,7 +68,9 @@ local function fresh(before, settings)
   game.connected_players = { bob, ann, cy }
   game.players = { bob, ann, cy }
   bob.force.connected_players = { bob, ann }
+  require = real_require
   local loaded, err = pcall(dofile, MOD .. "control.lua")
+  require = locked_require
   check("companion control.lua loads", loaded, err)
   if not loaded then os.exit(1) end
   S.on_init()
@@ -76,7 +86,7 @@ end
 local function ask(index, text, cmd)
   S.commands[cmd or "ask"]({ player_index = index, parameter = text })
 end
-local function direct_ask(spec) return require("scripts.questions").ask(spec) end
+local function direct_ask(spec) return package.loaded["scripts.questions"].ask(spec) end
 
 --- How many "You can ask too" lines this player has been printed.
 local function hints_to(who)

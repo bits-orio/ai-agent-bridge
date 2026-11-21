@@ -13,6 +13,7 @@
 -- save/load, and nothing about it is stored.
 
 local questions = require("scripts.questions")
+local ask_hints = require("scripts.ask_hints")
 
 local PREFERRED = "ask"
 local FALLBACK = "aab-ask"
@@ -52,6 +53,7 @@ function M.register()
   if (claim == nil or claim.value ~= false) and pcall(commands.add_command, PREFERRED, HELP, handle) then
     active_name = PREFERRED
   end
+  ask_hints.set_command(active_name)
 end
 
 return M

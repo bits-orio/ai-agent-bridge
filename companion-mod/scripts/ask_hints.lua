@@ -9,8 +9,10 @@
 --
 -- storage.aab.hints.taught[player_index] = true once a player has asked or
 -- has been hinted. Every peer runs the same code in the same order, so the
--- writes agree. The ask_command module is required lazily: it requires
--- questions, which requires this.
+-- writes agree. The ask_command module requires questions, which requires
+-- this, so this file cannot require it back, and Factorio refuses require
+-- once control.lua has loaded. ask_command.register() pushes the live
+-- command name in through M.set_command instead.
 
 local audience      = require("scripts.audience")
 local render_shapes = require("scripts.render_shapes")
@@ -31,9 +33,16 @@ function M.mode()
   return "echo"
 end
 
+local command_name -- module-local, set every session by ask_command.register
+
+--- Told by ask_command.register which name took, nil if neither did.
+function M.set_command(name)
+  command_name = name
+end
+
 --- The command name that is live, "ask" or "aab-ask".
 function M.command()
-  return require("scripts.ask_command").active_name() or "aab-ask"
+  return command_name or "aab-ask"
 end
 
 local function taught(player)
