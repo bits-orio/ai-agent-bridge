@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 1.2.1
+Date: 2026-11-21
+  Bugfixes:
+    - Fixed a crash when a player typed /ask or /aab-ask: the server stopped with "Require can't
+      be used outside of control.lua parsing". It happened on every question unless aab-ask-hints
+      was off, and on a join hint with aab-ask-hints set to all.
+---------------------------------------------------------------------------------------------------
 Version: 1.2.0
 Date: 2026-11-14
   Features:
